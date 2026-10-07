@@ -2,8 +2,8 @@
 
 Unlike the rest of the suite, this drives a **real** Weave (OIDC discovery/JWKS, the magic-link sign-in
 flow and the `/oauth/authorize` consent screen) and a **real** running Krater in `KRATER_WEAVE_MODE=live`,
-over plain HTTP -- no mocks. Weave's main branch is enough: Krater asks only for `openid profile email`
-and keeps roles in its own database, so the role checks below read and seed Krater's Postgres directly.
+over plain HTTP -- no mocks. Weave owns Krater's roles: the role checks below need a Weave with app roles
+and the directory API (issue #163), and skip until the fixture says its users have them.
 See `docs/dev/weave-e2e.md` for how to bring both up and provision the fixture users this file reads.
 
 It does the same OAuth Authorization Code + PKCE round trip a browser does (confirm a magic link, submit
@@ -90,7 +90,7 @@ def weave_settings(fixture: dict[str, Any]) -> Settings:
 
 
 # --------------------------------------------------------------------------------------------------
-# Krater's database: roles, pending grants and the disabled flag live here, not in Weave.
+# Krater's database: what sign-in recorded. Roles come from Weave; Krater only caches them.
 # --------------------------------------------------------------------------------------------------
 
 
@@ -103,54 +103,30 @@ def _krater_dsn() -> str:
 def _krater_user(email: str) -> dict[str, Any] | None:
     with psycopg.connect(_krater_dsn()) as conn, conn.cursor() as cur:
         cur.execute(
-            "select id, weave_sub, email_verified, last_login_at, disabled_at from users where email = %s", (email,)
+            "select id, weave_sub, email_verified, last_login_at, roles_cached from users where email = %s", (email,)
         )
         row = cur.fetchone()
         if row is None:
             return None
-        cur.execute("select role from user_roles where user_id = %s", (row[0],))
-        roles = {r[0] for r in cur.fetchall()}
         return {
             "id": row[0],
             "weave_sub": row[1],
             "email_verified": row[2],
             "last_login_at": row[3],
-            "disabled_at": row[4],
-            "roles": roles,
+            "roles": set(row[4]),
         }
 
 
-def _reset_krater_user(email: str, *, pending_roles: tuple[str, ...] = ()) -> None:
-    """Start a test from a known state: no roles, not disabled, and exactly `pending_roles` waiting
-    for `email`. Audit events are left alone (append-only)."""
-    with psycopg.connect(_krater_dsn()) as conn, conn.cursor() as cur:
-        cur.execute(
-            "delete from user_roles where user_id in (select id from users where lower(email) = lower(%s))", (email,)
-        )
-        cur.execute("update users set disabled_at = null where lower(email) = lower(%s)", (email,))
-        cur.execute("delete from pending_role_grants where email = lower(%s)", (email,))
-        for role in pending_roles:
-            cur.execute(
-                "insert into pending_role_grants (id, email, role, created_at) "
-                "values (gen_random_uuid(), lower(%s), %s, now())",
-                (email, role),
-            )
-        conn.commit()
+def _needs_weave_roles(fixture: dict[str, Any]) -> None:
+    """Skip unless the provisioning script gave the fixture users Krater app roles in Weave (it can only
+    do that once Weave's app roles and directory API, issue #163, are merged)."""
+    if not fixture.get("roles_provisioned"):
+        pytest.skip("the Weave fixture has no Krater app roles (weave_e2e_provision.rb needs Weave #163)")
 
 
-def _pending_roles(email: str) -> set[str]:
-    with psycopg.connect(_krater_dsn()) as conn, conn.cursor() as cur:
-        cur.execute("select role from pending_role_grants where email = lower(%s)", (email,))
-        return {r[0] for r in cur.fetchall()}
-
-
-def _set_disabled(email: str, disabled: bool) -> None:
-    with psycopg.connect(_krater_dsn()) as conn, conn.cursor() as cur:
-        cur.execute(
-            "update users set disabled_at = case when %s then now() else null end where lower(email) = lower(%s)",
-            (disabled, email),
-        )
-        conn.commit()
+@pytest.fixture(scope="module")
+def weave_client(weave_settings: Settings) -> LiveWeaveClient:
+    return LiveWeaveClient(weave_settings)
 
 
 # --------------------------------------------------------------------------------------------------
@@ -172,7 +148,7 @@ def test_discovery_and_jwks_are_reachable(fixture: dict[str, Any]) -> None:
     assert jwks.json()["keys"]
 
 
-def test_authorization_url_asks_only_for_standard_scopes(weave_settings: Settings, fixture: dict[str, Any]) -> None:
+def test_authorization_url_asks_for_the_roles_scopes(weave_settings: Settings, fixture: dict[str, Any]) -> None:
     client = LiveWeaveClient(weave_settings)
 
     url = client.authorization_url(
@@ -180,7 +156,7 @@ def test_authorization_url_asks_only_for_standard_scopes(weave_settings: Setting
     )
 
     assert url.startswith(fixture["issuer"])
-    assert parse_qs(urlparse(url).query)["scope"] == ["openid profile email"]
+    assert parse_qs(urlparse(url).query)["scope"] == ["openid profile email groups roles slack"]
 
 
 # --------------------------------------------------------------------------------------------------
@@ -237,7 +213,7 @@ def _sign_in(client: httpx.Client, fixture: dict[str, Any], email: str) -> SignI
     confirmation (using a freshly minted token in place of "the user clicked the emailed link") ->
     the OAuth consent screen (submitted for real, when Weave shows one) -> back to Krater's
     `/auth/callback`. Returns the final response Krater gave (a redirect on success, a 403 page for
-    a non-member or a disabled account).
+    a non-member).
     """
     weave_base = fixture["issuer"]
 
@@ -286,9 +262,9 @@ def http_client() -> Iterator[httpx.Client]:
         yield client
 
 
-def test_signin_applies_a_pending_member_grant(fixture: dict[str, Any], http_client: httpx.Client) -> None:
+def test_signin_persists_a_member_and_their_weave_roles(fixture: dict[str, Any], http_client: httpx.Client) -> None:
+    _needs_weave_roles(fixture)
     email = fixture["users"]["member"]["email"]
-    _reset_krater_user(email, pending_roles=("ganymede:member",))
 
     result = _sign_in(http_client, fixture, email)
 
@@ -299,26 +275,22 @@ def test_signin_applies_a_pending_member_grant(fixture: dict[str, Any], http_cli
     assert row["email_verified"] is True, "Weave's id_token should carry email_verified=true"
     assert row["roles"] == {"ganymede:member"}
     assert row["last_login_at"] is not None
-    assert _pending_roles(email) == set(), "an applied pending grant should be deleted"
 
 
-def test_signin_makes_the_bootstrap_admin_an_admin(fixture: dict[str, Any], http_client: httpx.Client) -> None:
+def test_signin_maps_the_admin_role(fixture: dict[str, Any], http_client: httpx.Client) -> None:
+    _needs_weave_roles(fixture)
     admin = fixture["users"]["admin"]
-    if admin["sub"] not in os.environ.get("KRATER_BOOTSTRAP_ADMINS", ""):
-        pytest.skip("KRATER_BOOTSTRAP_ADMINS in this shell doesn't name the fixture admin (source .env.weave-e2e)")
-    _reset_krater_user(admin["email"])
 
     result = _sign_in(http_client, fixture, admin["email"])
 
     assert result.final_response.status_code == 302
     row = _krater_user(admin["email"])
     assert row is not None
-    assert row["roles"] == {"ganymede:member", "ganymede:admin"}
+    assert {"ganymede:member", "ganymede:admin"} <= row["roles"]
 
 
-def test_signin_refuses_a_non_member_but_keeps_their_row(fixture: dict[str, Any], http_client: httpx.Client) -> None:
+def test_signin_refuses_a_non_member(fixture: dict[str, Any], http_client: httpx.Client) -> None:
     email = fixture["users"]["non_member"]["email"]
-    _reset_krater_user(email)
 
     result = _sign_in(http_client, fixture, email)
 
@@ -326,18 +298,29 @@ def test_signin_refuses_a_non_member_but_keeps_their_row(fixture: dict[str, Any]
     assert "Ask a Ganymede admin" in result.final_response.text
     row = _krater_user(email)
     assert row is not None
-    assert row["roles"] == set()
+    assert "ganymede:member" not in row["roles"]
 
 
-def test_signin_refuses_a_disabled_user(fixture: dict[str, Any], http_client: httpx.Client) -> None:
-    email = fixture["users"]["member"]["email"]
-    _reset_krater_user(email, pending_roles=("ganymede:member",))
-    assert _sign_in(http_client, fixture, email).final_response.status_code == 302
-    _set_disabled(email, True)
-    try:
-        with httpx.Client(follow_redirects=False, timeout=15) as fresh_client:
-            result = _sign_in(fresh_client, fixture, email)
-        assert result.final_response.status_code == 403
-        assert "disabled" in result.final_response.text
-    finally:
-        _set_disabled(email, False)
+def test_directory_get_user_matches_the_fixture(fixture: dict[str, Any], weave_client: LiveWeaveClient) -> None:
+    _needs_weave_roles(fixture)
+    member = fixture["users"]["member"]
+
+    record = weave_client.get_user(member["sub"])
+
+    assert record is not None
+    assert record.active is True
+    assert "ganymede:member" in record.roles
+
+
+def test_directory_unknown_sub_returns_none(fixture: dict[str, Any], weave_client: LiveWeaveClient) -> None:
+    _needs_weave_roles(fixture)
+
+    assert weave_client.get_user("PWLDOESNOTEXIST") is None
+
+
+def test_directory_lists_admins(fixture: dict[str, Any], weave_client: LiveWeaveClient) -> None:
+    _needs_weave_roles(fixture)
+
+    subs = {record.sub for record in weave_client.list_users_with_role("ganymede:admin")}
+
+    assert fixture["users"]["admin"]["sub"] in subs

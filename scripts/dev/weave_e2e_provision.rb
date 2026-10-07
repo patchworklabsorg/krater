@@ -1,12 +1,15 @@
 # frozen_string_literal: true
 #
 # Provisions a local Weave with everything the live Krater<->Weave e2e check
-# needs: three users (a future member, a bootstrap admin and a non-member), and
-# a confidential OAuth application for Krater with the standard
-# `openid profile email` scopes. Works against Weave's main branch: Krater keeps
-# roles in its own database, so nothing here touches groups, Slack ids or
-# service keys. Idempotent (upsert-by-email), so it can be re-run against the
-# same dev database.
+# needs: three users (a member, an admin and a non-member), and a confidential
+# OAuth application for Krater with the scopes Krater asks for, plus
+# `directory` for its client_credentials token. Idempotent (upsert-by-email),
+# so it can be re-run against the same dev database.
+#
+# Weave owns Krater's roles. Giving the fixture users Krater's app roles
+# (member, reviewer, admin) needs Weave's app roles and directory API
+# (patchworklabsorg/weave#165, #166), and isn't done here yet. Until it is,
+# the result has no `roles_provisioned` key and the live role tests skip.
 #
 # This file lives in the Krater repo (it's Krater's e2e fixture, not a Weave
 # behavior change) but runs inside a Weave checkout:
@@ -55,7 +58,7 @@ app = Doorkeeper::Application.create!(
   name: app_name,
   redirect_uri: redirect_uri,
   confidential: true,
-  scopes: "openid profile email"
+  scopes: "openid profile email groups roles slack directory"
 )
 log "oauth application ready: uid=#{app.uid}"
 

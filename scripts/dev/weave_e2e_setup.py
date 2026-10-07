@@ -75,8 +75,6 @@ def write_fixtures(data: dict, *, krater_base_url: str) -> None:
         f"KRATER_WEAVE_ISSUER={data['issuer']}",
         f"KRATER_WEAVE_CLIENT_ID={data['oauth_client_id']}",
         f"KRATER_WEAVE_CLIENT_SECRET={data['oauth_client_secret']}",
-        # Roles live in Krater's database; this makes the fixture admin one at their first sign-in.
-        f"KRATER_BOOTSTRAP_ADMINS={data['users']['admin']['sub']}",
         "",
     ]
     ENV_PATH.write_text("\n".join(env_lines))
