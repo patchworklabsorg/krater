@@ -14,10 +14,6 @@ this list covers what comes after, plus loose ends from building v1.
 - **Run the live Weave role tests.** The Weave work Krater needs is merged on Weave `main`. Give
   `scripts/dev/weave_e2e_provision.rb` the Krater app roles, so the live role tests in
   `tests/live/test_weave_live.py` run.
-- **Merge Weave's sign-in and security fixes upstream** (for Weave's own sake). Patches `0002`/`0003` fix OAuth sign-in for returning users in Chrome and Safari, for any external client;
-  the rest (the handoff's `weave-patches/WEAVE-BUG-REPORT.md`) close an account takeover through unsigned Slack
-  events, owner takeover from the admin panel, locked users still signing in to OAuth apps, and signed-out `/admin`
-  access. Someone with push access to `patchworklabsorg/weave` needs to open the PR.
 - **Set up Krater's roles in Weave** on each real deployment: a Weave superadmin creates `member`, `reviewer` and
   `admin` on the Krater app page, an admin adds the `directory` scope to the app, and admins give people the roles
   (see [weave-integration.md](weave-integration.md)).
@@ -25,7 +21,7 @@ this list covers what comes after, plus loose ends from building v1.
   for local testing.
 - **Pick a long-term screenshot storage provider.** Today it's a temporary self-hosted SeaweedFS container. The options
   are R2/B2/S3, or keeping SeaweedFS with backups (a reminder was set for early October 2026).
-- **Decide what happens exactly at the ceiling.** Today warnings go out at 80% and teardown happens at 100% with no
+- **Decide what happens exactly at the ceiling** (patchworklabsorg/krater#2). Today warnings go out at 80% and teardown happens at 100% with no
   grace period, which can kill a long training run just past the limit. Consider a small admin-configurable grace margin.
 
 ## Roles and accounts

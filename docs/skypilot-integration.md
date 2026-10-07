@@ -60,10 +60,10 @@ Checked against the SkyPilot docs (docs.skypilot.ai) and `skypilot-org/skypilot`
   `rbac.default_role: user`, which the spike confirmed takes effect on the next new-user login with no server
   restart needed. Only Krater's service account (and SkyPilot operators) get `admin`.
 - **Offboarding:** when a project is completed or withdrawn, Krater removes the team from `allowed_users` before tearing
-  the workspace down. Once Weave's lockout fix is merged (bug 3 in the handoff's `WEAVE-BUG-REPORT.md`), someone locked
-  in Weave can't sign in again; Weave's main branch doesn't enforce that yet. Disabling someone in Krater does **not**
-  yet remove them from their projects' `allowed_users` (the reconciler syncs the team by email regardless of that
-  flag); until it does, remove them from the project or withdraw it. Existing SkyPilot sessions last until they expire,
+  the workspace down. Weave's lockout fix (patchworklabsorg/weave#119)
+  stops a locked user from signing in again, and removing someone's Krater roles in Weave removes their access to
+  Krater. The reconciler does not yet remove a user who lost the `member` role from their projects' `allowed_users`;
+  until it does, remove them from the project or withdraw it. Existing SkyPilot sessions last until they expire,
   so keep the oauth2-proxy cookie lifetime short (e.g. 8h).
 
 oauth2-proxy settings (sketch):

@@ -123,5 +123,5 @@ Weave bugs that a plain HTTP client can't see:
    earlier fix that allowed all `https:` origins on every page was replaced, since it weakened the login
    form's protection.
 
-Both are fixed by the handoff's Weave patches `0002`/`0003`. Without them, sign-in for a returning user will appear to hang or silently fail in a real browser (it still
+Both are fixed on Weave `main` by patchworklabsorg/weave#119. Without that fix, sign-in for a returning user will appear to hang or silently fail in a real browser (it still
 works via `httpx`, which doesn't enforce CSP) -- check the browser console for CSP violation messages.

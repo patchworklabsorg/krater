@@ -92,19 +92,10 @@ app roles (patchworklabsorg/weave#165) and the directory API (patchworklabsorg/w
 staging. Before Krater can sign anyone in, a Weave superadmin creates the roles `member`, `reviewer` and `admin` on
 the Krater app page, and an admin adds `directory` to the Krater app's scopes.
 
-Patches **`0002`/`0003`** are still recommended if the Weave branch lacks them: they fix two browser CSP bugs that
-break OAuth sign-in for returning users in Chrome and Safari. The **security fixes** in
-`krater-handoff/weave-patches/WEAVE-BUG-REPORT.md` are worth merging for Weave's own sake: an account takeover
-through unsigned Slack events (critical), owner takeover from the admin panel, locked users still signing in to OAuth
-apps with working tokens, and `/admin` engines reachable after sign-out. Krater's directory re-check (`active`, 404)
-limits the lockout bug to the 60-second directory cache.
-
-**Both are on the Weave branch
-[`fix/security-hardening`](https://github.com/patchworklabsorg/weave/tree/fix/security-hardening)** (pushed
-2026-09-28; no PR opened yet): `0002` and `0003`, then one commit per security fix, all on `origin/main` 54f702a. Open
-a PR from it to merge. The patch files are the same changes. Weave's test suites run on Windows without Ruby via
-`E:\Projects\Krater\weave-testenv\run.sh` (Docker; e.g. `WEAVE_REPO=E:/Projects/Krater/weave-branch ./run.sh bundle
-exec rspec`).
+**Weave's sign-in and security fixes are merged** in patchworklabsorg/weave#119 (2026-09-28): the two CSP fixes
+that broke OAuth sign-in for returning users in Chrome and Safari (patches `0002`/`0003`), Slack event signature
+checks, the admin takeover fix, and the OAuth cutoff for locked users. The old `fix/security-hardening` branch has
+nothing that `main` does not already have.
 
 **First admin on a real deployment:** give yourself the `member` and `admin` roles on the Krater app in Weave, then
 sign in.
@@ -175,9 +166,9 @@ sign in.
 **The maintainer:**
 1. Merge the Weave work Krater needs (section 3), then do the staging run (`docs/dev/staging.md`) with your Krater
    roles set in Weave, and bring any failures back to a session to fix on the PR.
-2. Open and merge a Weave PR from `fix/security-hardening` (section 3); Krater doesn't depend on it, but Weave needs it.
-3. Create Krater's Slack app (`docs/dev/slack-setup.md`).
-4. Pick a long-term screenshot storage provider.
+2. Create Krater's Slack app (`docs/dev/slack-setup.md`).
+3. Pick a long-term screenshot storage provider.
+4. Decide what happens at 100% of a budget (patchworklabsorg/krater#2).
 5. Approve PR #1 out of draft when ready.
 
 **A Claude session, in suggested order:**
@@ -208,7 +199,7 @@ sign in.
 - **Test the Weave sign-in flow in a real browser.** Weave's CSP `form-action` applies to the whole redirect chain,
   so curl-based tests miss breakage.
 - **Earlier patch files are now obsolete.** `secfix-wip.patch` and `weave-krater-integration-fixes.patch` are
-  superseded: the security fixes are merged on the PR branch, and the Weave fixes are patches `0002`/`0003` here.
+  superseded: the security fixes are merged on the PR branch, and the Weave fixes are merged in patchworklabsorg/weave#119.
   Patch `0001` and the `0004` diff are replaced by the Weave stack #156 to #161, #165 and #166.
 - **CI is Linux-only, so Windows breakage slips through.** `strftime("%-d")` is glibc-only and raises
   `ValueError: Invalid format string` on Windows (it broke 13 tests there); use `.day` instead. Shell scripts must

@@ -37,9 +37,8 @@ cd Krater
 
 Weave provides sign-in for both Krater and the SkyPilot proxy, and owns Krater's roles. Krater needs a Weave with the
 `roles`, `groups` and `slack` claims, app roles and the directory API: the stack patchworklabsorg/weave#156 to #161,
-plus patchworklabsorg/weave#165 and patchworklabsorg/weave#166. Until they are merged, check out a branch that has
-them (see `docs/weave-integration.md`). Applying the handoff's Weave patches `0002`/`0003` is still recommended if
-that branch lacks them: they fix a CSP bug that breaks sign-in for returning users in Chrome and Safari.
+plus patchworklabsorg/weave#165 and patchworklabsorg/weave#166. All of it is on Weave `main`, together with the
+sign-in CSP fixes from patchworklabsorg/weave#119.
 
 **WSL2 (bash):**
 
