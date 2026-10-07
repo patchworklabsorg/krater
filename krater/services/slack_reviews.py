@@ -9,7 +9,6 @@ session. See `docs/SPEC.md` "Slack integration" and "Proposal & review workflow"
 from __future__ import annotations
 
 import json
-import logging
 import uuid
 
 import sqlalchemy as sa
@@ -17,12 +16,12 @@ from sqlalchemy.orm import Session
 
 from krater.models import ProjectRevision, ReviewDecision, ReviewSource, User
 from krater.services import projects as project_service
-from krater.services import roles, slack_notify
+from krater.services import slack_notify
+from krater.services import users as user_service
 from krater.services.actor import Actor
-from krater.services.errors import AccountDisabled, DomainError, NotAMember
+from krater.services.errors import DomainError, NotAMember
 from krater.slack.client import SlackClient
-
-logger = logging.getLogger(__name__)
+from krater.weave import WeaveClient, WeaveUnavailableError
 
 #: The reject modal's `callback_id`, `block_id` and `action_id` -- shared between building the view
 #: (`open_reject_modal`) and reading its submission back (`parse_reject_reason`).
@@ -31,11 +30,11 @@ REJECT_REASON_BLOCK_ID = "reason_block"
 REJECT_REASON_ACTION_ID = "reason_input"
 
 _UNLINKED_MESSAGE = (
-    "Your Slack account isn't linked to a Krater account. Sign in to Krater with the same email as your "
-    "Slack account, or ask a Ganymede admin to link it, then try again."
+    "Your Slack account isn't linked to a Krater account. Link Slack in your Weave account and sign in "
+    "to Krater, then try again."
 )
-_DISABLED_MESSAGE = "Your Krater account has been disabled."
-_NOT_A_MEMBER_MESSAGE = "You're not a Ganymede member in Krater."
+_NOT_A_MEMBER_MESSAGE = "Weave no longer lists you as an active Ganymede member."
+_WEAVE_UNAVAILABLE_MESSAGE = "Krater couldn't reach Weave to check your roles. Try again in a minute."
 _NOT_FOUND_MESSAGE = "This proposal could not be found -- it may have been superseded."
 
 
@@ -83,59 +82,37 @@ def parse_reject_metadata(view: dict) -> dict:
     return json.loads(view.get("private_metadata") or "{}")
 
 
-def _user_for_slack_id(session: Session, slack_client: SlackClient, slack_user_id: str) -> User | None:
-    """The Krater user behind a Slack click: by stored `slack_user_id`, else by the email on the Slack
-    profile (`users.info`) matched against users whose email Weave verified at sign-in. A single
-    match gets the Slack id cached onto it (flushed, not committed); zero or several matches mean
-    unlinked, since guessing wrong would let one person review as another."""
-    user = session.scalars(sa.select(User).where(User.slack_user_id == slack_user_id)).first()
-    if user is not None:
-        return user
-
-    info = slack_client.get_user_info(slack_user_id)
-    if info is None or not info.email:
-        return None
-    matches = list(
-        session.scalars(
-            sa.select(User).where(
-                sa.func.lower(User.email) == info.email.strip().lower(),
-                User.email_verified.is_(True),
-                User.slack_user_id.is_(None),
-            )
-        )
-    )
-    if len(matches) != 1:
-        if matches:
-            logger.warning("Slack user %s matches %d Krater users by email; not linking", slack_user_id, len(matches))
-        return None
-    user = matches[0]
-    user.slack_user_id = slack_user_id
-    session.flush()
-    return user
-
-
 def _resolve_actor(
-    session: Session, slack_client: SlackClient, *, slack_user_id: str, response_url: str
+    session: Session,
+    slack_client: SlackClient,
+    weave_client: WeaveClient,
+    *,
+    slack_user_id: str,
+    response_url: str,
 ) -> Actor | None:
     """The `Actor` for whoever clicked, or `None` if they can't act -- in which case an ephemeral
-    explanation has already been posted via `response_url`. Roles and the disabled flag are read
-    fresh from Krater's database (`roles.authorize`)."""
-    user = _user_for_slack_id(session, slack_client, slack_user_id)
+    explanation has already been posted via `response_url`.
+
+    The Slack id only finds the Krater user row (`users.slack_user_id`, from Weave's `slack_id`). Roles
+    then come from a fresh Weave lookup by that user's `weave_sub` (`users.authorize`), and a Weave
+    outage refuses the click rather than guessing."""
+    user = session.scalars(sa.select(User).where(User.slack_user_id == slack_user_id)).first()
     if user is None:
         slack_client.post_ephemeral_via_response_url(response_url, _UNLINKED_MESSAGE)
         return None
     try:
-        return roles.authorize(session, user)
-    except AccountDisabled:
-        slack_client.post_ephemeral_via_response_url(response_url, _DISABLED_MESSAGE)
+        return user_service.authorize(session, weave_client, user)
     except NotAMember:
         slack_client.post_ephemeral_via_response_url(response_url, _NOT_A_MEMBER_MESSAGE)
+    except WeaveUnavailableError:
+        slack_client.post_ephemeral_via_response_url(response_url, _WEAVE_UNAVAILABLE_MESSAGE)
     return None
 
 
 def _process_decision(
     session: Session,
     slack_client: SlackClient,
+    weave_client: WeaveClient,
     *,
     revision_id: uuid.UUID,
     slack_user_id: str,
@@ -143,8 +120,8 @@ def _process_decision(
     decision: ReviewDecision,
     reason: str | None,
 ) -> None:
-    actor = _resolve_actor(session, slack_client, slack_user_id=slack_user_id, response_url=response_url)
-    # Keeps a Slack id linked by email even if this click then fails (a domain error rolls back).
+    actor = _resolve_actor(session, slack_client, weave_client, slack_user_id=slack_user_id, response_url=response_url)
+    # Keeps the user's refreshed Weave fields even if this click then fails (a domain error rolls back).
     session.commit()
     if actor is None:
         return
@@ -175,17 +152,18 @@ def _process_decision(
 def process_approve(
     session: Session,
     slack_client: SlackClient,
+    weave_client: WeaveClient,
     *,
     revision_id: uuid.UUID,
     slack_user_id: str,
     response_url: str,
 ) -> None:
-    """Handle an Approve button click: resolve the clicker to an `Actor` from Krater's users and roles,
-    then record the approval. Domain errors (self-review, already decided, ...) are reported back
-    ephemerally."""
+    """Handle an Approve button click: resolve the clicker to an `Actor` via Weave, then record the
+    approval. Domain errors (self-review, already decided, ...) are reported back ephemerally."""
     _process_decision(
         session,
         slack_client,
+        weave_client,
         revision_id=revision_id,
         slack_user_id=slack_user_id,
         response_url=response_url,
@@ -197,6 +175,7 @@ def process_approve(
 def process_reject(
     session: Session,
     slack_client: SlackClient,
+    weave_client: WeaveClient,
     *,
     revision_id: uuid.UUID,
     slack_user_id: str,
@@ -208,6 +187,7 @@ def process_reject(
     _process_decision(
         session,
         slack_client,
+        weave_client,
         revision_id=revision_id,
         slack_user_id=slack_user_id,
         response_url=response_url,

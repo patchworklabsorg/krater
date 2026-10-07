@@ -1,4 +1,4 @@
-"""Shared fixtures for `tests/services`: quick user/actor factories."""
+"""Shared fixtures for `tests/services`: quick user/actor factories, and a stub Weave that knows them."""
 
 from __future__ import annotations
 
@@ -7,8 +7,9 @@ import itertools
 import pytest
 from sqlalchemy.orm import Session
 
-from krater.models import User, UserRole
+from krater.models import User
 from krater.services.actor import GROUP_ADMIN, GROUP_MEMBER, GROUP_REVIEWER, Actor
+from krater.weave import RoleMapping, StubWeaveClient
 
 _counter = itertools.count()
 
@@ -40,16 +41,38 @@ def make_user(db_session: Session):
 
 
 @pytest.fixture
-def make_actor(db_session: Session, make_user):
+def weave(tmp_path) -> StubWeaveClient:
+    """An empty stub Weave for this test. `make_actor` registers every actor in it, with their roles as
+    Weave role keys, so anything that asks Weave (Slack clicks, reviewer invites) sees the same roles."""
+    empty = tmp_path / "no_users.json"
+    empty.write_text("[]")
+    return StubWeaveClient(empty)
+
+
+def register_in_weave(weave: StubWeaveClient, user: User, groups: frozenset[str], **kwargs) -> None:
+    """Add `user` to the stub Weave holding the Krater roles `groups`. Roles with no Weave key (such as
+    a reviewer tier) are left out."""
+    mapping = RoleMapping.default()
+    weave.put_user(
+        user.weave_sub,
+        name=user.display_name,
+        email=user.email,
+        email_verified=user.email_verified,
+        roles=[mapping.weave_role_key(role) for role in sorted(groups) if role in mapping.role_keys],
+        **kwargs,
+    )
+
+
+@pytest.fixture
+def make_actor(db_session: Session, make_user, weave: StubWeaveClient):
     """Factory: build an `Actor` with the given groups, backed by a fresh (or supplied) `User`. The
-    groups are also stored as the user's Krater roles, so anything that reads roles from the database
-    (channel invites, Slack clicks, `roles.authorize`) sees the same thing."""
+    groups are also cached on the user and registered in the `weave` stub."""
 
     def _make_actor(*, groups: frozenset[str] = frozenset(), user: User | None = None, **user_kwargs) -> Actor:
         user = user or make_user(**user_kwargs)
-        for role in sorted(groups):
-            db_session.add(UserRole(user_id=user.id, role=role))
+        user.roles_cached = sorted(groups)
         db_session.flush()
+        register_in_weave(weave, user, groups)
         return Actor(user=user, groups=groups)
 
     return _make_actor

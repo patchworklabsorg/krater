@@ -1,9 +1,12 @@
-"""Signing in: turning a verified Weave identity into (or onto) a `User` row, and deciding whether that
-user may use Krater. Roles come from Krater's own database (`krater.services.roles`)."""
+"""Users and authorization: turning what Weave says about a person into a `User` row and an `Actor`.
+
+Weave owns roles. Sign-in reads them from the id_token's `roles` claim; every later authorization
+check (`authorize`) asks Weave's directory again, by `weave_sub`. The copies Krater keeps on the user
+row (`roles_cached`, `slack_user_id`, `email_verified`) are for display and Slack lookups only.
+"""
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal
@@ -12,41 +15,77 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from krater.models import User
-from krater.services import roles
-from krater.services.actor import GROUP_MEMBER
-from krater.weave import WeaveIdentity
+from krater.services.actor import GROUP_MEMBER, Actor
+from krater.services.errors import NotAMember
+from krater.weave import WeaveClient, WeaveIdentity, WeaveUser
 
-STUB_SEED_REASON = "stub fixture"
+
+def _link_slack_id(session: Session, user: User, slack_id: str | None) -> None:
+    """Store Weave's `slack_id` on `user`. Weave is the source of truth, so another user row that still
+    holds the same id (a stale link) loses it. A missing `slack_id` leaves the stored one alone: it may
+    have come from Krater's own Slack email lookup."""
+    if not slack_id or user.slack_user_id == slack_id:
+        return
+    session.execute(
+        sa.update(User).where(User.slack_user_id == slack_id, User.id != user.id).values(slack_user_id=None)
+    )
+    user.slack_user_id = slack_id
+
+
+def _apply(
+    session: Session,
+    user: User,
+    *,
+    name: str,
+    email: str,
+    email_verified: bool,
+    slack_id: str | None,
+    roles: frozenset[str],
+) -> None:
+    user.display_name = name or email or user.weave_sub
+    user.email = email
+    user.email_verified = email_verified
+    user.roles_cached = sorted(roles)
+    _link_slack_id(session, user, slack_id)
+    session.flush()
 
 
 def upsert_user_from_identity(session: Session, identity: WeaveIdentity) -> User:
     """Create or update the `User` row for `identity`, by `weave_sub`.
 
-    Refreshes `display_name`, `email` and `email_verified` from the identity. Leaves `slack_user_id`,
-    `last_login_at` and `disabled_at` alone. Flushes but does not commit.
+    Refreshes the display name, email, `email_verified`, `roles_cached` and (if Weave sent one)
+    `slack_user_id`. Leaves `last_login_at` alone. Flushes but does not commit.
     """
     user = session.execute(sa.select(User).where(User.weave_sub == identity.sub)).scalar_one_or_none()
     if user is None:
         user = User(weave_sub=identity.sub)
         session.add(user)
-
-    user.display_name = identity.name or identity.email or identity.sub
-    user.email = identity.email
-    user.email_verified = identity.email_verified
-
-    session.flush()
+    _apply(
+        session,
+        user,
+        name=identity.name,
+        email=identity.email,
+        email_verified=identity.email_verified,
+        slack_id=identity.slack_id,
+        roles=identity.roles,
+    )
     return user
 
 
-@dataclass(frozen=True)
-class StubSeed:
-    """Dev-only extras from the stub fixture, seeded at stub sign-in (never with a live Weave)."""
+def refresh_user_from_weave(session: Session, user: User, record: WeaveUser) -> None:
+    """Update `user`'s cached fields from a fresh directory record. Flushes but does not commit."""
+    _apply(
+        session,
+        user,
+        name=record.name,
+        email=record.email,
+        email_verified=record.email_verified,
+        slack_id=record.slack_id,
+        roles=record.roles,
+    )
 
-    groups: frozenset[str]
-    slack_id: str | None
 
-
-SignInStatus = Literal["ok", "disabled", "not_a_member"]
+SignInStatus = Literal["ok", "not_a_member"]
 
 
 @dataclass(frozen=True)
@@ -55,49 +94,47 @@ class SignInResult:
     status: SignInStatus
 
 
-def _seed_stub_slack_id(session: Session, user: User, slack_id: str | None) -> None:
-    if not slack_id or user.slack_user_id is not None:
-        return
-    taken = session.scalars(sa.select(User.id).where(User.slack_user_id == slack_id, User.id != user.id)).first()
-    if taken is None:
-        user.slack_user_id = slack_id
-        session.flush()
+def sign_in(session: Session, identity: WeaveIdentity) -> SignInResult:
+    """Record a sign-in and decide whether it's allowed. Flushes, never commits.
 
-
-def sign_in(
-    session: Session,
-    identity: WeaveIdentity,
-    *,
-    bootstrap_admins: Iterable[str] = (),
-    stub_seed: StubSeed | None = None,
-) -> SignInResult:
-    """Record a sign-in and decide whether it's allowed. Flushes, never commits: the caller commits
-    whatever the outcome, so a refused user's row (and any grants applied) is kept for admins to see.
-
-    1. Upsert the user from the identity.
-    2. A disabled user is refused before anything else happens.
-    3. Stub mode only: seed the fixture's groups and Slack id.
-    4. Bootstrap admins get `ganymede:admin` and `ganymede:member` if missing.
-    5. Pending grants for the user's email are applied, if Weave says the email is verified.
-    6. Without `ganymede:member`, the user is refused as not a member.
+    The user row is upserted either way, so its cached roles match what Weave just said. Without
+    `ganymede:member` in the id_token's roles, the sign-in is refused.
     """
     user = upsert_user_from_identity(session, identity)
-    if user.is_disabled:
-        return SignInResult(user=user, status="disabled")
-
-    if stub_seed is not None:
-        roles.seed_roles(session, user, sorted(stub_seed.groups), reason=STUB_SEED_REASON)
-        _seed_stub_slack_id(session, user, stub_seed.slack_id)
-
-    roles.apply_bootstrap_admin(session, user, entries=bootstrap_admins)
-    roles.apply_pending_grants(session, user)
-
-    if GROUP_MEMBER not in roles.roles_for(session, user):
+    if GROUP_MEMBER not in identity.roles:
         return SignInResult(user=user, status="not_a_member")
-
     user.last_login_at = datetime.now(UTC)
     session.flush()
     return SignInResult(user=user, status="ok")
 
 
-__all__ = ["STUB_SEED_REASON", "SignInResult", "StubSeed", "sign_in", "upsert_user_from_identity"]
+def authorize(session: Session, weave_client: WeaveClient, user: User) -> Actor:
+    """An `Actor` for `user` from a fresh Weave directory lookup by `weave_sub`.
+
+    Raises `NotAMember` if Weave doesn't know the user (or won't let them use Krater), lists them as
+    inactive, or no longer gives them `ganymede:member`. `WeaveUnavailableError` propagates: callers
+    fail closed. Refreshes the user's cached fields from the record (flushed, not committed).
+    """
+    record = weave_client.get_user(user.weave_sub)
+    if record is None or not record.active:
+        raise NotAMember("Weave no longer lists you as an active Ganymede member")
+    refresh_user_from_weave(session, user, record)
+    if GROUP_MEMBER not in record.roles:
+        raise NotAMember("Weave no longer lists you as an active Ganymede member")
+    return Actor(user=user, groups=record.roles, slack_member=record.slack_member)
+
+
+def cached_actor(user: User) -> Actor:
+    """An `Actor` from the roles Weave last reported. Display and navigation only: never use it to
+    authorize an action (see `authorize`)."""
+    return Actor(user=user, groups=frozenset(user.roles_cached))
+
+
+__all__ = [
+    "SignInResult",
+    "authorize",
+    "cached_actor",
+    "refresh_user_from_weave",
+    "sign_in",
+    "upsert_user_from_identity",
+]

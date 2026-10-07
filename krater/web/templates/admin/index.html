@@ -5,10 +5,7 @@
 
 {% block content %}
 <section class="card">
-  <div class="page-header">
-    <h1>All projects</h1>
-    <a href="/admin/users">Users and roles</a>
-  </div>
+  <h1>All projects</h1>
   {% for status in statuses %}
     {% set group = by_status[status] %}
     {% if group %}

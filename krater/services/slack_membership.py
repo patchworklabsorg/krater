@@ -2,9 +2,10 @@
 the lookup that links a Krater user to their Slack account.
 
 Signing in through Weave doesn't guarantee Slack membership: Weave signup is open, and new users join
-Slack as single-channel guests until they accept the code of conduct. Krater asks Slack itself: the
-user's Slack account must exist and not be deleted, `is_restricted` (a multi-channel guest) or
-`is_ultra_restricted` (a single-channel guest).
+Slack as single-channel guests until they accept the code of conduct. Weave's `slack_member` answer
+wins when Weave gives one. Otherwise Krater asks Slack itself: the user's Slack account must exist and
+not be deleted, `is_restricted` (a multi-channel guest) or `is_ultra_restricted` (a single-channel
+guest).
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ logger = logging.getLogger(__name__)
 def slack_id_for(session: Session, slack_client: SlackClient, user: User) -> str | None:
     """The Slack user id Krater uses for `user`, or `None` if there isn't one.
 
-    The stored `User.slack_user_id` wins (set by an earlier lookup, by an admin, or by stub sign-in).
+    The stored `User.slack_user_id` wins (Weave's `slack_id`, or an earlier lookup).
     Otherwise Slack `users.lookupByEmail` with the user's email, but only if Weave said that email was
     verified: an unverified address could be anyone's, and a wrong link would let its Slack clicks act
     as this user. A found id is cached onto the user (flushed, not committed), unless another user
@@ -52,13 +53,19 @@ def slack_id_for(session: Session, slack_client: SlackClient, user: User) -> str
     return slack_id
 
 
-def is_full_slack_member(session: Session, slack_client: SlackClient, user: User) -> bool:
-    """Whether `user` is a full (non-guest, active) member of the Patchwork Labs Slack, per Slack.
+def is_full_slack_member(
+    session: Session, slack_client: SlackClient, user: User, *, weave_slack_member: bool | None = None
+) -> bool:
+    """Whether `user` is a full (non-guest, active) member of the Patchwork Labs Slack.
 
-    Resolves the Slack account with `slack_id_for`, then asks `users.info`: the account must exist and
-    not be deleted, `is_restricted` or `is_ultra_restricted`. No Slack account means not a member.
-    Slack errors propagate rather than being read as either answer.
+    `weave_slack_member` is Weave's `slack_member` answer from a fresh directory lookup
+    (`Actor.slack_member`). When Weave gave one, it decides. Otherwise this resolves the Slack account
+    with `slack_id_for` and asks `users.info`: the account must exist and not be deleted,
+    `is_restricted` or `is_ultra_restricted`. No Slack account means not a member. Slack errors
+    propagate rather than being read as either answer.
     """
+    if weave_slack_member is not None:
+        return weave_slack_member
     slack_id = slack_id_for(session, slack_client, user)
     if not slack_id:
         return False

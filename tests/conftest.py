@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session  # noqa: E402
 from alembic import command  # noqa: E402
 from krater.db import get_engine, get_session  # noqa: E402
 from krater.models import User  # noqa: E402
+from krater.weave import StubWeaveClient, get_weave_client  # noqa: E402
 from krater.web.app import create_app  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -82,10 +83,19 @@ def db_session(engine: Engine) -> Generator[Session, None, None]:
 
 
 @pytest.fixture
-def client(db_session: Session) -> Generator[TestClient, None, None]:
-    """A FastAPI `TestClient` with `get_session` overridden to the per-test transactional session."""
+def weave_stub() -> StubWeaveClient:
+    """A fresh stub Weave (the bundled fixture users) for this test. The `client` app uses it, so a test
+    can change what Weave says mid-test (`set_roles`, `set_active`, `remove_user`)."""
+    return StubWeaveClient()
+
+
+@pytest.fixture
+def client(db_session: Session, weave_stub: StubWeaveClient) -> Generator[TestClient, None, None]:
+    """A FastAPI `TestClient` with `get_session` overridden to the per-test transactional session, and
+    `get_weave_client` to this test's `weave_stub`."""
     app = create_app()
     app.dependency_overrides[get_session] = lambda: db_session
+    app.dependency_overrides[get_weave_client] = lambda: weave_stub
 
     with TestClient(app) as test_client:
         yield test_client

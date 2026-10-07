@@ -3,7 +3,7 @@ the review message once a decision is made, posting admin overrides, archiving f
 the periodic reconcile pass that catches anything a web request's deferred job missed.
 
 Framework-free (no FastAPI, no procrastinate) so it can be unit-tested directly against
-`krater.slack.FakeSlackClient` and driven by the worker's task wrappers
+`krater.slack.FakeSlackClient`/`krater.weave.StubWeaveClient` and driven by the worker's task wrappers
 (`krater/worker/app.py`) alike -- mirrors `krater.services.skypilot_sync`. Every function here is safe
 to call repeatedly: each one re-checks the state it would otherwise duplicate (an already-created
 channel, an already-posted message, an already-archived channel, an already-posted budget notification)
@@ -31,12 +31,12 @@ from krater.models import (
     SlackNotification,
     User,
 )
-from krater.services import roles
 from krater.services.actor import GROUP_REVIEWER
 from krater.services.skypilot_sync import AUDIT_BUDGET_TEARDOWN, AUDIT_BUDGET_WARNING
 from krater.services.slack_membership import slack_id_for
 from krater.slack.client import SlackClient
 from krater.slack.errors import SlackError, SlackRequestFailedError
+from krater.weave.client import WeaveClient
 
 logger = logging.getLogger(__name__)
 
@@ -78,36 +78,51 @@ def _format_cents(cents: int) -> str:
 
 
 def _slack_ids(session: Session, slack_client: SlackClient, people: list[User]) -> set[str]:
-    """Slack ids for everyone in `people` who isn't disabled and has a Slack account Krater can find
-    (`slack_id_for`: the stored id, else an email lookup whose result is cached on the user). Nobody is
-    filtered by guest status here: the live client invites with `force` and skips anyone Slack refuses
-    (see `LiveSlackClient.invite_users`), so one guest never blocks the rest."""
+    """Slack ids for everyone in `people` who has a Slack account Krater can find (`slack_id_for`: the
+    stored id, else an email lookup whose result is cached on the user). Nobody is filtered by guest
+    status here: the live client invites with `force` and skips anyone Slack refuses (see
+    `LiveSlackClient.invite_users`), so one guest never blocks the rest."""
     ids: set[str] = set()
     for person in people:
-        if person.is_disabled:
-            continue
         slack_id = slack_id_for(session, slack_client, person)
         if slack_id:
             ids.add(slack_id)
     return ids
 
 
-def _reviewer_slack_ids(session: Session, slack_client: SlackClient) -> set[str]:
-    return _slack_ids(session, slack_client, roles.active_users_with_role(session, GROUP_REVIEWER))
+def _reviewer_slack_ids(session: Session, slack_client: SlackClient, weave_client: WeaveClient) -> set[str]:
+    """Slack ids for every active user Weave says holds `ganymede:reviewer`: Weave's `slack_id`, else
+    the Krater user row's (`slack_id_for`), else a Slack lookup by an email Weave says is verified."""
+    ids: set[str] = set()
+    for reviewer in weave_client.list_users_with_role(GROUP_REVIEWER):
+        if not reviewer.active:
+            continue
+        slack_id = reviewer.slack_id
+        if not slack_id:
+            user = session.scalars(sa.select(User).where(User.weave_sub == reviewer.sub)).first()
+            if user is not None:
+                slack_id = slack_id_for(session, slack_client, user)
+            elif reviewer.email_verified and reviewer.email:
+                slack_id = slack_client.lookup_user_by_email(reviewer.email)
+        if slack_id:
+            ids.add(slack_id)
+    return ids
 
 
-def _team_slack_ids(session: Session, slack_client: SlackClient, *, project: Project) -> list[str]:
+def _team_slack_ids(
+    session: Session, slack_client: SlackClient, weave_client: WeaveClient, *, project: Project
+) -> list[str]:
     """The submitter, the current revision's credited builders, and every current Ganymede reviewer --
     everyone `docs/SPEC.md` says should be in a project's channel -- resolved to Slack user ids."""
     people = [project.submitter]
     revision = project.current_revision
     if revision is not None and revision.credited_builder_ids:
         people.extend(session.scalars(sa.select(User).where(User.id.in_(revision.credited_builder_ids))))
-    ids = _slack_ids(session, slack_client, people) | _reviewer_slack_ids(session, slack_client)
+    ids = _slack_ids(session, slack_client, people) | _reviewer_slack_ids(session, slack_client, weave_client)
     return sorted(ids)
 
 
-def ensure_channel(session: Session, slack_client: SlackClient, *, project: Project) -> str:
+def ensure_channel(session: Session, slack_client: SlackClient, weave_client: WeaveClient, *, project: Project) -> str:
     """Ensure `project` has a Slack channel, invite the current team to it, and return the channel id.
 
     Idempotent: creates the channel only if `project.slack_channel_id` is unset. Always (re-)invites the
@@ -119,7 +134,7 @@ def ensure_channel(session: Session, slack_client: SlackClient, *, project: Proj
         project.slack_channel_id = channel_id
         session.flush()
 
-    team_ids = _team_slack_ids(session, slack_client, project=project)
+    team_ids = _team_slack_ids(session, slack_client, weave_client, project=project)
     if team_ids:
         slack_client.invite_users(project.slack_channel_id, team_ids)
     return project.slack_channel_id
@@ -184,6 +199,7 @@ def _review_message(project: Project, revision: ProjectRevision) -> tuple[list[d
 def notify_revision_submitted(
     session: Session,
     slack_client: SlackClient,
+    weave_client: WeaveClient,
     *,
     revision: ProjectRevision,
     feed_channel_id: str | None,
@@ -196,7 +212,7 @@ def notify_revision_submitted(
     has already been posted (`revision.slack_message_ts` set).
     """
     project = revision.project
-    channel_id = ensure_channel(session, slack_client, project=project)
+    channel_id = ensure_channel(session, slack_client, weave_client, project=project)
 
     if revision.slack_message_ts is not None:
         return
@@ -313,16 +329,16 @@ def archive_project_channel(session: Session, slack_client: SlackClient, *, proj
 # --------------------------------------------------------------------------------------------------
 
 
-def sync_reviewer_invites(session: Session, slack_client: SlackClient) -> None:
+def sync_reviewer_invites(session: Session, slack_client: SlackClient, weave_client: WeaveClient) -> None:
     """Invite every current Ganymede reviewer to every open (non-archived) project channel.
 
-    `docs/SPEC.md`: "When an admin makes someone a reviewer, they get invited to open project channels
-    by a periodic job". Reviewers are users holding `ganymede:reviewer` in Krater who aren't disabled.
+    `docs/SPEC.md`: "When someone gets the reviewer role in Weave, they get invited to open project
+    channels by a periodic job". Reviewers are the active users Weave's directory lists with the role.
     Safe to re-run: inviting an existing member is a no-op (see `SlackClient.invite_users`). A channel
     Slack refuses (archived or left by hand, say) is logged and skipped so it doesn't hold up every
     other channel.
     """
-    reviewer_ids = _reviewer_slack_ids(session, slack_client)
+    reviewer_ids = _reviewer_slack_ids(session, slack_client, weave_client)
     if not reviewer_ids:
         return
 
@@ -388,11 +404,11 @@ def sync_missed_archives(session: Session, slack_client: SlackClient) -> None:
         archive_project_channel(session, slack_client, project=project)
 
 
-def reconcile(session: Session, slack_client: SlackClient) -> None:
+def reconcile(session: Session, slack_client: SlackClient, weave_client: WeaveClient) -> None:
     """Run every periodic Slack step in order, committing after each so one step's `SlackError` doesn't
     lose the others' work (mirrors `krater.services.skypilot_sync.reconcile`)."""
     steps = (
-        ("sync_reviewer_invites", lambda: sync_reviewer_invites(session, slack_client)),
+        ("sync_reviewer_invites", lambda: sync_reviewer_invites(session, slack_client, weave_client)),
         ("sync_budget_notifications", lambda: sync_budget_notifications(session, slack_client)),
         ("sync_missed_archives", lambda: sync_missed_archives(session, slack_client)),
     )

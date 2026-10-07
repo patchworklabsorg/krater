@@ -18,6 +18,7 @@ from krater.services.pricing import refresh_prices
 from krater.services.skypilot_sync import reconcile
 from krater.skypilot import SkyPilotError, get_skypilot_client
 from krater.slack import SlackError, get_slack_client
+from krater.weave import get_weave_client
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +120,7 @@ def slack_notify_revision_submitted(revision_id: str) -> None:
         slack_notify.notify_revision_submitted(
             session,
             get_slack_client(),
+            get_weave_client(),
             revision=revision,
             feed_channel_id=settings.slack_feed_channel_id or None,
         )
@@ -204,6 +206,7 @@ def slack_process_approve(revision_id: str, slack_user_id: str, response_url: st
         slack_reviews.process_approve(
             session,
             get_slack_client(),
+            get_weave_client(),
             revision_id=uuid.UUID(revision_id),
             slack_user_id=slack_user_id,
             response_url=response_url,
@@ -223,6 +226,7 @@ def slack_process_reject(revision_id: str, slack_user_id: str, reason: str, resp
         slack_reviews.process_reject(
             session,
             get_slack_client(),
+            get_weave_client(),
             revision_id=uuid.UUID(revision_id),
             slack_user_id=slack_user_id,
             reason=reason,
@@ -249,7 +253,7 @@ def slack_reconcile(timestamp: int) -> None:
     del timestamp
     session = get_sessionmaker()()
     try:
-        slack_notify.reconcile(session, get_slack_client())
+        slack_notify.reconcile(session, get_slack_client(), get_weave_client())
     except SlackError:
         # `reconcile` already catches per-step Slack errors and logs+continues; last-resort net, as in
         # `skypilot_reconcile` above.

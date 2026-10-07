@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -10,13 +9,13 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from krater.models import PendingRoleGrant, User
-from krater.services import roles
+from krater.models import User
+from krater.weave import StubWeaveClient
 
 # Fixture subs from krater/weave/stub_users.json.
 MEMBER_SUB = "PWLMEMBERONE"
 NON_MEMBER_SUB = "PWLNONMEMBER"
-UNVERIFIED_SUB = "PWLUNVERIFIED"
+FALLBACK_REVIEWER_SUB = "PWLREVIEWERTWO"  # no `roles` field: roles come from group slugs
 
 
 def _start_login(client: TestClient, next: str | None = None) -> str:
@@ -45,8 +44,8 @@ def test_full_stub_sign_in_flow(client: TestClient, db_session: Session) -> None
 
     user = db_session.execute(select(User).where(User.weave_sub == MEMBER_SUB)).scalar_one()
     assert user.display_name == "Mia Member"
-    assert roles.roles_for(db_session, user) == frozenset({"ganymede:member"})
-    assert user.slack_user_id == "U0001MEMBER"  # stub mode seeds the fixture's Slack id
+    assert user.roles_cached == ["ganymede:member"]
+    assert user.slack_user_id == "U0001MEMBER"  # from Weave's `slack_id` claim
     assert user.email_verified is True
     assert user.last_login_at is not None
 
@@ -95,9 +94,9 @@ def test_callback_rejects_a_non_member(client: TestClient, db_session: Session) 
 
     assert response.status_code == 403
     assert "Ask a Ganymede admin" in response.text
-    # The row is kept (so an admin can find them on /admin/users), but they have no roles and no session.
+    # An empty `roles` claim is not "absent": the member group slug the fixture carries is ignored.
     user = db_session.execute(select(User).where(User.weave_sub == NON_MEMBER_SUB)).scalar_one()
-    assert roles.roles_for(db_session, user) == frozenset()
+    assert user.roles_cached == []
     assert user.last_login_at is None
     assert "Sign out" not in client.get("/").text
 
@@ -113,56 +112,36 @@ def test_a_refused_sign_in_drops_an_earlier_session(client: TestClient, login_as
     assert "Sign out" not in client.get("/").text
 
 
-def test_callback_refuses_a_disabled_user(client: TestClient, login_as, db_session: Session) -> None:
-    user = login_as(MEMBER_SUB)
-    client.cookies.clear()
-    user.disabled_at = datetime.now(UTC)
-    db_session.flush()
-
+def test_callback_maps_group_slugs_when_weave_sends_no_roles(client: TestClient, db_session: Session) -> None:
     state = _start_login(client)
+
+    response = client.get(
+        "/auth/callback", params={"code": FALLBACK_REVIEWER_SUB, "state": state}, follow_redirects=False
+    )
+
+    assert response.status_code == 302
+    user = db_session.execute(select(User).where(User.weave_sub == FALLBACK_REVIEWER_SUB)).scalar_one()
+    assert user.roles_cached == ["ganymede:member", "ganymede:reviewer"]
+
+
+def test_callback_rejects_a_user_whose_member_role_weave_removed(
+    client: TestClient, db_session: Session, weave_stub: StubWeaveClient
+) -> None:
+    weave_stub.set_roles(MEMBER_SUB, ["reviewer"])
+    state = _start_login(client)
+
     response = client.get("/auth/callback", params={"code": MEMBER_SUB, "state": state})
 
     assert response.status_code == 403
-    assert "disabled" in response.text
+    user = db_session.execute(select(User).where(User.weave_sub == MEMBER_SUB)).scalar_one()
+    assert user.roles_cached == ["ganymede:reviewer"]
     assert "Sign out" not in client.get("/").text
 
 
-def test_callback_applies_a_pending_grant_for_a_verified_email(client: TestClient, db_session: Session) -> None:
-    db_session.add(PendingRoleGrant(email="nico@example.com", role="ganymede:member"))
-    db_session.flush()
+def test_admin_users_page_is_gone(client: TestClient, login_as) -> None:
+    login_as("PWLADMINONE")
 
-    state = _start_login(client)
-    response = client.get("/auth/callback", params={"code": NON_MEMBER_SUB, "state": state}, follow_redirects=False)
-
-    assert response.status_code == 302
-    user = db_session.execute(select(User).where(User.weave_sub == NON_MEMBER_SUB)).scalar_one()
-    assert roles.roles_for(db_session, user) == frozenset({"ganymede:member"})
-    assert db_session.execute(select(PendingRoleGrant)).scalars().all() == []
-
-
-def test_callback_ignores_a_pending_grant_for_an_unverified_email(client: TestClient, db_session: Session) -> None:
-    db_session.add(PendingRoleGrant(email="uma@example.com", role="ganymede:member"))
-    db_session.flush()
-
-    state = _start_login(client)
-    response = client.get("/auth/callback", params={"code": UNVERIFIED_SUB, "state": state})
-
-    assert response.status_code == 403
-    assert len(db_session.execute(select(PendingRoleGrant)).scalars().all()) == 1
-
-
-def test_callback_makes_a_bootstrap_admin(client: TestClient, db_session: Session, monkeypatch) -> None:
-    from krater.config import get_settings
-
-    monkeypatch.setattr(get_settings(), "bootstrap_admins", f"someone@else.example, {NON_MEMBER_SUB}")
-    state = _start_login(client)
-
-    response = client.get("/auth/callback", params={"code": NON_MEMBER_SUB, "state": state}, follow_redirects=False)
-
-    assert response.status_code == 302
-    user = db_session.execute(select(User).where(User.weave_sub == NON_MEMBER_SUB)).scalar_one()
-    assert roles.roles_for(db_session, user) == frozenset({"ganymede:member", "ganymede:admin"})
-    assert client.get("/admin/users").status_code == 200
+    assert client.get("/admin/users").status_code == 404
 
 
 def test_logout_without_csrf_token_is_rejected(client: TestClient) -> None:

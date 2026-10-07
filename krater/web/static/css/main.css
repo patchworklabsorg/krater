@@ -287,7 +287,6 @@ a:hover {
 }
 
 .field input[type="text"],
-.field input[type="email"],
 .field input[type="url"],
 .field input[type="number"],
 .field select,
@@ -369,16 +368,6 @@ a:hover {
 .badge--outcome-superseded {
   background-color: #e3e1e8;
   color: var(--color-text-muted);
-}
-
-.badge--role {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-weight: 600;
-}
-
-.badge--disabled {
-  background-color: #f3d0d0;
-  color: #7a1f1f;
 }
 
 /* Lists */

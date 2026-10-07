@@ -1,7 +1,8 @@
 """The Slack membership gate (`krater.services.slack_membership`), enforced by the submit routes before
-handing off to `project_service` -- see `docs/SPEC.md` "Roles & authentication". Slack decides: the
-user's Slack account (stored id, else a lookup by verified email) must exist and not be deleted or a
-guest. Drafts are always allowed; only submitting is gated.
+handing off to `project_service` -- see `docs/SPEC.md` "Roles & authentication". Weave's `slack_member`
+decides when Weave gives one; otherwise Slack decides: the user's Slack account (stored id, else a
+lookup by verified email) must exist and not be deleted or a guest. Drafts are always allowed; only
+submitting is gated.
 """
 
 from __future__ import annotations
@@ -15,12 +16,14 @@ from sqlalchemy.orm import Session
 from krater.models import ProjectStatus
 from krater.services import projects as project_service
 from krater.slack import get_slack_client
+from krater.weave import StubWeaveClient
 from tests.conftest import MEMBER_SUB, OTHER_MEMBER_SUB, REVIEWER_SUB, get_csrf_token
 from tests.web.conftest import actor_for
 
-# `MEMBER_SUB` (PWLMEMBERONE, stub_users.json) carries `slack_id: "U0001MEMBER"`, stored at stub sign-in.
+# `MEMBER_SUB` (PWLMEMBERONE, stub_users.json) carries `slack_id: "U0001MEMBER"`, stored at sign-in.
 MEMBER_SLACK_ID = "U0001MEMBER"
-# PWLSLACKGUEST in stub_users.json: a Ganymede member whose Slack account the fake Slack reports as a guest.
+# PWLSLACKGUEST in stub_users.json: a Ganymede member Weave reports with `slack_member: false` (and whom the
+# fake Slack also reports as a guest).
 GUEST_SUB = "PWLSLACKGUEST"
 
 
@@ -158,3 +161,23 @@ def test_drafts_are_always_allowed_even_for_a_slack_guest(
     db_session.refresh(project)
     assert project.status is ProjectStatus.DRAFT
     assert project.title == "T"
+
+
+def test_weave_saying_slack_member_true_lets_a_slack_guest_submit(
+    client: TestClient, login_as, create_project, db_session: Session, weave_stub: StubWeaveClient, slack_user_state
+) -> None:
+    # Weave's answer is preferred: the fake Slack calls this account a guest, Weave says full member.
+    member = login_as(MEMBER_SUB)
+    slack_user_state(is_ultra_restricted=True)
+    record = weave_stub.get_user(MEMBER_SUB)
+    assert record is not None
+    weave_stub.put_user(
+        MEMBER_SUB, name=record.name, email=record.email, slack_id=record.slack_id, slack_member=True, roles=["member"]
+    )
+    project = create_project(member, title="T", write_up="W", budget_requested_cents=100)
+
+    response = _post_submit(client, project.id)
+
+    assert response.status_code == 303
+    db_session.refresh(project)
+    assert project.status is ProjectStatus.PENDING_REVIEW

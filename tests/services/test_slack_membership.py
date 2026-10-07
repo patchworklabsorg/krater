@@ -1,6 +1,7 @@
-"""The Slack membership gate (`docs/SPEC.md` "Roles & authentication"): purely Slack-side. The user's
-stored Slack id, else `users.lookupByEmail` with their verified email (cached), then `users.info`
-must show an account that isn't deleted or a guest."""
+"""The Slack membership gate (`docs/SPEC.md` "Roles & authentication"). Weave's `slack_member` decides
+when Weave gives it. Otherwise Slack decides: the user's stored Slack id, else `users.lookupByEmail`
+with their verified email (cached), then `users.info` must show an account that isn't deleted or a
+guest."""
 
 from __future__ import annotations
 
@@ -112,3 +113,13 @@ def test_a_slack_outage_propagates_instead_of_deciding(db_session: Session, make
 
     with pytest.raises(SlackUnavailableError):
         is_full_slack_member(db_session, slack_client, user)
+
+
+@pytest.mark.parametrize("weave_says", [True, False])
+def test_weaves_slack_member_answer_wins_without_asking_slack(db_session: Session, make_user, weave_says: bool) -> None:
+    user: User = make_user(slack_user_id="USTORED")
+    slack_client = _RecordingSlackClient()
+    slack_client.set_user_info("USTORED", is_ultra_restricted=True)
+
+    assert is_full_slack_member(db_session, slack_client, user, weave_slack_member=weave_says) is weave_says
+    assert slack_client.user_info_calls == []

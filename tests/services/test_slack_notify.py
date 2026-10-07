@@ -4,44 +4,47 @@ invites, idempotency, decision updates, admin overrides, archiving and the perio
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 from sqlalchemy.orm import Session
 
-from krater.models import AuditEvent, ProjectStatus, ReviewDecision, ReviewSource, RevisionOutcome, UserRole
+from krater.models import AuditEvent, ProjectStatus, ReviewDecision, ReviewSource, RevisionOutcome
 from krater.services import projects, slack_notify
 from krater.services.actor import GROUP_MEMBER, GROUP_REVIEWER, Actor
 from krater.slack.errors import SlackRequestFailedError
 from krater.slack.fake import FakeSlackClient
+from krater.weave import StubWeaveClient
 
 
-def test_ensure_channel_creates_and_invites_the_team(db_session: Session, member: Actor, reviewer: Actor) -> None:
+def test_ensure_channel_creates_and_invites_the_team(
+    db_session: Session, member: Actor, reviewer: Actor, weave: StubWeaveClient
+) -> None:
     member.user.slack_user_id = "U_MEMBER"
     project = projects.create_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=1000)
     reviewer.user.slack_user_id = "U_REVIEWER"
     slack_client = FakeSlackClient()
 
-    channel_id = slack_notify.ensure_channel(db_session, slack_client, project=project)
+    channel_id = slack_notify.ensure_channel(db_session, slack_client, weave, project=project)
 
     assert project.slack_channel_id == channel_id
     assert slack_client.channels[channel_id]["name"] == slack_notify.channel_name_for(project)
     assert slack_client.channels[channel_id]["members"] == {"U_MEMBER", "U_REVIEWER"}
 
 
-def test_ensure_channel_is_idempotent(db_session: Session, member: Actor, reviewer: Actor) -> None:
+def test_ensure_channel_is_idempotent(
+    db_session: Session, member: Actor, reviewer: Actor, weave: StubWeaveClient
+) -> None:
     project = projects.create_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=1000)
     reviewer.user.slack_user_id = "U_REVIEWER"
     slack_client = FakeSlackClient()
 
-    first = slack_notify.ensure_channel(db_session, slack_client, project=project)
-    second = slack_notify.ensure_channel(db_session, slack_client, project=project)
+    first = slack_notify.ensure_channel(db_session, slack_client, weave, project=project)
+    second = slack_notify.ensure_channel(db_session, slack_client, weave, project=project)
 
     assert first == second
     assert len(slack_client.channels) == 1
 
 
 def test_notify_revision_submitted_posts_a_review_message_and_a_feed_line(
-    db_session: Session, member: Actor, reviewer: Actor
+    db_session: Session, member: Actor, reviewer: Actor, weave: StubWeaveClient
 ) -> None:
     project = projects.create_project(
         db_session, member, title="Rover", write_up="A rover.", budget_requested_cents=5000
@@ -51,7 +54,7 @@ def test_notify_revision_submitted_posts_a_review_message_and_a_feed_line(
     reviewer.user.slack_user_id = "U_REVIEWER"
     slack_client = FakeSlackClient()
 
-    slack_notify.notify_revision_submitted(db_session, slack_client, revision=revision, feed_channel_id="C_FEED")
+    slack_notify.notify_revision_submitted(db_session, slack_client, weave, revision=revision, feed_channel_id="C_FEED")
 
     assert revision.slack_message_ts is not None
     channel_id = revision.slack_message_channel_id
@@ -64,21 +67,25 @@ def test_notify_revision_submitted_posts_a_review_message_and_a_feed_line(
     assert "Rover" in feed_messages[0]["text"]
 
 
-def test_notify_revision_submitted_is_idempotent(db_session: Session, member: Actor, reviewer: Actor) -> None:
+def test_notify_revision_submitted_is_idempotent(
+    db_session: Session, member: Actor, reviewer: Actor, weave: StubWeaveClient
+) -> None:
     project = projects.create_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=5000)
     project = projects.submit(db_session, member, project=project)
     revision = project.current_revision
     reviewer.user.slack_user_id = "U_REVIEWER"
     slack_client = FakeSlackClient()
 
-    slack_notify.notify_revision_submitted(db_session, slack_client, revision=revision, feed_channel_id="C_FEED")
-    slack_notify.notify_revision_submitted(db_session, slack_client, revision=revision, feed_channel_id="C_FEED")
+    slack_notify.notify_revision_submitted(db_session, slack_client, weave, revision=revision, feed_channel_id="C_FEED")
+    slack_notify.notify_revision_submitted(db_session, slack_client, weave, revision=revision, feed_channel_id="C_FEED")
 
     assert len(slack_client.channels) == 1
     assert len(slack_client.messages) == 2  # the review message + the one feed line, not doubled
 
 
-def test_no_feed_line_for_a_resubmission_after_rejection(db_session: Session, member: Actor, reviewer: Actor) -> None:
+def test_no_feed_line_for_a_resubmission_after_rejection(
+    db_session: Session, member: Actor, reviewer: Actor, weave: StubWeaveClient
+) -> None:
     project = projects.create_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=5000)
     project = projects.submit(db_session, member, project=project)
     projects.record_review(
@@ -96,13 +103,15 @@ def test_no_feed_line_for_a_resubmission_after_rejection(db_session: Session, me
     assert revision.number == 2
 
     slack_client = FakeSlackClient()
-    slack_notify.notify_revision_submitted(db_session, slack_client, revision=revision, feed_channel_id="C_FEED")
+    slack_notify.notify_revision_submitted(db_session, slack_client, weave, revision=revision, feed_channel_id="C_FEED")
 
     feed_messages = [msg for (chan, _ts), msg in slack_client.messages.items() if chan == "C_FEED"]
     assert feed_messages == []
 
 
-def test_no_feed_line_for_an_amendment(db_session: Session, member: Actor, reviewer: Actor) -> None:
+def test_no_feed_line_for_an_amendment(
+    db_session: Session, member: Actor, reviewer: Actor, weave: StubWeaveClient
+) -> None:
     project = projects.create_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=5000)
     project = projects.submit(db_session, member, project=project)
     projects.record_review(
@@ -118,20 +127,20 @@ def test_no_feed_line_for_an_amendment(db_session: Session, member: Actor, revie
     revision = project.current_revision
 
     slack_client = FakeSlackClient()
-    slack_notify.notify_revision_submitted(db_session, slack_client, revision=revision, feed_channel_id="C_FEED")
+    slack_notify.notify_revision_submitted(db_session, slack_client, weave, revision=revision, feed_channel_id="C_FEED")
 
     feed_messages = [msg for (chan, _ts), msg in slack_client.messages.items() if chan == "C_FEED"]
     assert feed_messages == []
 
 
 def test_notify_decision_updates_the_message_and_drops_the_buttons(
-    db_session: Session, member: Actor, reviewer: Actor
+    db_session: Session, member: Actor, reviewer: Actor, weave: StubWeaveClient
 ) -> None:
     project = projects.create_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=5000)
     project = projects.submit(db_session, member, project=project)
     revision = project.current_revision
     slack_client = FakeSlackClient()
-    slack_notify.notify_revision_submitted(db_session, slack_client, revision=revision, feed_channel_id=None)
+    slack_notify.notify_revision_submitted(db_session, slack_client, weave, revision=revision, feed_channel_id=None)
 
     projects.record_review(
         db_session, reviewer, revision=revision, decision=ReviewDecision.APPROVE, source=ReviewSource.WEB
@@ -146,12 +155,14 @@ def test_notify_decision_updates_the_message_and_drops_the_buttons(
     assert "Approved" in updated["text"]
 
 
-def test_notify_decision_is_a_no_op_while_still_pending(db_session: Session, member: Actor) -> None:
+def test_notify_decision_is_a_no_op_while_still_pending(
+    db_session: Session, member: Actor, weave: StubWeaveClient
+) -> None:
     project = projects.create_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=5000)
     project = projects.submit(db_session, member, project=project)
     revision = project.current_revision
     slack_client = FakeSlackClient()
-    slack_notify.notify_revision_submitted(db_session, slack_client, revision=revision, feed_channel_id=None)
+    slack_notify.notify_revision_submitted(db_session, slack_client, weave, revision=revision, feed_channel_id=None)
 
     before = dict(slack_client.messages)
     slack_notify.notify_decision(db_session, slack_client, revision=revision)
@@ -214,54 +225,68 @@ def test_archive_project_channel_is_a_no_op_while_not_terminal(db_session: Sessi
 
 
 def test_sync_reviewer_invites_invites_reviewers_to_open_channels(
-    db_session: Session, member: Actor, reviewer: Actor
+    db_session: Session, member: Actor, reviewer: Actor, weave: StubWeaveClient
 ) -> None:
     project = projects.create_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=5000)
     slack_client = FakeSlackClient()
     project.slack_channel_id = slack_client.create_channel("ganymede-rover-test")
     reviewer.user.slack_user_id = "U_NEW_REVIEWER"
 
-    slack_notify.sync_reviewer_invites(db_session, slack_client)
+    slack_notify.sync_reviewer_invites(db_session, slack_client, weave)
 
     assert "U_NEW_REVIEWER" in slack_client.channels[project.slack_channel_id]["members"]
 
 
-def test_sync_reviewer_invites_skips_archived_channels(db_session: Session, member: Actor, reviewer: Actor) -> None:
+def test_sync_reviewer_invites_skips_archived_channels(
+    db_session: Session, member: Actor, reviewer: Actor, weave: StubWeaveClient
+) -> None:
     project = projects.create_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=5000)
     slack_client = FakeSlackClient()
     project.slack_channel_id = slack_client.create_channel("ganymede-rover-test")
     project.slack_channel_archived = True
     reviewer.user.slack_user_id = "U_NEW_REVIEWER"
 
-    slack_notify.sync_reviewer_invites(db_session, slack_client)
+    slack_notify.sync_reviewer_invites(db_session, slack_client, weave)
 
     assert "U_NEW_REVIEWER" not in slack_client.channels[project.slack_channel_id]["members"]
 
 
-def _team_invites(db_session: Session, project, slack_client: FakeSlackClient | None = None) -> set[str]:
+def _team_invites(
+    db_session: Session, weave: StubWeaveClient, project, slack_client: FakeSlackClient | None = None
+) -> set[str]:
     slack_client = slack_client or FakeSlackClient()
-    channel_id = slack_notify.ensure_channel(db_session, slack_client, project=project)
+    channel_id = slack_notify.ensure_channel(db_session, slack_client, weave, project=project)
     return slack_client.channels[channel_id]["members"]
 
 
-def test_ensure_channel_invites_only_reviewers_krater_knows_and_leaves_out_disabled_ones(
-    db_session: Session, member: Actor, reviewer: Actor, make_actor
+def test_ensure_channel_invites_reviewers_weave_lists_and_leaves_out_inactive_ones(
+    db_session: Session, member: Actor, reviewer: Actor, make_actor, weave: StubWeaveClient
 ) -> None:
-    disabled_reviewer = make_actor(groups=reviewer.groups, slack_user_id="U_DISABLED")
-    disabled_reviewer.user.disabled_at = datetime.now(UTC)
+    locked_reviewer = make_actor(groups=reviewer.groups, slack_user_id="U_LOCKED")
+    weave.set_active(locked_reviewer.user.weave_sub, False)
     plain_member = make_actor(groups=frozenset({GROUP_MEMBER}), slack_user_id="U_PLAIN")
     member.user.slack_user_id = "U_MEMBER"
     reviewer.user.slack_user_id = "U_REVIEWER"
     project = projects.create_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=1000)
 
-    invited = _team_invites(db_session, project)
+    invited = _team_invites(db_session, weave, project)
 
     assert invited == {"U_MEMBER", "U_REVIEWER"}
     assert plain_member.user.slack_user_id not in invited
 
 
+def test_ensure_channel_uses_the_slack_id_weave_reports_for_a_reviewer_krater_has_never_seen(
+    db_session: Session, member: Actor, weave: StubWeaveClient
+) -> None:
+    weave.put_user("PWLNEVERSEEN", name="Nev", email="nev@example.com", roles=["member", "reviewer"], slack_id="U_NEV")
+    member.user.slack_user_id = "U_MEMBER"
+    project = projects.create_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=1000)
+
+    assert _team_invites(db_session, weave, project) == {"U_MEMBER", "U_NEV"}
+
+
 def test_ensure_channel_invites_slack_guests_too_and_leaves_refusals_to_slack(
-    db_session: Session, member: Actor, make_actor
+    db_session: Session, member: Actor, make_actor, weave: StubWeaveClient
 ) -> None:
     # Krater no longer filters by guest status: the live client invites with `force` and skips anyone
     # Slack refuses, so a guest can't stop the rest of the team's invites.
@@ -271,10 +296,12 @@ def test_ensure_channel_invites_slack_guests_too_and_leaves_refusals_to_slack(
     slack_client.set_user_info("U_GUEST", is_ultra_restricted=True)
     project = projects.create_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=1000)
 
-    assert _team_invites(db_session, project, slack_client) == {"U_MEMBER", "U_GUEST"}
+    assert _team_invites(db_session, weave, project, slack_client) == {"U_MEMBER", "U_GUEST"}
 
 
-def test_ensure_channel_invites_credited_builders(db_session: Session, member: Actor, make_actor) -> None:
+def test_ensure_channel_invites_credited_builders(
+    db_session: Session, member: Actor, make_actor, weave: StubWeaveClient
+) -> None:
     builder = make_actor(slack_user_id="U_BUILDER")
     unlinked_builder = make_actor(email="nobody-in-slack@example.com")
     project = projects.create_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=1000)
@@ -282,11 +309,11 @@ def test_ensure_channel_invites_credited_builders(db_session: Session, member: A
     project.current_revision.credited_builder_ids = [builder.user.id, unlinked_builder.user.id]
     member.user.slack_user_id = "U_MEMBER"
 
-    assert _team_invites(db_session, project) == {"U_MEMBER", "U_BUILDER"}
+    assert _team_invites(db_session, weave, project) == {"U_MEMBER", "U_BUILDER"}
 
 
 def test_ensure_channel_looks_up_unlinked_people_by_verified_email_and_caches_the_id(
-    db_session: Session, member: Actor, reviewer: Actor, make_actor
+    db_session: Session, member: Actor, reviewer: Actor, make_actor, weave: StubWeaveClient
 ) -> None:
     unverified_reviewer = make_actor(groups=reviewer.groups, email_verified=False)
     project = projects.create_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=1000)
@@ -295,26 +322,25 @@ def test_ensure_channel_looks_up_unlinked_people_by_verified_email_and_caches_th
     slack_client.register_email(reviewer.user.email, "U_REVIEWER_BY_EMAIL")
     slack_client.register_email(unverified_reviewer.user.email, "U_UNVERIFIED")
 
-    assert _team_invites(db_session, project, slack_client) == {"U_BY_EMAIL", "U_REVIEWER_BY_EMAIL"}
+    assert _team_invites(db_session, weave, project, slack_client) == {"U_BY_EMAIL", "U_REVIEWER_BY_EMAIL"}
     assert member.user.slack_user_id == "U_BY_EMAIL"
     assert reviewer.user.slack_user_id == "U_REVIEWER_BY_EMAIL"
     assert unverified_reviewer.user.slack_user_id is None
 
 
-def test_sync_reviewer_invites_sees_a_reviewer_role_granted_after_the_channel_exists(
-    db_session: Session, member: Actor, make_actor
+def test_sync_reviewer_invites_sees_a_reviewer_role_weave_granted_after_the_channel_exists(
+    db_session: Session, member: Actor, make_actor, weave: StubWeaveClient
 ) -> None:
     project = projects.create_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=5000)
     slack_client = FakeSlackClient()
     project.slack_channel_id = slack_client.create_channel("ganymede-rover-test")
     newcomer = make_actor(groups=frozenset({GROUP_MEMBER}), slack_user_id="U_NEWCOMER")
 
-    slack_notify.sync_reviewer_invites(db_session, slack_client)
+    slack_notify.sync_reviewer_invites(db_session, slack_client, weave)
     assert "U_NEWCOMER" not in slack_client.channels[project.slack_channel_id]["members"]
 
-    db_session.add(UserRole(user_id=newcomer.user.id, role=GROUP_REVIEWER))
-    db_session.flush()
-    slack_notify.sync_reviewer_invites(db_session, slack_client)
+    weave.set_roles(newcomer.user.weave_sub, ["member", "reviewer"])
+    slack_notify.sync_reviewer_invites(db_session, slack_client, weave)
 
     assert "U_NEWCOMER" in slack_client.channels[project.slack_channel_id]["members"]
 
@@ -331,7 +357,7 @@ class _OneBrokenChannelSlackClient(FakeSlackClient):
 
 
 def test_sync_reviewer_invites_carries_on_past_a_channel_slack_refuses(
-    db_session: Session, member: Actor, reviewer: Actor
+    db_session: Session, member: Actor, reviewer: Actor, weave: StubWeaveClient
 ) -> None:
     broken = projects.create_project(db_session, member, title="Broken", write_up="w", budget_requested_cents=5000)
     fine = projects.create_project(db_session, member, title="Fine", write_up="w", budget_requested_cents=5000)
@@ -342,7 +368,7 @@ def test_sync_reviewer_invites_carries_on_past_a_channel_slack_refuses(
     db_session.flush()
     reviewer.user.slack_user_id = "U_REVIEWER"
 
-    slack_notify.sync_reviewer_invites(db_session, slack_client)
+    slack_notify.sync_reviewer_invites(db_session, slack_client, weave)
 
     assert "U_REVIEWER" in slack_client.channels[fine.slack_channel_id]["members"]
 
@@ -380,7 +406,7 @@ def test_sync_missed_archives_archives_finished_projects(db_session: Session, me
     assert slack_client.channels[project.slack_channel_id]["archived"] is True
 
 
-def test_reconcile_runs_every_step(db_session: Session, member: Actor, reviewer: Actor) -> None:
+def test_reconcile_runs_every_step(db_session: Session, member: Actor, reviewer: Actor, weave: StubWeaveClient) -> None:
     project = projects.create_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=5000)
     slack_client = FakeSlackClient()
     project.slack_channel_id = slack_client.create_channel("ganymede-rover-test")
@@ -389,7 +415,7 @@ def test_reconcile_runs_every_step(db_session: Session, member: Actor, reviewer:
     db_session.commit()
 
     reviewer.user.slack_user_id = "U_REVIEWER"
-    slack_notify.reconcile(db_session, slack_client)
+    slack_notify.reconcile(db_session, slack_client, weave)
 
     assert slack_client.channels[project.slack_channel_id]["archived"] is True
 
@@ -404,7 +430,9 @@ _INJECTION = "<!channel> ignore this <https://phish.example/|Approve>"
 _ESCAPED_INJECTION = "&lt;!channel&gt; ignore this &lt;https://phish.example/|Approve&gt;"
 
 
-def test_review_message_escapes_the_project_title_and_write_up(db_session: Session, member: Actor) -> None:
+def test_review_message_escapes_the_project_title_and_write_up(
+    db_session: Session, member: Actor, weave: StubWeaveClient
+) -> None:
     project = projects.create_project(
         db_session, member, title=_INJECTION, write_up=_INJECTION, budget_requested_cents=5000
     )
@@ -412,7 +440,7 @@ def test_review_message_escapes_the_project_title_and_write_up(db_session: Sessi
     revision = project.current_revision
     slack_client = FakeSlackClient()
 
-    slack_notify.notify_revision_submitted(db_session, slack_client, revision=revision, feed_channel_id=None)
+    slack_notify.notify_revision_submitted(db_session, slack_client, weave, revision=revision, feed_channel_id=None)
 
     message = slack_client.messages[(revision.slack_message_channel_id, revision.slack_message_ts)]
     header_text = message["blocks"][0]["text"]["text"]
@@ -423,13 +451,13 @@ def test_review_message_escapes_the_project_title_and_write_up(db_session: Sessi
     assert _ESCAPED_INJECTION in write_up_text
 
 
-def test_feed_line_escapes_the_project_title(db_session: Session, member: Actor) -> None:
+def test_feed_line_escapes_the_project_title(db_session: Session, member: Actor, weave: StubWeaveClient) -> None:
     project = projects.create_project(db_session, member, title=_INJECTION, write_up="w", budget_requested_cents=5000)
     project = projects.submit(db_session, member, project=project)
     revision = project.current_revision
     slack_client = FakeSlackClient()
 
-    slack_notify.notify_revision_submitted(db_session, slack_client, revision=revision, feed_channel_id="C_FEED")
+    slack_notify.notify_revision_submitted(db_session, slack_client, weave, revision=revision, feed_channel_id="C_FEED")
 
     feed_message = next(msg for (chan, _ts), msg in slack_client.messages.items() if chan == "C_FEED")
     block_text = feed_message["blocks"][0]["text"]["text"]
@@ -440,13 +468,13 @@ def test_feed_line_escapes_the_project_title(db_session: Session, member: Actor)
 
 
 def test_notify_decision_escapes_the_title_and_reject_reason(
-    db_session: Session, member: Actor, reviewer: Actor
+    db_session: Session, member: Actor, reviewer: Actor, weave: StubWeaveClient
 ) -> None:
     project = projects.create_project(db_session, member, title=_INJECTION, write_up="w", budget_requested_cents=5000)
     project = projects.submit(db_session, member, project=project)
     revision = project.current_revision
     slack_client = FakeSlackClient()
-    slack_notify.notify_revision_submitted(db_session, slack_client, revision=revision, feed_channel_id=None)
+    slack_notify.notify_revision_submitted(db_session, slack_client, weave, revision=revision, feed_channel_id=None)
 
     projects.record_review(
         db_session,

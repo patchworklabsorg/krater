@@ -61,15 +61,12 @@ def workspace_name_for(project_id: uuid.UUID) -> str:
 
 def _team_emails(session: Session, project: Project) -> list[str]:
     """The submitter's email plus the emails of the credited builders on the project's latest revision
-    (`current_revision`: the newest revision, draft or submitted -- see `krater.services.projects`).
-
-    Disabled users are left out, so disabling someone in Krater also takes them out of every project
-    workspace on the next reconcile (Weave's own lock doesn't reach SkyPilot)."""
+    (`current_revision`: the newest revision, draft or submitted -- see `krater.services.projects`)."""
     people = [project.submitter]
     revision = project.current_revision
     if revision is not None and revision.credited_builder_ids:
         people.extend(session.scalars(sa.select(User).where(User.id.in_(revision.credited_builder_ids))))
-    return sorted({person.email for person in people if person.disabled_at is None})
+    return sorted({person.email for person in people})
 
 
 def _active_projects(session: Session) -> list[Project]:

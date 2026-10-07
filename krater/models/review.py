@@ -36,7 +36,7 @@ class Review(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     # Required on reject; enforced by the review service, not a DB constraint.
     reason: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
     source: Mapped[ReviewSource] = mapped_column(pg_enum(ReviewSource, name="review_source"), nullable=False)
-    # Snapshot of the reviewer's Krater roles *at review time*, so a later change to their roles (or to
+    # Snapshot of the reviewer's roles (from Weave) *at review time*, so a later change to their roles (or to
     # an ApprovalPolicy's `required_group`) can't retroactively change whether a past review counts.
     reviewer_groups: Mapped[list[str]] = mapped_column(
         ARRAY(sa.String), nullable=False, default=list, server_default="{}"

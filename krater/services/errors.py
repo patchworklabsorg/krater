@@ -16,12 +16,8 @@ class NotAllowed(DomainError):
     """The actor isn't authorized to perform this action."""
 
 
-class AccountDisabled(NotAllowed):
-    """A Ganymede admin has disabled this user's Krater account."""
-
-
 class NotAMember(NotAllowed):
-    """The user doesn't (or no longer does) hold `ganymede:member` in Krater."""
+    """Weave doesn't (or no longer does) list the user as an active Ganymede member."""
 
 
 class InvalidState(DomainError):

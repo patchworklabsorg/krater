@@ -21,7 +21,6 @@ from krater.web.rate_limit import RateLimitMiddleware
 from krater.web.request_id import RequestIdMiddleware
 from krater.web.routers import (
     admin,
-    admin_users,
     auth,
     gallery,
     pages,
@@ -86,7 +85,6 @@ def create_app() -> FastAPI:
     app.include_router(projects.router)
     app.include_router(reviews.router)
     app.include_router(admin.router)
-    app.include_router(admin_users.router)
     app.include_router(gallery.router)
     app.include_router(pricing.router)
     app.include_router(skypilot_policy.router)

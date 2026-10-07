@@ -20,7 +20,6 @@ from krater.models.review import Review
 from krater.models.slack_notification import SlackNotification
 from krater.models.spend_snapshot import SpendSnapshot
 from krater.models.user import User
-from krater.models.user_role import PendingRoleGrant, UserRole
 
 __all__ = [
     "ApprovalPolicy",
@@ -29,7 +28,6 @@ __all__ = [
     "BudgetEntry",
     "BudgetEntryKind",
     "GpuPrice",
-    "PendingRoleGrant",
     "Project",
     "ProjectRevision",
     "ProjectStatus",
@@ -42,5 +40,4 @@ __all__ = [
     "SpendSnapshot",
     "SpendSource",
     "User",
-    "UserRole",
 ]

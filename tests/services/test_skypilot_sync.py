@@ -5,7 +5,6 @@ spend snapshots, and budget warning/teardown enforcement.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
 from unittest.mock import patch
 
 import pytest
@@ -79,24 +78,6 @@ def test_a_team_change_updates_allowed_users(
     sync_workspaces(db_session, client)
 
     assert client.workspaces[name] == sorted([member.user.email, builder.email])
-
-
-def test_a_disabled_builder_is_removed_from_the_workspace(
-    db_session: Session, member: Actor, reviewer: Actor, client, make_user
-) -> None:
-    project = _approve(db_session, member, reviewer)
-    builder = make_user(email="builder@example.com")
-    projects.start_amendment(db_session, member, project=project)
-    projects.update_draft(db_session, member, project=project, credited_builder_ids=[builder.id])
-    sync_workspaces(db_session, client)
-    name = project.skypilot_workspace
-    assert builder.email in client.workspaces[name]
-
-    builder.disabled_at = datetime.now(UTC)
-    db_session.flush()
-    sync_workspaces(db_session, client)
-
-    assert client.workspaces[name] == [member.user.email]
 
 
 def test_a_completed_project_gets_torn_down(db_session: Session, member: Actor, reviewer: Actor, client) -> None:

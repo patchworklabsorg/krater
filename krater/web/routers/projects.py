@@ -61,7 +61,7 @@ _TERMINAL_STATUSES = (ProjectStatus.COMPLETED, ProjectStatus.WITHDRAWN)
 _SLACK_MEMBERSHIP_REQUIRED_MESSAGE = (
     "Join the Patchwork Labs Slack and accept the code of conduct before you can submit. "
     "Manage your account at {weave_url}, then try again. If your Slack account uses a different email "
-    "from your Weave one, ask a Ganymede admin to link it."
+    "from your Weave one, link it in Weave."
 )
 
 
@@ -70,7 +70,9 @@ def _enforce_slack_membership(db_session: Session, actor: Actor) -> str | None:
     else a user-facing error message to flash. Drafts are always allowed; this is only called from the
     submit routes, right before handing off to `project_service`. A Slack outage raises rather than
     guessing either way."""
-    if slack_membership.is_full_slack_member(db_session, get_slack_client(), actor.user):
+    if slack_membership.is_full_slack_member(
+        db_session, get_slack_client(), actor.user, weave_slack_member=actor.slack_member
+    ):
         return None
     weave_url = get_settings().weave_issuer or "your Weave profile"
     return _SLACK_MEMBERSHIP_REQUIRED_MESSAGE.format(weave_url=weave_url)
