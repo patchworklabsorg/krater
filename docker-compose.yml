@@ -219,8 +219,8 @@ services:
       OAUTH2_PROXY_CLIENT_SECRET: ${KRATER_SKYPILOT_AUTH_CLIENT_SECRET}
       OAUTH2_PROXY_COOKIE_SECRET: ${KRATER_SKYPILOT_AUTH_COOKIE_SECRET}
       OAUTH2_PROXY_REDIRECT_URL: "${KRATER_SKYPILOT_PUBLIC_URL:-http://localhost:46580}/oauth2/callback"
-      # Standard scopes only: Weave's main branch has no `groups` claim (Ganymede roles live in Krater's
-      # database), so any Weave user can sign in here. They still see nothing: every project workspace
+      # Standard scopes only: this proxy doesn't read Krater's roles from Weave, so any Weave user can
+      # sign in here. They still see nothing: every project workspace
       # is private to its team, and Krater's launch gate rejects anything outside one. See
       # docs/skypilot-integration.md section 0.
       OAUTH2_PROXY_SCOPE: "openid email profile"

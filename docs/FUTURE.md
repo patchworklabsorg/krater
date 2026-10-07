@@ -11,13 +11,16 @@ this list covers what comes after, plus loose ends from building v1.
   - a real Vast launch;
   - the 80% warning and 100% teardown with real spend;
   - how far `cost_report` drifts from the Vast bill. That sets the safety margin, if any, to take off the ceiling.
-- **Merge Weave's sign-in and security fixes upstream** (for Weave's own sake; Krater no longer needs any other Weave
-  change). Patches `0002`/`0003` fix OAuth sign-in for returning users in Chrome and Safari, for any external client;
+- **Merge the Weave work Krater needs:** the stack patchworklabsorg/weave#156 to #161, app roles
+  (patchworklabsorg/weave#165) and the directory API (patchworklabsorg/weave#166), tracked in issue #163. Then give
+  `scripts/dev/weave_e2e_provision.rb` the Krater app roles, so the live role tests run.
+- **Merge Weave's sign-in and security fixes upstream** (for Weave's own sake). Patches `0002`/`0003` fix OAuth sign-in for returning users in Chrome and Safari, for any external client;
   the rest (the handoff's `weave-patches/WEAVE-BUG-REPORT.md`) close an account takeover through unsigned Slack
   events, owner takeover from the admin panel, locked users still signing in to OAuth apps, and signed-out `/admin`
   access. Someone with push access to `patchworklabsorg/weave` needs to open the PR.
-- **Bootstrap the first Ganymede admin** on each real deployment with `KRATER_BOOTSTRAP_ADMINS` (a Weave sub is safer
-  than an email until Weave's Slack-events fix is merged), then grant everyone else's roles at `/admin/users`.
+- **Set up Krater's roles in Weave** on each real deployment: a Weave superadmin creates `member`, `reviewer` and
+  `admin` on the Krater app page, an admin adds the `directory` scope to the app, and admins give people the roles
+  (see [weave-integration.md](weave-integration.md)).
 - **Create Krater's Slack app** in the Patchwork workspace ([dev/slack-setup.md](dev/slack-setup.md)), and a tunnel
   for local testing.
 - **Pick a long-term screenshot storage provider.** Today it's a temporary self-hosted SeaweedFS container. The options
@@ -27,9 +30,6 @@ this list covers what comes after, plus loose ends from building v1.
 
 ## Roles and accounts
 
-- **Reviewers who never sign in aren't invited.** Channel invites now go to Krater users holding
-  `ganymede:reviewer`, so a reviewer granted by email is invited only after their first sign-in. If that's a problem,
-  a pending reviewer grant could be resolved to a Slack id by email and invited directly.
 - **Cache Slack email-lookup misses.** Krater calls `users.lookupByEmail` for anyone without a stored Slack id each
   time it builds a channel's invite list (misses aren't cached). Fine at Ganymede's size; cache misses for a while if
   Slack rate limits show up.
@@ -37,10 +37,12 @@ this list covers what comes after, plus loose ends from building v1.
 ## Weave follow-ups
 
 - **[weave#118](https://github.com/patchworklabsorg/weave/issues/118): require joining Slack as part of membership.**
-  Krater no longer needs Weave's `slack_membership` claim: its gate asks Slack directly. *Requiring* Slack as part of
-  signing up is still a Weave product decision.
-- **Weave admin loose ends** (found while fixing the `/admin/users` privilege bug, see HANDOFF section 3): there's no
-  `admin/users/new` view, so creating a user from the admin panel errors.
+  Krater's gate uses Weave's `slack_member` when Weave sends it, and asks Slack otherwise. *Requiring* Slack as part
+  of signing up is still a Weave product decision.
+- **Weave admin loose ends** (found while fixing Weave's admin users privilege bug, see HANDOFF section 3): there's no
+  `admin/users/new` view in Weave, so creating a user from Weave's admin panel errors.
+- **Reviewer tiers need Weave role keys.** `ganymede:reviewer:<tier>` has no Weave role key yet. Add one to the
+  Krater app in Weave and to `krater.weave.roles` before using tiered approval policies.
 
 ## Product features parked in the spec
 

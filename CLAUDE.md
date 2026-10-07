@@ -6,7 +6,7 @@ Guidance for Claude Code (and humans) working in this repo.
 
 Krater is the Project Ganymede portal (Patchwork Labs): proposal review, compute budget allocation/enforcement, and a
 public gallery. **Read `docs/SPEC.md` before changing behavior.** Integration contracts live in
-`docs/weave-integration.md` (sign-in only) and `docs/skypilot-integration.md` (budget enforcement).
+`docs/weave-integration.md` (sign-in and roles) and `docs/skypilot-integration.md` (budget enforcement).
 
 ## Stack
 
@@ -38,8 +38,8 @@ krater/
   config.py        Settings (pydantic-settings, env vars prefixed KRATER_)
   db.py            engine, session factory, Base
   models/          SQLAlchemy models, one module per aggregate
-  services/        domain logic (framework-free): approval_policy, projects, budget, audit, roles, users
-  weave/           WeaveClient protocol + OIDC sign-in implementation + dev stub
+  services/        domain logic (framework-free): approval_policy, projects, budget, audit, users
+  weave/           WeaveClient protocol: OIDC sign-in, directory API, role mapping, dev stub
   web/             FastAPI app factory, routers, deps (current user, authz), templates/, static/
   worker/          procrastinate app + tasks
 alembic/           migrations
@@ -52,19 +52,22 @@ tests/             mirrors krater/ layout
   actor and raise domain errors (`krater.services.errors`); they never import FastAPI.
 - **Money is integer cents** (`*_cents` columns, `int` in Python). Never floats.
 - **Primary keys are UUIDs** (`uuid.uuid4`), safe to show in URLs.
-- **Roles live in Krater's database** (`user_roles`, managed by `krater.services.roles` and the `/admin/users` page),
-  by maintainer decision: Krater runs against Weave's main branch, which offers plain OIDC sign-in only (no `groups`
-  claim, no directory API). The role names stay `ganymede:member`, `ganymede:reviewer`, `ganymede:admin`. Every
-  authorization check (`fresh_actor`, the Slack click path) reads roles and `users.disabled_at` fresh from the
-  database via `roles.authorize`; nothing role-related is cached in the session. The first admin comes from
-  `KRATER_BOOTSTRAP_ADMINS`; people who haven't signed in yet get roles through pending grants by verified email.
-- **Weave is sign-in only, and all Weave access goes through `krater.weave`.** Nothing else imports httpx for Weave
-  or knows Weave's URLs. Krater asks for `openid profile email` and nothing more.
+- **Weave owns roles.** Krater's role keys in Weave are `member`, `reviewer` and `admin`, sent in the `roles` claim
+  and in directory records. Only when the `roles` field is absent does Krater fall back to the group slugs
+  `ganymede-members`, `krater-reviewers` and `krater-admins`. `krater.weave.roles` is the one place that maps them to
+  Krater's internal names `ganymede:member`, `ganymede:reviewer`, `ganymede:admin`; nothing else knows the keys or slugs.
+  Every state-changing action (`fresh_actor`, the Slack click path) re-checks Weave's directory by `sub` through
+  `krater.services.users.authorize`, and fails closed if Weave is down. `users.roles_cached` is for display only.
+  Krater has no role tables, no admin users page and no disable switch: those are done in Weave.
+- **All Weave access goes through `krater.weave`.** Nothing else imports httpx for Weave or knows Weave's URLs.
+  Krater asks for `openid profile email groups roles slack`, and calls the directory with a client_credentials token
+  of its own app (scope `directory`).
 - **Every admin override writes an `AuditEvent`** (who, what, reason). Budget changes write a `BudgetEntry` (append-only;
   never update or delete ledger rows).
-- **Stub mode** (`KRATER_WEAVE_MODE=stub`) replaces Weave with a local fixture of fake users for dev and tests; stub
-  sign-in seeds each fixture user's `groups` (and `slack_id`) into Krater's database. The app must refuse to start in
-  stub mode when `KRATER_ENV=production`.
+- **Stub mode** (`KRATER_WEAVE_MODE=stub`) replaces Weave with a local fixture of fake users for dev and tests. The
+  fixture carries the same `roles`, `groups` and `slack_id` fields a real Weave sends, and the stub answers the
+  directory lookups too. Tests change a user mid-test with `StubWeaveClient.set_roles` and friends. The app must
+  refuse to start in stub mode when `KRATER_ENV=production`.
 - Timestamps are timezone-aware UTC (`DateTime(timezone=True)`).
 - Tests: every service rule gets a unit test; every route gets at least a happy-path and an authz test.
 - Keep comments for the *why*; match the surrounding style.

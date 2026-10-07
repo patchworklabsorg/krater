@@ -7,7 +7,7 @@ gallery of completed projects.
 ## Docs
 
 - [Spec](docs/SPEC.md): product spec, data model, workflow, deployment, open questions
-- [Weave integration](docs/weave-integration.md): sign-in (plain OIDC against Weave `main`; roles live in Krater)
+- [Weave integration](docs/weave-integration.md): sign-in and roles (Weave owns roles; Krater reads them from claims and the directory API)
 - [SkyPilot integration](docs/skypilot-integration.md): workspaces, the admin-policy launch gate, and the spend reconciler
 - [Handoff](docs/HANDOFF.md): start here if you are picking this project up (setup, state, decisions, next steps)
 - [Future work](docs/FUTURE.md): what comes after v1, loose ends, and parked ideas
@@ -58,10 +58,9 @@ tests at a separate database; see `tests/conftest.py`.
 The full stack (Postgres, a one-shot migration, the portal and the worker) also runs under
 `docker compose up --build`.
 
-Roles (`ganymede:member`, `ganymede:reviewer`, `ganymede:admin`) live in Krater's database and are managed at
-`/admin/users`. In stub mode (the default for development) the fixture users in `krater/weave/stub_users.json` get
-their roles at sign-in. Against a real Weave, set `KRATER_BOOTSTRAP_ADMINS` to your Weave sub (or verified email) so
-your first sign-in makes you an admin; see `.env.example`.
+Weave owns roles. A Weave admin gives people Krater's app roles `member`, `reviewer` and `admin`, and Krater reads
+them at sign-in and re-checks them with Weave's directory API before every action. In stub mode (the default for
+development) the fixture users in `krater/weave/stub_users.json` carry their roles. See `docs/weave-integration.md`.
 
 CI also runs a nightly SkyPilot contract check against a real SkyPilot API server
 (`.github/workflows/skypilot-contract.yml`, see `docs/dev/skypilot-contract.md`). The SkyPilot version is pinned in

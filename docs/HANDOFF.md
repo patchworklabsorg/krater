@@ -14,8 +14,8 @@ enforced on SkyPilot/Vast.ai, Slack-based review, a public gallery and a GPU pri
 
 | Repo | Where | Branch | State |
 | --- | --- | --- | --- |
-| **Krater** | https://github.com/Adambomb210/Krater | `claude/exciting-sagan-7oh2zh` | **Draft PR [#1](https://github.com/Adambomb210/Krater/pull/1)**, CI green, 511 tests |
-| **Weave** (identity provider) | https://github.com/patchworklabsorg/weave | `main` works as is | Krater needs only plain OIDC; recommended sign-in and security fixes are local patches (section 3) |
+| **Krater** | https://github.com/Adambomb210/Krater | `claude/exciting-sagan-7oh2zh` | **Draft PR [#1](https://github.com/Adambomb210/Krater/pull/1)**, CI green, 603 tests |
+| **Weave** (identity provider) | https://github.com/patchworklabsorg/weave | needs unmerged work | Weave owns Krater's roles: needs the stack #156 to #161, #165 and #166 (section 3) |
 
 `main` in Krater is only the initial commit. All the work is on the PR branch.
 
@@ -70,23 +70,34 @@ uv run uvicorn krater.web.app:create_app --factory --reload
 ### macOS / Linux / WSL
 The same steps with bash syntax (install uv with `curl -LsSf https://astral.sh/uv/install.sh | sh`).
 
-## 3. Weave: Krater runs against Weave `main`
+## 3. Weave: Weave owns Krater's roles
 
-**Decision (maintainer, 2026-09-28): Krater needs only plain OIDC sign-in from Weave**, as Weave's `main` branch
-already provides it (`openid profile email`: `sub`, `name`, `email`, `email_verified`). Roles, the disabled switch and
-Slack links live in Krater's own database; see `docs/weave-integration.md` and `docs/SPEC.md` "Roles &
-authentication". Nothing from the old `Krater-Integration` branch is required any more:
+**Decision (maintainer, 2026-10-07): Weave owns roles.** This replaces the 2026-09-28 design where roles, a disable
+switch and Slack links lived in Krater's database. Details are in `docs/weave-integration.md` and `docs/SPEC.md`
+"Roles & authentication". In short:
 
-- Patch `0001` (the `groups` / `slack_id` claims and the `/api/v1/users` directory API) and the uncommitted
-  weave#118 `slack_membership` work are **no longer needed** by Krater. Krater doesn't ask for those scopes and has no
-  service key.
-- Patches **`0002`/`0003` are still recommended**: they fix two browser CSP bugs that break OAuth sign-in for
-  returning users in Chrome and Safari, for any external client, Krater included.
-- The **security fixes** in `krater-handoff/weave-patches/WEAVE-BUG-REPORT.md` are worth merging for Weave's own
-  sake: an account takeover through unsigned Slack events (critical), owner takeover from the admin panel, locked
-  users still signing in to OAuth apps with working tokens, and `/admin` engines reachable after sign-out. Until the
-  lockout fix lands, use Krater's own **disable** (`/admin/users`) to shut someone out of Krater; until the
-  Slack-events fix lands, prefer Weave subs over emails in `KRATER_BOOTSTRAP_ADMINS`.
+- Krater asks for the scopes `openid profile email groups roles slack`. It reads `sub`, `name`, `email`,
+  `email_verified`, `roles`, `groups`, `slack_id` and `slack_member`.
+- Krater's role keys on its Weave app are `member`, `reviewer` and `admin`. The `roles` claim is the source of truth.
+  Only when the `roles` field is absent does Krater fall back to the group slugs `ganymede-members`,
+  `krater-reviewers` and `krater-admins`. Inside Krater the roles keep their `ganymede:*` names.
+- Every action re-checks Weave's directory API by `sub` (`GET /api/v1/directory/users/{sub}`), with a
+  client_credentials token of Krater's own app (scope `directory`). Reviewer invites use
+  `GET /api/v1/directory/users?role=reviewer`. If Weave is down, actions fail closed.
+- There is no `/admin/users` page, no `KRATER_BOOTSTRAP_ADMINS` and no Krater-side disable switch. To shut someone
+  out, remove their roles or app access in Weave and revoke their tokens.
+
+**The Weave work is not merged yet:** the stack patchworklabsorg/weave#156 to #161, plus app roles
+(patchworklabsorg/weave#165) and the directory API (patchworklabsorg/weave#166), tracked in issue #163. Until it
+lands, run Krater in stub mode. Once it lands, a Weave superadmin creates the roles `member`, `reviewer` and `admin`
+on the Krater app page, and an admin adds `directory` to the Krater app's scopes.
+
+Patches **`0002`/`0003`** are still recommended if the Weave branch lacks them: they fix two browser CSP bugs that
+break OAuth sign-in for returning users in Chrome and Safari. The **security fixes** in
+`krater-handoff/weave-patches/WEAVE-BUG-REPORT.md` are worth merging for Weave's own sake: an account takeover
+through unsigned Slack events (critical), owner takeover from the admin panel, locked users still signing in to OAuth
+apps with working tokens, and `/admin` engines reachable after sign-out. Krater's directory re-check (`active`, 404)
+limits the lockout bug to the 60-second directory cache.
 
 **Both are on the Weave branch
 [`fix/security-hardening`](https://github.com/patchworklabsorg/weave/tree/fix/security-hardening)** (pushed
@@ -95,14 +106,14 @@ a PR from it to merge. The patch files are the same changes. Weave's test suites
 `E:\Projects\Krater\weave-testenv\run.sh` (Docker; e.g. `WEAVE_REPO=E:/Projects/Krater/weave-branch ./run.sh bundle
 exec rspec`).
 
-**First admin on a real deployment:** set `KRATER_BOOTSTRAP_ADMINS` to your Weave sub (e.g. `PWL5A1B2C3D4`) and sign
-in; grant everyone else's roles at `/admin/users` (by email for people who haven't signed in yet).
+**First admin on a real deployment:** give yourself the `member` and `admin` roles on the Krater app in Weave, then
+sign in.
 
 ## 4. What's done and verified
 
 - **v1 features:**
-  - Weave OIDC sign-in (plain OIDC, against Weave `main`), with roles kept in Krater's database and checked fresh
-    on every action; an `/admin/users` page for roles, grants by email, disabling accounts and Slack links;
+  - Weave OIDC sign-in, with roles owned by Weave (the `roles` claim, group-slug fallback) and re-checked with
+    Weave's directory API on every action;
   - the proposal → review → approval workflow, amendments, and completion review;
   - the configurable approval policy and the append-only budget ledger;
   - SkyPilot: the launch gate and the reconcile job (workspaces, spend, 80% warning, 100% teardown);
@@ -110,7 +121,7 @@ in; grant everyone else's roles at `/admin/users` (by email for people who haven
   - screenshot uploads and the gallery;
   - the `/pricing` page and the budget estimator;
   - production hardening.
-- **Verified here:** 511 tests pass, CI is green, and pip-audit is clean. A security review found 7 issues and
+- **Verified here:** 603 tests pass, CI is green, and pip-audit is clean. A security review found 7 issues and
   all are fixed. Live tests ran against a real Weave, a real SkyPilot 0.13.0 server (`scripts/dev/skypilot_contract.sh`)
   and a real SeaweedFS. Details are in the PR description and `docs/dev/*.md`.
 - **Docker Compose stack: verified** on the maintainer's Windows machine (Docker Desktop; stub Weave, fake Slack,
@@ -143,10 +154,11 @@ in; grant everyone else's roles at `/admin/users` (by email for people who haven
 - **PR #1 stays a draft until the maintainer explicitly approves marking it ready.**
 - Don't push to branches other than `claude/exciting-sagan-7oh2zh` without permission.
 - **Stack:** Python 3.12 / FastAPI / SQLAlchemy 2 / Alembic / Postgres / procrastinate (no Redis). See `CLAUDE.md`
-  for conventions: services own the rules, money is integer cents, roles live in Krater's database.
-- **Roles live in Krater, Weave is sign-in only** (maintainer decision, 2026-09-28; this **replaces** the earlier
-  standing rule "roles come only from Weave groups"). Krater must work against Weave's `main` branch: scopes
-  `openid profile email`, no `groups`/`slack_id`/`slack_membership` claims, no directory API, no service key.
+  for conventions: services own the rules, money is integer cents, Weave owns roles.
+- **Weave owns roles** (maintainer decision, 2026-10-07; this **replaces** the 2026-09-28 rule "roles live in
+  Krater"). Krater reads the `roles` claim (group slugs only when `roles` is absent) and re-checks Weave's directory
+  by `sub` before every action. No role tables, no `/admin/users`, no `KRATER_BOOTSTRAP_ADMINS`, no Krater-side
+  disable switch.
 - **SkyPilot is pinned to 0.13.0.** Krater talks to it over plain REST, with no `skypilot` package dependency
   (it's 453 MB and conflicts with Krater's dependencies). One private, Vast-only workspace per project; members
   sign in to SkyPilot with Weave via oauth2-proxy.
@@ -161,8 +173,8 @@ in; grant everyone else's roles at `/admin/users` (by email for people who haven
 ## 6. What to do next
 
 **The maintainer:**
-1. Do the staging run (`docs/dev/staging.md`) against Weave `main` (or the `fix/security-hardening` branch), with your
-   Weave sub in `KRATER_BOOTSTRAP_ADMINS`, and bring any failures back to a session to fix on the PR.
+1. Merge the Weave work Krater needs (section 3), then do the staging run (`docs/dev/staging.md`) with your Krater
+   roles set in Weave, and bring any failures back to a session to fix on the PR.
 2. Open and merge a Weave PR from `fix/security-hardening` (section 3); Krater doesn't depend on it, but Weave needs it.
 3. Create Krater's Slack app (`docs/dev/slack-setup.md`).
 4. Pick a long-term screenshot storage provider.
@@ -170,14 +182,16 @@ in; grant everyone else's roles at `/admin/users` (by email for people who haven
 
 **A Claude session, in suggested order:**
 1. ~~**Local dev setup script.**~~ Done: `scripts/dev/setup.ps1` and `scripts/dev/setup.sh` (section 2).
-2. ~~**Weave follow-ups**~~ Superseded: Krater now runs against Weave `main` (section 3). Roles, disabling and Slack
-   links moved into Krater's database (`krater/services/roles.py`, `/admin/users`); the Slack membership gate
-   (`krater/services/slack_membership.py`) asks Slack directly (stored Slack id, else `users.lookupByEmail` with the
-   verified email). Channel invites (`krater/services/slack_notify.py`) resolve people the same way and still invite
-   with Slack's `force` flag: without it, Slack invited nobody whenever any one invitee failed, including people
-   already in the channel. (Found from Slack's documented behavior; not yet seen against real Slack.)
+2. ~~**Weave follow-ups**~~ Done: Weave owns roles again (section 3). `krater/weave/roles.py` maps Weave's role keys
+   and group slugs; `krater.services.users.authorize` re-checks the directory before every action. The Slack
+   membership gate (`krater/services/slack_membership.py`) prefers Weave's `slack_member` and asks Slack otherwise.
+   Channel invites (`krater/services/slack_notify.py`) take reviewers from Weave's directory and still invite with
+   Slack's `force` flag: without it, Slack invited nobody whenever any one invitee failed, including people already
+   in the channel. (Found from Slack's documented behavior; not yet seen against real Slack.)
 3. ~~**A CI job for the SkyPilot contract test**~~ Done (section 4).
-4. The remaining items in `docs/FUTURE.md`.
+4. When patchworklabsorg/weave#165 lands, teach `scripts/dev/weave_e2e_provision.rb` to give the fixture users
+   Krater's app roles, so the live role tests in `tests/live/test_weave_live.py` run (`docs/dev/weave-e2e.md`).
+5. The remaining items in `docs/FUTURE.md`.
 
 ## 7. Gotchas learned the hard way
 
@@ -195,7 +209,7 @@ in; grant everyone else's roles at `/admin/users` (by email for people who haven
   so curl-based tests miss breakage.
 - **Earlier patch files are now obsolete.** `secfix-wip.patch` and `weave-krater-integration-fixes.patch` are
   superseded: the security fixes are merged on the PR branch, and the Weave fixes are patches `0002`/`0003` here.
-  Patch `0001` and the `0004` diff (groups, directory API, `slack_membership`) are no longer needed by Krater.
+  Patch `0001` and the `0004` diff are replaced by the Weave stack #156 to #161, #165 and #166.
 - **CI is Linux-only, so Windows breakage slips through.** `strftime("%-d")` is glibc-only and raises
   `ValueError: Invalid format string` on Windows (it broke 13 tests there); use `.day` instead. Shell scripts must
   stay LF (`.gitattributes` enforces it) or WSL bash rejects them.

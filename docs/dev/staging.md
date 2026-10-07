@@ -35,9 +35,11 @@ cd Krater
 
 ## 2. A local Weave
 
-Weave provides sign-in for both Krater and the SkyPilot proxy. Krater needs only standard OIDC, so Weave's `main`
-branch works (see `docs/weave-integration.md`). Applying the handoff's Weave patches `0002`/`0003` first is still
-recommended: they fix a CSP bug that breaks sign-in for returning users in Chrome and Safari.
+Weave provides sign-in for both Krater and the SkyPilot proxy, and owns Krater's roles. Krater needs a Weave with the
+`roles`, `groups` and `slack` claims, app roles and the directory API: the stack patchworklabsorg/weave#156 to #161,
+plus patchworklabsorg/weave#165 and patchworklabsorg/weave#166. Until they are merged, check out a branch that has
+them (see `docs/weave-integration.md`). Applying the handoff's Weave patches `0002`/`0003` is still recommended if
+that branch lacks them: they fix a CSP bug that breaks sign-in for returning users in Chrome and Safari.
 
 **WSL2 (bash):**
 
@@ -54,11 +56,12 @@ Leave that running (or use `bin/dev` if you also want Weave's asset watchers). W
 ### Register two OAuth apps
 
 At `http://localhost:3000/admin/oauth_applications`, create two **confidential** applications (see
-`docs/weave-integration.md` "Registration" for the general shape):
+`docs/weave-integration.md` "Setting up Weave for Krater" for the general shape):
 
 1. **Krater** itself:
    - Redirect URI: `http://localhost:8000/auth/callback`
-   - Scopes: `openid profile email`
+   - Scopes: `openid profile email groups roles slack directory`. Krater uses `directory` for its own
+     client_credentials token; without it the directory API answers 403.
    - Note the client id/secret for `KRATER_WEAVE_CLIENT_ID`/`KRATER_WEAVE_CLIENT_SECRET`.
 
 2. **SkyPilot proxy** (a *separate* app -- never reuse Krater's own credentials here, per
@@ -72,10 +75,10 @@ At `http://localhost:3000/admin/oauth_applications`, create two **confidential**
 
 ### Make yourself a Ganymede admin
 
-Roles live in Krater, not Weave, and no Weave service key is needed. Find your Weave user's `p_id` (the OIDC `sub`,
-e.g. `PWL5A1B2C3D4`; from the Weave checkout, `bin/rails runner 'puts User.find_by!(email: "you@...").p_id'`)
-and put it in `KRATER_BOOTSTRAP_ADMINS` (step 4). Your first sign-in to Krater then makes you `ganymede:admin` and
-`ganymede:member`; grant everyone else their roles at `http://localhost:8000/admin/users`.
+Weave owns Krater's roles. As a Weave superadmin, open the Krater app's page in Weave and create the roles `member`,
+`reviewer` and `admin`. Then give yourself `member` and `admin` (and `reviewer` if you want to review). Give
+everyone else their roles the same way. To shut someone out of Krater, remove their roles or app access in Weave and
+revoke their tokens there.
 
 ## 3. A separate, small-credit Vast.ai account
 
@@ -118,7 +121,6 @@ KRATER_WEAVE_MODE=live
 KRATER_WEAVE_ISSUER=http://host.docker.internal:3000
 KRATER_WEAVE_CLIENT_ID=<from step 2>
 KRATER_WEAVE_CLIENT_SECRET=<from step 2>
-KRATER_BOOTSTRAP_ADMINS=<your Weave p_id, from step 2>
 
 KRATER_SKYPILOT_MODE=live
 KRATER_PUBLIC_URL=http://host.docker.internal:8000

@@ -48,9 +48,8 @@ Checked against the SkyPilot docs (docs.skypilot.ai) and `skypilot-org/skypilot`
 - **Identity:** members sign in to SkyPilot with their Weave account. oauth2-proxy runs as its own container, with Weave
   as the OIDC issuer. The SkyPilot API server delegates authentication to it through the two env vars above. The CLI
   works too: `sky api login -e https://<skypilot-host>` opens a browser to the Weave sign-in.
-- **Who may sign in:** anyone with a Weave account. Weave's main branch offers only standard OIDC (no `groups`
-  claim), and Ganymede roles live in Krater's own database, so oauth2-proxy can't filter on `ganymede:member`. That's
-  acceptable because signing in grants nothing by itself: every project workspace is private (below), and Krater's
+- **Who may sign in:** anyone with a Weave account. The proxy asks for standard OIDC scopes only and doesn't read
+  Krater's roles from Weave, so it doesn't filter on the `member` role. That's acceptable because signing in grants nothing by itself: every project workspace is private (below), and Krater's
   launch gate rejects any launch outside an approved project's workspace.
 - **Isolation:** each approved project gets its own **private** workspace. `allowed_users` is set to the project team's
   emails (the same `email` claim oauth2-proxy passes on). A member on two projects can use both workspaces and picks one

@@ -1,8 +1,8 @@
 # Running the live Weave e2e check
 
-This proves Krater's `KRATER_WEAVE_MODE=live` path (OIDC sign-in, and what Krater does with the identity: pending
-grants, bootstrap admins, refusing non-members and disabled users) against a **real** running Weave, not the stub.
-Weave's `main` branch is enough. It needs a Weave checkout (`patchworklabsorg/weave`) alongside this repo, with
+This proves Krater's `KRATER_WEAVE_MODE=live` path (OIDC sign-in, the roles Weave sends, refusing non-members, and
+the directory API) against a **real** running Weave, not the stub. It needs a Weave branch with the role and
+directory work (patchworklabsorg/weave#156 to #161, #165 and #166; not merged yet), in a Weave checkout (`patchworklabsorg/weave`) alongside this repo, with
 Ruby/Rails runnable and its dev Postgres database migrated.
 
 See `docs/weave-integration.md` for the contract this exercises, and
@@ -18,20 +18,22 @@ This runs `scripts/dev/weave_e2e_provision.rb` inside the Weave checkout (via `b
 idempotently create, in Weave's own database:
 
 - three users: `e2e-member@ganymede.test`, `e2e-admin@ganymede.test` and `e2e-nonmember@ganymede.test`, all with
-  confirmed emails. Weave holds no roles for them: Krater's roles live in Krater's database, and the tests seed them
-  there (a pending member grant, or `KRATER_BOOTSTRAP_ADMINS` for the admin);
+  confirmed emails;
 - a confidential OAuth application ("Krater (e2e)") with redirect URI
-  `http://localhost:8201/auth/callback` and scopes `openid profile email` (**recreated**
-  every run, since its secret is hashed at rest and only readable right after creation).
+  `http://localhost:8201/auth/callback` and scopes `openid profile email groups roles slack directory`
+  (**recreated** every run, since its secret is hashed at rest and only readable right after creation).
 
-No service key, groups or Slack ids: Krater no longer uses Weave's directory API.
+The script doesn't yet create Krater's app roles (`member`, `reviewer`, `admin`) or give them to the fixture users:
+that needs the Weave app-role models from patchworklabsorg/weave#165. Until it does, the fixture has no
+`roles_provisioned` key, and the tests that need roles skip with a clear reason. To run them now, create the roles
+on the Krater (e2e) app page as a Weave superadmin, give the member `member` and the admin `member` and `admin`, and
+add `"roles_provisioned": true` to `.weave_e2e_fixture.json`.
 
 It then writes two **gitignored** files in this repo's root:
 
 - `.weave_e2e_fixture.json` -- everything `tests/live/test_weave_live.py` reads: the OAuth client
   id/secret and each user's email/`sub`.
-- `.env.weave-e2e` -- the `KRATER_WEAVE_*` settings pointing at that application, plus
-  `KRATER_BOOTSTRAP_ADMINS` naming the fixture admin's `sub`, ready to `source`.
+- `.env.weave-e2e` -- the `KRATER_WEAVE_*` settings pointing at that application, ready to `source`.
 
 Re-run this script whenever you need fresh users/credentials, or after restarting from a clean Weave
 database. It's idempotent for the users; the OAuth app is always rotated.
@@ -79,17 +81,14 @@ uv run uvicorn krater.web.app:create_app --factory --port 8201
 
 At this point you can sign in at `http://localhost:8201/login` as any of the three fixture users (there's
 no password -- mint a magic link as above, or add a `/auth/stub`-style shortcut of your own for manual
-poking) and drive the same flow this doc's automated check does. The admin becomes a Ganymede admin at
-their first sign-in (bootstrap); grant the member their role at `/admin/users` (by email, before they sign
-in, or directly afterwards).
+poking) and drive the same flow this doc's automated check does. Each user gets the roles Weave gives them.
 
 ## 4. Run the check
 
 ```bash
 export KRATER_LIVE_BASE_URL=http://localhost:8201            # default; only needed if you changed the port
-export KRATER_LIVE_DATABASE_URL=$KRATER_DATABASE_URL          # so the tests can seed and read roles in Krater
+export KRATER_LIVE_DATABASE_URL=$KRATER_DATABASE_URL          # so the tests can read what sign-in recorded
 export WEAVE_REPO_DIR=../weave                                 # default; needed for the sign-in tests
-set -a; source .env.weave-e2e; set +a                         # KRATER_BOOTSTRAP_ADMINS, for the bootstrap test
 uv run pytest -m live
 ```
 
@@ -102,10 +101,8 @@ tests if you've already consumed that run's tokens.
 
 ### What "authorization uses fresh data" means here
 
-Roles and the disabled flag live in Krater's database and every authorization check reads them there, so a
-change at `/admin/users` (or straight in the database, as these tests do) takes effect on the user's next
-request. There's no Weave cache to wait out. The tests reset their users' roles, pending grants and
-`disabled_at` at the start, so they can be re-run against the same Krater database.
+Every action re-checks the user with Weave's directory by `sub`. A role change in Weave takes effect on the user's
+next action, after at most the 60-second directory cache. `users.roles_cached` only shows what Weave said last.
 
 ## What this doesn't cover
 
@@ -126,6 +123,5 @@ Weave bugs that a plain HTTP client can't see:
    earlier fix that allowed all `https:` origins on every page was replaced, since it weakened the login
    form's protection.
 
-Both are fixed by the handoff's Weave patches `0002`/`0003`, which aren't on Weave's `main` yet. Against
-plain `main`, sign-in for a returning user will appear to hang or silently fail in a real browser (it still
+Both are fixed by the handoff's Weave patches `0002`/`0003`. Without them, sign-in for a returning user will appear to hang or silently fail in a real browser (it still
 works via `httpx`, which doesn't enforce CSP) -- check the browser console for CSP violation messages.
