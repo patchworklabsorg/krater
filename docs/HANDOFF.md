@@ -14,7 +14,7 @@ enforced on SkyPilot/Vast.ai, Slack-based review, a public gallery and a GPU pri
 
 | Repo | Where | Branch | State |
 | --- | --- | --- | --- |
-| **Krater** | https://github.com/Adambomb210/Krater | `claude/exciting-sagan-7oh2zh` | **Draft PR [#1](https://github.com/Adambomb210/Krater/pull/1)**, CI green, 603 tests |
+| **Krater** | https://github.com/patchworklabsorg/krater | `claude/exciting-sagan-7oh2zh` | **Draft PR [#1](https://github.com/patchworklabsorg/krater/pull/1)**, CI green, 603 tests |
 | **Weave** (identity provider) | https://github.com/patchworklabsorg/weave | needs unmerged work | Weave owns Krater's roles: needs the stack #156 to #161, #165 and #166 (section 3) |
 
 `main` in Krater is only the initial commit. All the work is on the PR branch.
@@ -37,7 +37,7 @@ The manual steps follow.
 
 ```powershell
 # 1. Clone the PR branch
-git clone -b claude/exciting-sagan-7oh2zh https://github.com/Adambomb210/Krater.git
+git clone -b claude/exciting-sagan-7oh2zh https://github.com/patchworklabsorg/krater.git
 cd Krater
 
 # 2. Install uv (Python tool manager) if needed, then Python 3.12 and the dependencies
@@ -219,7 +219,7 @@ sign in.
 Open a terminal in the cloned `Krater` folder, start Claude Code, and paste:
 
 > You're continuing work on Krater (this repo, branch `claude/exciting-sagan-7oh2zh`, draft PR
-> https://github.com/Adambomb210/Krater/pull/1). Read `docs/HANDOFF.md` first, then `CLAUDE.md` and `docs/SPEC.md`.
+> https://github.com/patchworklabsorg/krater/pull/1). Read `docs/HANDOFF.md` first, then `CLAUDE.md` and `docs/SPEC.md`.
 > Follow the standing instructions in HANDOFF section 5; in particular, never mark the PR ready without my explicit
 > approval. First, get the test suite running locally (HANDOFF section 2) and tell me the result. Then propose what
 > to work on from HANDOFF section 6 before starting.
