@@ -32,17 +32,26 @@ class Settings(BaseSettings):
     # 0 (the default) means: don't trust `X-Forwarded-For` at all, use the socket peer address.
     trusted_proxy_count: int = 0
 
-    # Weave (Patchwork Labs identity provider): OIDC sign-in only. See docs/weave-integration.md.
+    # Weave (Patchwork Labs identity provider): sign-in, roles and the directory API. See
+    # docs/weave-integration.md.
     weave_mode: Literal["stub", "live"] = "stub"
     weave_issuer: str = ""
     weave_client_id: str = ""
     weave_client_secret: str = ""
+    # Base URL of Weave's directory API (`/api/v1/directory/...`). Blank means `weave_issuer`.
+    weave_api_base_url: str = ""
     weave_stub_users_file: str = ""
 
-    # Comma-separated Weave subs (e.g. PWL5A1B2C3D4) and/or email addresses. At sign-in, a match gets
-    # ganymede:admin and ganymede:member if missing; emails only match when Weave says they're verified.
-    # How a fresh deployment gets its first admin, since roles now live in Krater's database.
-    bootstrap_admins: str = ""
+    # How Weave's answers map onto Krater's roles (`ganymede:member`, `ganymede:reviewer`,
+    # `ganymede:admin`). The `roles` claim (Krater's app-defined role keys in Weave) is the source of
+    # truth. Only when Weave sends no `roles` at all does Krater fall back to these group slugs.
+    # See `krater.weave.roles`.
+    weave_role_member: str = "member"
+    weave_role_reviewer: str = "reviewer"
+    weave_role_admin: str = "admin"
+    weave_group_member: str = "ganymede-members"
+    weave_group_reviewer: str = "krater-reviewers"
+    weave_group_admin: str = "krater-admins"
 
     # SkyPilot integration. See docs/skypilot-integration.md and docs/dev/skypilot-spike.md.
     # `fake` uses an in-memory SkyPilot for dev and tests; `live` talks to a real API server over REST.

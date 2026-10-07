@@ -30,13 +30,16 @@ def test_slack_reconcile_calls_through_to_the_service_function() -> None:
     with (
         patch("krater.worker.app.slack_notify.reconcile") as mock_reconcile,
         patch("krater.worker.app.get_slack_client") as mock_get_slack_client,
+        patch("krater.worker.app.get_weave_client") as mock_get_weave_client,
         patch("krater.worker.app.get_sessionmaker") as mock_get_sessionmaker,
     ):
         fake_session = mock_get_sessionmaker.return_value.return_value
 
         slack_reconcile.func(timestamp=123)
 
-        mock_reconcile.assert_called_once_with(fake_session, mock_get_slack_client.return_value)
+        mock_reconcile.assert_called_once_with(
+            fake_session, mock_get_slack_client.return_value, mock_get_weave_client.return_value
+        )
         fake_session.close.assert_called_once()
 
 
@@ -44,6 +47,7 @@ def test_slack_notify_revision_submitted_looks_up_and_calls_through() -> None:
     with (
         patch("krater.worker.app.slack_notify.notify_revision_submitted") as mock_notify,
         patch("krater.worker.app.get_slack_client"),
+        patch("krater.worker.app.get_weave_client"),
         patch("krater.worker.app.get_sessionmaker") as mock_get_sessionmaker,
     ):
         fake_session = mock_get_sessionmaker.return_value.return_value
@@ -120,6 +124,7 @@ def test_slack_process_approve_calls_through() -> None:
     with (
         patch("krater.worker.app.slack_reviews.process_approve") as mock_process,
         patch("krater.worker.app.get_slack_client"),
+        patch("krater.worker.app.get_weave_client"),
         patch("krater.worker.app.get_sessionmaker") as mock_get_sessionmaker,
     ):
         fake_session = mock_get_sessionmaker.return_value.return_value
@@ -139,6 +144,7 @@ def test_slack_process_reject_calls_through() -> None:
     with (
         patch("krater.worker.app.slack_reviews.process_reject") as mock_process,
         patch("krater.worker.app.get_slack_client"),
+        patch("krater.worker.app.get_weave_client"),
         patch("krater.worker.app.get_sessionmaker") as mock_get_sessionmaker,
     ):
         fake_session = mock_get_sessionmaker.return_value.return_value

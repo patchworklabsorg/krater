@@ -5,7 +5,8 @@
     "email": "mia@example.com",
     "email_verified": true,
     "slack_id": "U0001MEMBER",
-    "groups": ["ganymede:member"]
+    "groups": ["ganymede-members"],
+    "roles": ["member"]
   },
   {
     "sub": "PWLMEMBERTWO",
@@ -13,7 +14,8 @@
     "email": "max@example.com",
     "email_verified": true,
     "slack_id": null,
-    "groups": ["ganymede:member"]
+    "groups": ["ganymede-members"],
+    "roles": ["member"]
   },
   {
     "sub": "PWLREVIEWERONE",
@@ -21,7 +23,8 @@
     "email": "rae@example.com",
     "email_verified": true,
     "slack_id": "U0002REVIEW",
-    "groups": ["ganymede:member", "ganymede:reviewer"]
+    "groups": ["ganymede-members", "krater-reviewers"],
+    "roles": ["member", "reviewer"]
   },
   {
     "sub": "PWLREVIEWERTWO",
@@ -29,7 +32,7 @@
     "email": "remy@example.com",
     "email_verified": true,
     "slack_id": "U0003REVIEW",
-    "groups": ["ganymede:member", "ganymede:reviewer"]
+    "groups": ["ganymede-members", "krater-reviewers"]
   },
   {
     "sub": "PWLADMINONE",
@@ -37,7 +40,8 @@
     "email": "ana@example.com",
     "email_verified": true,
     "slack_id": "U0004ADMIN",
-    "groups": ["ganymede:member", "ganymede:reviewer", "ganymede:admin"]
+    "groups": ["ganymede-members", "krater-reviewers", "krater-admins"],
+    "roles": ["member", "reviewer", "admin"]
   },
   {
     "sub": "PWLNONMEMBER",
@@ -45,7 +49,8 @@
     "email": "nico@example.com",
     "email_verified": true,
     "slack_id": null,
-    "groups": []
+    "groups": ["ganymede-members"],
+    "roles": []
   },
   {
     "sub": "PWLUNVERIFIED",
@@ -53,7 +58,8 @@
     "email": "uma@example.com",
     "email_verified": false,
     "slack_id": null,
-    "groups": []
+    "groups": [],
+    "roles": ["member"]
   },
   {
     "sub": "PWLSLACKGUEST",
@@ -61,6 +67,8 @@
     "email": "gus@example.com",
     "email_verified": true,
     "slack_id": "U0005GUEST",
-    "groups": ["ganymede:member"]
+    "slack_member": false,
+    "groups": ["ganymede-members"],
+    "roles": ["member"]
   }
 ]

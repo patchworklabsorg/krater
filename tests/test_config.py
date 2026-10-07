@@ -103,13 +103,30 @@ def test_development_and_test_envs_are_unconstrained() -> None:
     Settings(env="test")
 
 
-def test_weave_needs_no_service_key_or_directory_url() -> None:
-    # Krater uses Weave for OIDC sign-in only; the old directory settings are gone.
-    assert "weave_service_key" not in Settings.model_fields
-    assert "weave_api_base_url" not in Settings.model_fields
+def test_weave_role_keys_and_group_slugs_have_the_contract_defaults() -> None:
+    settings = Settings()
+
+    assert (settings.weave_role_member, settings.weave_role_reviewer, settings.weave_role_admin) == (
+        "member",
+        "reviewer",
+        "admin",
+    )
+    assert (settings.weave_group_member, settings.weave_group_reviewer, settings.weave_group_admin) == (
+        "ganymede-members",
+        "krater-reviewers",
+        "krater-admins",
+    )
 
 
-def test_bootstrap_admins_reads_from_the_environment(monkeypatch) -> None:
-    monkeypatch.setenv("KRATER_BOOTSTRAP_ADMINS", "PWL5A1B2C3D4,ada@example.com")
+def test_weave_role_keys_read_from_the_environment(monkeypatch) -> None:
+    monkeypatch.setenv("KRATER_WEAVE_ROLE_REVIEWER", "krater-reviewer")
+    monkeypatch.setenv("KRATER_WEAVE_API_BASE_URL", "https://api.weave.test")
 
-    assert Settings().bootstrap_admins == "PWL5A1B2C3D4,ada@example.com"
+    settings = Settings()
+
+    assert settings.weave_role_reviewer == "krater-reviewer"
+    assert settings.weave_api_base_url == "https://api.weave.test"
+
+
+def test_bootstrap_admins_setting_is_gone() -> None:
+    assert "bootstrap_admins" not in Settings.model_fields
