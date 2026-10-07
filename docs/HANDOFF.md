@@ -87,10 +87,10 @@ switch and Slack links lived in Krater's database. Details are in `docs/weave-in
 - There is no `/admin/users` page, no `KRATER_BOOTSTRAP_ADMINS` and no Krater-side disable switch. To shut someone
   out, remove their roles or app access in Weave and revoke their tokens.
 
-**The Weave work is not merged yet:** the stack patchworklabsorg/weave#156 to #161, plus app roles
-(patchworklabsorg/weave#165) and the directory API (patchworklabsorg/weave#166), tracked in issue #163. Until it
-lands, run Krater in stub mode. Once it lands, a Weave superadmin creates the roles `member`, `reviewer` and `admin`
-on the Krater app page, and an admin adds `directory` to the Krater app's scopes.
+**The Weave work is merged and on Weave `main`** (2026-10-07): the stack patchworklabsorg/weave#156 to #161, plus
+app roles (patchworklabsorg/weave#165) and the directory API (patchworklabsorg/weave#166). It is deployed to Weave
+staging. Before Krater can sign anyone in, a Weave superadmin creates the roles `member`, `reviewer` and `admin` on
+the Krater app page, and an admin adds `directory` to the Krater app's scopes.
 
 Patches **`0002`/`0003`** are still recommended if the Weave branch lacks them: they fix two browser CSP bugs that
 break OAuth sign-in for returning users in Chrome and Safari. The **security fixes** in

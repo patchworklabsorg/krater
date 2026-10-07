@@ -2,7 +2,7 @@
 
 This proves Krater's `KRATER_WEAVE_MODE=live` path (OIDC sign-in, the roles Weave sends, refusing non-members, and
 the directory API) against a **real** running Weave, not the stub. It needs a Weave branch with the role and
-directory work (patchworklabsorg/weave#156 to #161, #165 and #166; not merged yet), in a Weave checkout (`patchworklabsorg/weave`) alongside this repo, with
+directory work (patchworklabsorg/weave#156 to #161, #165 and #166, all on `main`), in a Weave checkout (`patchworklabsorg/weave`) alongside this repo, with
 Ruby/Rails runnable and its dev Postgres database migrated.
 
 See `docs/weave-integration.md` for the contract this exercises, and

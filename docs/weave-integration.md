@@ -9,13 +9,13 @@ See [SPEC.md, Roles & authentication](SPEC.md#roles--authentication).
 
 ## What Krater needs from Weave
 
-Krater depends on Weave work that is **not merged yet**:
+Krater depends on this Weave work. All of it is merged on Weave `main`:
 
 - the stack patchworklabsorg/weave#156 to #161 (the `groups`, `roles` and `slack` claims);
 - app-defined roles: [patchworklabsorg/weave#165](https://github.com/patchworklabsorg/weave/pull/165);
 - the directory API: [patchworklabsorg/weave#166](https://github.com/patchworklabsorg/weave/pull/166).
 
-Issue #163 tracks the app roles and the directory API. Until they are merged, run Krater in stub mode.
+A Weave superadmin must create the roles `member`, `reviewer` and `admin` on the Krater app page. An admin must add `directory` to the Krater app's scopes.
 
 | Capability | Used for |
 | --- | --- |
