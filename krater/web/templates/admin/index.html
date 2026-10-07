@@ -7,32 +7,34 @@
 <section class="card">
   <div class="page-header">
     <h1>All projects</h1>
-    <a href="/admin/users">Users and roles</a>
+    <a class="back-link" href="/admin/users">Users and roles</a>
   </div>
   {% for status in statuses %}
     {% set group = by_status[status] %}
     {% if group %}
-      <h2>{{ macros.status_badge(status) }} ({{ group | length }})</h2>
-      <table class="table">
+      <h2 class="section-heading">{{ macros.status_badge(status) }} <span class="count">{{ group | length }}</span></h2>
+      <div class="table-scroll">
+      <table class="table table--fixed">
         <thead>
           <tr>
             <th scope="col">Project</th>
-            <th scope="col">Ceiling</th>
-            <th scope="col">Spend</th>
-            <th scope="col">Remaining</th>
+            <th scope="col" class="num">Ceiling</th>
+            <th scope="col" class="num">Spend</th>
+            <th scope="col" class="num">Remaining</th>
           </tr>
         </thead>
         <tbody>
           {% for summary in group %}
             <tr>
               <td><a href="/projects/{{ summary.project.id }}">{{ summary.project.title or "Untitled proposal" }}</a></td>
-              <td>{{ summary.ceiling_cents | dollars }}</td>
-              <td>{{ summary.spend_cents | dollars }}</td>
-              <td>{{ summary.remaining_cents | dollars }}</td>
+              <td class="num">{{ summary.ceiling_cents | dollars }}</td>
+              <td class="num">{{ summary.spend_cents | dollars }}</td>
+              <td class="num">{{ summary.remaining_cents | dollars }}</td>
             </tr>
           {% endfor %}
         </tbody>
       </table>
+      </div>
     {% endif %}
   {% endfor %}
 </section>
@@ -44,8 +46,8 @@
       <thead>
         <tr>
           <th scope="col">Stage</th>
-          <th scope="col">Min budget</th>
-          <th scope="col">Min approvals</th>
+          <th scope="col" class="num">Min budget</th>
+          <th scope="col" class="num">Min approvals</th>
           <th scope="col">Required group</th>
         </tr>
       </thead>
@@ -53,8 +55,8 @@
         {% for policy in policies %}
           <tr>
             <td>{{ policy.stage.value | capitalize }}</td>
-            <td>{{ policy.min_budget_cents | dollars if policy.min_budget_cents is not none else "Any" }}</td>
-            <td>{{ policy.min_approvals }}</td>
+            <td class="num">{{ policy.min_budget_cents | dollars if policy.min_budget_cents is not none else "Any" }}</td>
+            <td class="num">{{ policy.min_approvals }}</td>
             <td>{{ policy.required_group or "Any reviewer" }}</td>
           </tr>
         {% endfor %}

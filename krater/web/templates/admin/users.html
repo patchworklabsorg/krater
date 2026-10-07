@@ -6,7 +6,7 @@
 <section class="card">
   <div class="page-header">
     <h1>Users</h1>
-    <a href="/admin">Admin overview</a>
+    <a class="back-link" href="/admin">Admin overview</a>
   </div>
   <p class="muted">
     Roles live in Krater. Weave only signs people in. Anyone who signs in with Weave shows up here, but can only use
@@ -28,20 +28,28 @@
         <tbody>
           {% for entry in users %}
             <tr>
-              <td><a href="/admin/users/{{ entry.user.id }}">{{ entry.user.display_name }}</a></td>
+              <td class="nowrap"><a href="/admin/users/{{ entry.user.id }}">{{ entry.user.display_name }}</a></td>
               <td>
                 {{ entry.user.email }}
                 {% if not entry.user.email_verified %}<span class="muted">(unverified)</span>{% endif %}
               </td>
               <td>
+                <div class="badge-stack">
                 {% for role in known_roles if role in entry.roles %}
                   <span class="badge badge--role">{{ role }}</span>
                 {% else %}
                   <span class="muted">none</span>
                 {% endfor %}
+                </div>
               </td>
               <td>{{ entry.user.slack_user_id or "" }}</td>
-              <td>{{ entry.user.last_login_at.strftime("%Y-%m-%d %H:%M UTC") if entry.user.last_login_at else "never" }}</td>
+              <td class="nowrap">
+                {% if entry.user.last_login_at %}
+                  <time datetime="{{ entry.user.last_login_at.isoformat() }}" title="{{ entry.user.last_login_at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ entry.user.last_login_at.strftime("%Y-%m-%d") }}</time>
+                {% else %}
+                  <span class="muted">never</span>
+                {% endif %}
+              </td>
               <td>
                 {% if entry.user.is_disabled %}<span class="badge badge--disabled">Disabled</span>{% else %}Active{% endif %}
               </td>
@@ -78,7 +86,7 @@
       <label for="grant-reason">Reason (optional)</label>
       <input type="text" id="grant-reason" name="reason">
     </div>
-    <div><button type="submit" class="button button--primary">Grant</button></div>
+    <button type="submit" class="button button--primary">Grant</button>
   </form>
 
   <h3>Pending grants</h3>

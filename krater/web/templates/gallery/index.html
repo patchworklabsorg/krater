@@ -18,6 +18,8 @@
               alt="{{ entry.project.title or 'Project' }} screenshot"
               loading="lazy"
             >
+          {% else %}
+            <div class="gallery-list__thumb gallery-list__thumb--empty" aria-hidden="true">{{ (entry.project.title or "?")[:1] }}</div>
           {% endif %}
           <h2><a href="/gallery/{{ entry.project.id }}">{{ entry.project.title or "Untitled project" }}</a></h2>
           {% if entry.revision and entry.revision.tags %}
@@ -30,7 +32,9 @@
       {% endfor %}
     </ul>
   {% else %}
-    <p class="muted">No completed projects yet.</p>
+    <div class="empty-state">
+      <p>No completed projects yet.</p>
+    </div>
   {% endif %}
 </section>
 {% endblock %}

@@ -8,7 +8,8 @@
     <h1>{{ subject.display_name }}</h1>
     {% if subject.is_disabled %}<span class="badge badge--disabled">Disabled</span>{% endif %}
   </div>
-  <dl class="budget-summary">
+  <p class="back-link"><a href="/admin/users">&larr; All users</a></p>
+  <dl class="budget-summary budget-summary--details">
     <div><dt>Email</dt><dd>{{ subject.email }}{% if not subject.email_verified %} (unverified){% endif %}</dd></div>
     <div><dt>Weave sub</dt><dd><code>{{ subject.weave_sub }}</code></dd></div>
     <div><dt>Slack user id</dt><dd>{{ subject.slack_user_id or "not linked" }}</dd></div>
@@ -17,7 +18,6 @@
       <div><dt>Disabled since</dt><dd>{{ subject.disabled_at.strftime("%Y-%m-%d %H:%M UTC") }}</dd></div>
     {% endif %}
   </dl>
-  <p class="muted"><a href="/admin/users">All users</a></p>
 </section>
 
 <section class="card">
@@ -35,17 +35,17 @@
         {% set held = role in subject_roles %}
         <tr>
           <td><span class="badge badge--role">{{ role }}</span></td>
-          <td>{{ "Yes" if held else "No" }}</td>
+          <td>{% if held %}<strong>Yes</strong>{% else %}<span class="muted">No</span>{% endif %}</td>
           <td>
-            <form method="post" action="/admin/users/{{ subject.id }}/roles/{{ 'revoke' if held else 'grant' }}" class="form form--inline action-row">
+            <form method="post" action="/admin/users/{{ subject.id }}/roles/{{ 'revoke' if held else 'grant' }}" class="form form--inline role-change">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <input type="hidden" name="role" value="{{ role }}">
-              <label class="muted" for="reason-{{ loop.index }}">Reason</label>
-              <input type="text" id="reason-{{ loop.index }}" name="reason" placeholder="optional">
+              <label class="visually-hidden" for="reason-{{ loop.index }}">Reason for {{ 'removing' if held else 'granting' }} {{ role }}</label>
+              <input type="text" id="reason-{{ loop.index }}" name="reason" placeholder="Reason (optional)">
               {% if held %}
-                <button type="submit" class="button button--danger">Remove</button>
+                <button type="submit" class="button button--danger button--small">Remove</button>
               {% else %}
-                <button type="submit" class="button button--primary">Grant</button>
+                <button type="submit" class="button button--primary button--small">Grant</button>
               {% endif %}
             </form>
           </td>
@@ -108,6 +108,7 @@
 <section class="card">
   <h2>History</h2>
   {% if history %}
+  <div class="table-scroll">
     <table class="table">
       <thead>
         <tr>
@@ -121,7 +122,7 @@
       <tbody>
         {% for event in history %}
           <tr>
-            <td>{{ event.created_at.strftime("%Y-%m-%d %H:%M UTC") }}</td>
+            <td class="nowrap">{{ event.created_at.strftime("%Y-%m-%d %H:%M UTC") }}</td>
             <td><code>{{ event.action }}</code></td>
             <td>{{ event.payload.get("role") or event.payload.get("slack_user_id") or "" }}</td>
             <td>{{ event.actor.display_name if event.actor else "Krater" }}</td>
@@ -130,6 +131,7 @@
         {% endfor %}
       </tbody>
     </table>
+  </div>
   {% else %}
     <p class="muted">No role or account changes recorded.</p>
   {% endif %}

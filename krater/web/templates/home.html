@@ -11,8 +11,10 @@
     The Project Ganymede portal: proposal review, compute budget allocation, and a public gallery of
     completed projects.
   </p>
-  <p><a class="button button--primary" href="/login">Sign in with Weave</a></p>
-  <p><a href="/gallery">Browse the public gallery</a></p>
+  <p class="action-row">
+    <a class="button button--primary" href="/login">Sign in with Weave</a>
+    <a class="button" href="/gallery">Browse the public gallery</a>
+  </p>
 </section>
 {% else %}
 <section class="card">
@@ -31,7 +33,10 @@
       {% endfor %}
     </ul>
   {% else %}
-    <p class="muted">You haven't started a proposal yet.</p>
+    <div class="empty-state">
+      <p>You haven't started a proposal yet.</p>
+      <p><a href="/projects/new">Start your first proposal</a> &middot; <a href="/pricing">Check GPU prices</a></p>
+    </div>
   {% endif %}
 </section>
 

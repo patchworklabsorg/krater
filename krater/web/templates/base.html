@@ -7,27 +7,31 @@
     <link rel="stylesheet" href="/static/css/main.css" />
   </head>
   <body>
+    <a class="skip-link" href="#main">Skip to content</a>
     <header class="site-header">
       <div class="site-header__inner">
         <a class="site-header__brand" href="/">Krater</a>
+        {% set path = request.url.path %}
         <nav class="site-nav" aria-label="Primary">
-          <a href="/">Home</a>
-          <a href="/gallery">Gallery</a>
-          <a href="/pricing">GPU pricing</a>
+          <a href="/"{% if path == "/" %} aria-current="page"{% endif %}>Home</a>
+          <a href="/gallery"{% if path.startswith("/gallery") %} aria-current="page"{% endif %}>Gallery</a>
+          <a href="/pricing"{% if path.startswith("/pricing") %} aria-current="page"{% endif %}>GPU pricing</a>
           {% set signed_in_name = request.session.get('display_name') %}
-          {% if signed_in_name %}
-            <span class="site-nav__user">{{ signed_in_name }}</span>
-            <form class="site-nav__logout" action="/logout" method="post">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-              <button type="submit" class="link-button">Sign out</button>
-            </form>
-          {% else %}
-            <a href="/login">Sign in</a>
-          {% endif %}
+          <div class="site-nav__account">
+            {% if signed_in_name %}
+              <span class="site-nav__user">{{ signed_in_name }}</span>
+              <form class="site-nav__logout" action="/logout" method="post">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="link-button">Sign out</button>
+              </form>
+            {% else %}
+              <a href="/login">Sign in</a>
+            {% endif %}
+          </div>
         </nav>
       </div>
     </header>
-    <main class="content">
+    <main class="content" id="main">
       {% set flashes = get_flashes() %}
       {% if flashes %}
         <div class="flash-list" role="status">

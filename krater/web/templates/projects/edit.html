@@ -7,7 +7,7 @@
 <section class="card">
   <div class="page-header">
     <h1>Edit draft</h1>
-    <a href="/projects/{{ project.id }}">Back to project</a>
+    <a class="back-link" href="/projects/{{ project.id }}">&larr; Back to project</a>
   </div>
   <p class="muted">
     {% if draft.kind.value == "completion" %}
@@ -88,8 +88,8 @@
   {% if draft.kind.value == "completion" %}
     {% set current_screenshots = screenshots|default([]) %}
     {% set max_shots = max_screenshots|default(6) %}
-    <div class="field">
-      <label>Screenshots</label>
+    <div class="field edit-section">
+      <label for="screenshot-input">Screenshots</label>
 
       {% if current_screenshots %}
         <ul class="screenshot-list">
@@ -126,7 +126,7 @@
         data-remaining="{{ max_shots - current_screenshots|length }}"
       >
         {% if current_screenshots|length < max_shots %}
-          <input type="file" accept="image/png,image/jpeg,image/webp" multiple data-role="file-input">
+          <input type="file" id="screenshot-input" accept="image/png,image/jpeg,image/webp" multiple data-role="file-input">
           <p class="field-hint">PNG, JPEG or WebP, up to 5 MB each. Up to {{ max_shots }} total.</p>
         {% else %}
           <p class="field-hint">Maximum of {{ max_shots }} screenshots reached. Remove one to add another.</p>
@@ -136,6 +136,8 @@
     </div>
   {% endif %}
 
+  <div class="edit-section submit-bar">
+  <p class="muted">Saved changes stay a draft until you submit. Save first: submitting doesn't include unsaved edits.</p>
   <form
     method="post"
     action="/projects/{{ project.id }}/{{ 'submit-completion' if draft.kind.value == 'completion' else 'submit' }}"
@@ -146,6 +148,7 @@
       {{ "Submit completion for review" if draft.kind.value == "completion" else "Submit for review" }}
     </button>
   </form>
+  </div>
 </section>
 {% endblock %}
 
