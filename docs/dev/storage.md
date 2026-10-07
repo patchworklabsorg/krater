@@ -16,9 +16,10 @@ Credentials come from `KRATER_S3_ACCESS_KEY_ID`/`KRATER_S3_SECRET_ACCESS_KEY` (d
 `krater-dev-secret` for local dev), written into a JSON identity file at container start the same way
 the `skypilot` service generates its config -- so no secret is ever committed.
 
-`storage-init` is a one-shot `amazon/aws-cli` container that creates the bucket (retrying until
-`storage` answers) and sets its CORS policy. Both are idempotent, safe to re-run on every
-`docker compose up`.
+The bucket and its CORS policy are created by `krater.storage.ensure_bucket`, which the one-shot
+`migrate` service runs right after `alembic upgrade head` (retrying until `storage` answers; skipped
+when `KRATER_S3_MODE=fake`). Both steps are idempotent, safe to re-run on every `docker compose up`.
+Outside Compose, run it yourself with `uv run python -m krater.storage.ensure_bucket`.
 
 ## Env vars
 
@@ -35,7 +36,8 @@ the `skypilot` service generates its config -- so no secret is ever committed.
 
 A presigned upload and a thumbnail `<img src>` are both cross-origin browser requests once
 `KRATER_S3_PUBLIC_ENDPOINT_URL` differs from the portal's own origin (any real deployment), so the
-bucket needs a CORS policy. `storage-init` sets one with:
+bucket needs a CORS policy. `S3ObjectStore.ensure_bucket` sets `BUCKET_CORS_RULES`
+(`krater/storage/live.py`), the equivalent of:
 
 ```bash
 aws --endpoint-url http://storage:8333 s3api put-bucket-cors --bucket "$BUCKET" --cors-configuration \

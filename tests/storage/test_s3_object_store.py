@@ -16,7 +16,7 @@ from botocore.stub import Stubber
 
 from krater.config import Settings
 from krater.storage.errors import StorageUnavailableError
-from krater.storage.live import S3ObjectStore
+from krater.storage.live import BUCKET_CORS_RULES, S3ObjectStore
 
 _BOTO_CONFIG = BotoConfig(signature_version="s3v4", s3={"addressing_style": "path"})
 
@@ -199,3 +199,58 @@ def test_delete_raises_storage_unavailable_on_failure(clients) -> None:
         stubber.add_client_error("delete_object", service_error_code="500", http_status_code=500)
         with pytest.raises(StorageUnavailableError):
             store.delete("k")
+
+
+# --------------------------------------------------------------------------------------------------
+# ensure_bucket: deploy-time setup run by the `migrate` service.
+
+
+def _expect_cors(stubber: Stubber, bucket: str) -> None:
+    stubber.add_response(
+        "put_bucket_cors", {}, {"Bucket": bucket, "CORSConfiguration": {"CORSRules": BUCKET_CORS_RULES}}
+    )
+
+
+def test_ensure_bucket_creates_a_missing_bucket_and_sets_cors(clients) -> None:
+    settings, internal, public = clients
+    store = S3ObjectStore(settings, internal_client=internal, public_client=public)
+
+    with Stubber(internal) as stubber:
+        stubber.add_client_error("head_bucket", service_error_code="404", http_status_code=404)
+        stubber.add_response("create_bucket", {}, {"Bucket": settings.s3_bucket})
+        _expect_cors(stubber, settings.s3_bucket)
+        store.ensure_bucket()
+        stubber.assert_no_pending_responses()
+
+
+def test_ensure_bucket_leaves_an_existing_bucket_and_reapplies_cors(clients) -> None:
+    settings, internal, public = clients
+    store = S3ObjectStore(settings, internal_client=internal, public_client=public)
+
+    with Stubber(internal) as stubber:
+        stubber.add_response("head_bucket", {}, {"Bucket": settings.s3_bucket})
+        _expect_cors(stubber, settings.s3_bucket)
+        store.ensure_bucket()
+        stubber.assert_no_pending_responses()
+
+
+def test_ensure_bucket_tolerates_a_create_race(clients) -> None:
+    settings, internal, public = clients
+    store = S3ObjectStore(settings, internal_client=internal, public_client=public)
+
+    with Stubber(internal) as stubber:
+        stubber.add_client_error("head_bucket", service_error_code="404", http_status_code=404)
+        stubber.add_client_error("create_bucket", service_error_code="BucketAlreadyOwnedByYou", http_status_code=409)
+        _expect_cors(stubber, settings.s3_bucket)
+        store.ensure_bucket()
+        stubber.assert_no_pending_responses()
+
+
+def test_ensure_bucket_raises_storage_unavailable_on_failure(clients) -> None:
+    settings, internal, public = clients
+    store = S3ObjectStore(settings, internal_client=internal, public_client=public)
+
+    with Stubber(internal) as stubber:
+        stubber.add_client_error("head_bucket", service_error_code="500", http_status_code=500)
+        with pytest.raises(StorageUnavailableError):
+            store.ensure_bucket()

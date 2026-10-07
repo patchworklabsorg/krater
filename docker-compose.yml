@@ -13,13 +13,17 @@ services:
       timeout: 5s
       retries: 10
 
+  # One-shot deploy setup: database migrations, then the screenshot bucket and its CORS rule (skipped
+  # when KRATER_S3_MODE=fake). Both steps are safe to re-run; see docs/dev/storage.md.
   migrate:
     build: .
     env_file: ${KRATER_ENV_FILE:-.env}
-    command: ["alembic", "upgrade", "head"]
+    command: ["/bin/sh", "-c", "alembic upgrade head && python -m krater.storage.ensure_bucket"]
     depends_on:
       db:
         condition: service_healthy
+      storage:
+        condition: service_started
 
   portal:
     build: .
@@ -56,30 +60,6 @@ services:
       - "${S3_PORT:-8333}:8333"
     volumes:
       - krater_storage_data:/data
-
-  # One-shot: create the bucket and set its CORS policy. Safe to re-run. The CORS rule is what lets a
-  # browser upload straight to `storage` (and load screenshot thumbnails from it) via the presigned
-  # URLs `krater.storage` hands out -- see docs/dev/storage.md, which also documents that this is
-  # verified against real SeaweedFS, not assumed from the S3 spec.
-  storage-init:
-    image: amazon/aws-cli:${AWS_CLI_VERSION:-latest}
-    environment:
-      AWS_ACCESS_KEY_ID: ${KRATER_S3_ACCESS_KEY_ID:-krater}
-      AWS_SECRET_ACCESS_KEY: ${KRATER_S3_SECRET_ACCESS_KEY:-krater-dev-secret}
-      AWS_DEFAULT_REGION: ${KRATER_S3_REGION:-us-east-1}
-      BUCKET: ${KRATER_S3_BUCKET:-krater-screenshots}
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - >-
-        for i in $$(seq 1 30); do
-          aws --endpoint-url http://storage:8333 s3api head-bucket --bucket "$$BUCKET" 2>/dev/null && break;
-          aws --endpoint-url http://storage:8333 s3 mb "s3://$$BUCKET" 2>/dev/null && break;
-          sleep 2;
-        done;
-        aws --endpoint-url http://storage:8333 s3api head-bucket --bucket "$$BUCKET" 2>/dev/null || { echo "storage not reachable" >&2; exit 1; };
-        aws --endpoint-url http://storage:8333 s3api put-bucket-cors --bucket "$$BUCKET" --cors-configuration '{"CORSRules":[{"AllowedOrigins":["*"],"AllowedMethods":["GET","PUT","POST"],"AllowedHeaders":["*"],"ExposeHeaders":["ETag"],"MaxAgeSeconds":3000}]}'
-    depends_on:
-      - storage
 
   # -- SkyPilot compute (see docs/skypilot-integration.md, docs/dev/skypilot-spike.md) --------------
   # Both behind the `skypilot` profile: `docker compose up` (no --profile) stays UI-only, no Weave or
