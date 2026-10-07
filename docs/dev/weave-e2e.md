@@ -99,6 +99,36 @@ skips entirely.
 Magic-link tokens are single-use and expire in 15 minutes, so re-run step 1 before re-running the sign-in
 tests if you've already consumed that run's tokens.
 
+### Running it on Windows, where there is no Ruby
+
+Step 1's `bin/rails runner` and the tests' magic-link minting both need a runnable Weave with
+`bundle`/`rails`. On Windows the whole flow still works with Weave in a container and a tiny
+`bundle` shim on `PATH` that forwards into it:
+
+1. Start Weave in a container (this mirrors `E:/Projects/Krater/weave-testenv`, which already
+   builds a Ruby 4 image for Weave's own test suite). The container must reach Weave's Postgres
+   over `localhost`, so share the database container's network namespace rather than joining its
+   network, and publish the Rails port through a second container running `socat`, since Docker
+   forbids `-p` together with `--network container:`.
+
+2. Weave's OIDC signing key and Lockbox master key come only from encrypted credentials
+   (`config/initializers/doorkeeper_openid_connect.rb`, `config/initializers/lockbox.rb`), and a
+   fresh checkout has neither. Generate dev-only ones into `config/credentials/development.yml.enc`
+   with a matching 32-character `config/credentials/development.key` (see the former file's own
+   comments). The key file is gitignored; keep the pair somewhere outside the repo so a container
+   restart doesn't lose them.
+
+3. `bin/rails tailwindcss:build` is required, not cosmetic: the magic-link confirmation page renders
+   `tailwind.css`, and Propshaft raises a 500 (which reads to the test as "magic link wasn't live")
+   when the asset isn't in the load path.
+
+4. Put a `bundle` shim directory on `PATH` that the tests' `subprocess.run(["bundle", ...])` can
+   resolve. Python's `subprocess` with `shell=False` does not consult `PATHEXT`, so a `.cmd` file
+   is not enough -- a small `bundle.exe` launcher is. The ruby code contains quotes, spaces and
+   semicolons that `cmd.exe` and `docker exec` both mangle, so the shim base64-encodes each argv
+   word and decodes them in the container with `sh -c`. The shape that works is
+   `sh -c 'exec bundle exec "$(printf %s "$1" | base64 -d)" ...' sh <b64> <b64> ...`.
+
 ### What "authorization uses fresh data" means here
 
 Every action re-checks the user with Weave's directory by `sub`. A role change in Weave takes effect on the user's

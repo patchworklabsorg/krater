@@ -26,7 +26,7 @@
   {% if not rows and not refreshed_at %}
     <p class="muted">No pricing data yet. Once the daily refresh runs (or a manual one is triggered), GPU types and prices will show up here.</p>
   {% else %}
-    <form method="get" action="/pricing" class="form form--inline" data-role="pricing-filter-form">
+    <form method="get" action="/pricing" class="form form--inline filter-bar" data-role="pricing-filter-form">
       <div class="field">
         <label for="gpu">GPU type</label>
         <select id="gpu" name="gpu" data-role="auto-submit">
@@ -55,29 +55,29 @@
       <table class="table">
         <thead>
           <tr>
-            <th>GPU</th>
-            <th>Count</th>
-            <th>VRAM</th>
-            <th>Typical on-demand</th>
-            <th>Lowest on-demand</th>
-            {% if has_spot %}<th>Lowest spot</th>{% endif %}
-            <th>Offers</th>
+            <th scope="col">GPU</th>
+            <th scope="col" class="num">Count</th>
+            <th scope="col" class="num">VRAM</th>
+            <th scope="col" class="num">Typical on-demand</th>
+            <th scope="col" class="num">Lowest on-demand</th>
+            {% if has_spot %}<th scope="col" class="num">Lowest spot</th>{% endif %}
+            <th scope="col" class="num">Offers</th>
           </tr>
         </thead>
         <tbody>
           {% for row in rows %}
             <tr>
               <td>{{ row.accelerator_name }}</td>
-              <td>{{ row.accelerator_count }}</td>
-              <td>{{ (row.vram_gib ~ " GiB") if row.vram_gib is not none else "–" }}</td>
-              <td>{{ row.on_demand_median_cents|dollars }}/hr</td>
-              <td>{{ row.on_demand_min_cents|dollars }}/hr</td>
-              {% if has_spot %}<td>{{ (row.spot_min_cents|dollars ~ "/hr") if row.spot_min_cents is not none else "–" }}</td>{% endif %}
-              <td>{{ row.offer_count }}</td>
+              <td class="num">{{ row.accelerator_count }}</td>
+              <td class="num">{{ (row.vram_gib ~ " GiB") if row.vram_gib is not none else "–" }}</td>
+              <td class="num">{{ row.on_demand_median_cents|dollars }}/hr</td>
+              <td class="num">{{ row.on_demand_min_cents|dollars }}/hr</td>
+              {% if has_spot %}<td class="num">{{ (row.spot_min_cents|dollars ~ "/hr") if row.spot_min_cents is not none else "–" }}</td>{% endif %}
+              <td class="num">{{ row.offer_count }}</td>
             </tr>
             {% if row.on_demand_min_cents > cap_cents %}
               <tr>
-                <td colspan="{{ 7 if has_spot else 6 }}" class="field-hint">
+                <td colspan="{{ 7 if has_spot else 6 }}" class="field-hint table__note">
                   Over Ganymede's per-machine cap (${{ "%.2f"|format(cap_cents / 100) }}/hr) -- a launch
                   targeting this GPU will have its price capped, which may rule out every offer above.
                 </td>

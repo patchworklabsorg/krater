@@ -1,4 +1,5 @@
-"""The generic-exception handler: a plain page with no traceback in production, propagates otherwise."""
+"""Error pages: the generic-exception handler (a plain page with no traceback in production, propagates
+otherwise), and HTML 403/404 pages for browsers while API callers keep JSON."""
 
 from __future__ import annotations
 
@@ -51,3 +52,35 @@ def test_unexpected_error_propagates_outside_production(client: TestClient, logi
 
     with pytest.raises(RuntimeError, match="boom"):
         client.get("/")
+
+
+def test_unknown_url_shows_the_not_found_page_to_browsers(client: TestClient) -> None:
+    response = client.get("/no-such-page", headers={"Accept": "text/html,application/xhtml+xml"})
+
+    assert response.status_code == 404
+    assert response.headers["content-type"].startswith("text/html")
+    assert "Not found" in response.text
+
+
+def test_unknown_url_stays_json_for_api_callers(client: TestClient) -> None:
+    response = client.get("/no-such-page", headers={"Accept": "application/json"})
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Not Found"}
+
+
+def test_missing_role_shows_the_not_allowed_page_to_browsers(client: TestClient, login_as) -> None:
+    from tests.conftest import MEMBER_SUB
+
+    login_as(MEMBER_SUB)
+    response = client.get("/reviews", headers={"Accept": "text/html"})
+
+    assert response.status_code == 403
+    assert "Not allowed" in response.text
+
+
+def test_signed_out_redirect_is_not_turned_into_an_error_page(client: TestClient) -> None:
+    response = client.get("/reviews", headers={"Accept": "text/html"}, follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/login")

@@ -118,6 +118,10 @@
         if (!total) return;
         budgetField.value = total;
         if (usedField) usedField.value = "1";
+        // Confirm the copy; otherwise the click looks like it did nothing when the budget field is
+        // scrolled out of view above the estimator.
+        useButton.hidden = true;
+        setStatus((resultEl ? resultEl.textContent : "") + " Copied into the requested budget.");
       });
     }
   }

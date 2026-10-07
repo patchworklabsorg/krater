@@ -26,6 +26,7 @@
   {% if not gpu_options %}
     <p class="muted">No pricing data yet -- check back after the next refresh, or enter a budget directly.</p>
   {% else %}
+    <div class="estimator__grid">
     <div class="field">
       <label for="estimator_gpu">GPU type &times; count</label>
       <select id="estimator_gpu" name="estimator_gpu">
@@ -60,11 +61,14 @@
       <input type="number" id="estimator_margin_percent" name="estimator_margin_percent" min="0" step="1" value="{{ estimator_values.estimator_margin_percent }}">
       {% if errors.estimator_margin_percent %}<p class="field-error">{{ errors.estimator_margin_percent }}</p>{% endif %}
     </div>
+    </div>
 
     <input type="hidden" name="estimator_used" value="{{ estimator_used or '' }}" data-role="estimator-used">
 
-    <button type="submit" name="form_action" value="estimate" class="button" data-role="estimate-button">Estimate</button>
-    <button type="button" class="button button--primary" data-role="use-estimate-button" hidden>Use this estimate</button>
+    <div class="action-row">
+      <button type="submit" name="form_action" value="estimate" class="button" data-role="estimate-button">Estimate</button>
+      <button type="button" class="button button--primary" data-role="use-estimate-button" hidden>Use this estimate</button>
+    </div>
 
     <p class="policy-note" data-role="estimate-result" {% if not estimate_summary %}hidden{% endif %}>
       {% if estimate_summary %}Estimate: {{ estimate_summary }}{% endif %}

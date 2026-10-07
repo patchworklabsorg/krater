@@ -22,7 +22,7 @@ from typing import Any
 
 import boto3
 from botocore.client import Config as BotoConfig
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 
 from krater.config import Settings
 from krater.storage.client import DEFAULT_DOWNLOAD_EXPIRES_SECONDS, DEFAULT_UPLOAD_EXPIRES_SECONDS
@@ -30,6 +30,21 @@ from krater.storage.errors import StorageUnavailableError
 from krater.storage.types import ObjectMeta, PresignedPost
 
 _BOTO_CONFIG = BotoConfig(signature_version="s3v4", s3={"addressing_style": "path"})
+
+#: Lets a browser upload straight to the bucket and load thumbnails from it via presigned URLs, once the
+#: storage endpoint is on a different origin from the portal. Verified against real SeaweedFS; see
+#: docs/dev/storage.md before changing it.
+BUCKET_CORS_RULES: list[dict[str, Any]] = [
+    {
+        "AllowedOrigins": ["*"],
+        "AllowedMethods": ["GET", "PUT", "POST"],
+        "AllowedHeaders": ["*"],
+        "ExposeHeaders": ["ETag"],
+        "MaxAgeSeconds": 3000,
+    }
+]
+
+_BUCKET_ALREADY_EXISTS_CODES = ("BucketAlreadyOwnedByYou", "BucketAlreadyExists")
 
 
 def _is_not_found(exc: ClientError) -> bool:
@@ -72,6 +87,30 @@ class S3ObjectStore:
             aws_secret_access_key=settings.s3_secret_access_key,
             config=_BOTO_CONFIG,
         )
+
+    # -- Setup (not part of ObjectStore) ---------------------------------------------------------------
+
+    def ensure_bucket(self) -> None:
+        """Create the bucket if it's missing and (re)apply `BUCKET_CORS_RULES`. Idempotent, so it's safe
+        to run on every deploy; see `krater.storage.ensure_bucket`."""
+        try:
+            self._ensure_bucket_exists()
+            self._internal.put_bucket_cors(Bucket=self._bucket, CORSConfiguration={"CORSRules": BUCKET_CORS_RULES})
+        except (ClientError, BotoCoreError) as exc:
+            raise StorageUnavailableError(f"could not set up bucket {self._bucket!r}: {exc}") from exc
+
+    def _ensure_bucket_exists(self) -> None:
+        try:
+            self._internal.head_bucket(Bucket=self._bucket)
+            return
+        except ClientError as exc:
+            if not _is_not_found(exc):
+                raise
+        try:
+            self._internal.create_bucket(Bucket=self._bucket)
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") not in _BUCKET_ALREADY_EXISTS_CODES:
+                raise
 
     # -- ObjectStore protocol ------------------------------------------------------------------------
 
@@ -122,4 +161,4 @@ class S3ObjectStore:
             raise StorageUnavailableError(f"could not delete {key!r}: {exc}") from exc
 
 
-__all__ = ["S3ObjectStore"]
+__all__ = ["BUCKET_CORS_RULES", "S3ObjectStore"]

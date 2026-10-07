@@ -164,25 +164,14 @@ def _raw_client(settings: Settings):
 
 @pytest.fixture(scope="module")
 def bucket(weed_settings: Settings) -> str:
-    """The bucket, created with the same CORS rule `storage-init` applies in docker-compose -- see
-    docs/dev/storage.md. Verifies the CORS config round-trips through a real `get-bucket-cors` too."""
-    client = _raw_client(weed_settings)
-    client.create_bucket(Bucket=weed_settings.s3_bucket)
+    """The bucket, set up by the same `S3ObjectStore.ensure_bucket` the `migrate` service runs in
+    docker-compose -- see docs/dev/storage.md. Runs it twice to check it's idempotent, and verifies the
+    CORS config round-trips through a real `get-bucket-cors` too."""
+    store = S3ObjectStore(weed_settings)
+    store.ensure_bucket()
+    store.ensure_bucket()
 
-    cors = {
-        "CORSRules": [
-            {
-                "AllowedOrigins": ["*"],
-                "AllowedMethods": ["GET", "PUT", "POST"],
-                "AllowedHeaders": ["*"],
-                "ExposeHeaders": ["ETag"],
-                "MaxAgeSeconds": 3000,
-            }
-        ]
-    }
-    client.put_bucket_cors(Bucket=weed_settings.s3_bucket, CORSConfiguration=cors)
-
-    fetched = client.get_bucket_cors(Bucket=weed_settings.s3_bucket)
+    fetched = _raw_client(weed_settings).get_bucket_cors(Bucket=weed_settings.s3_bucket)
     assert fetched["CORSRules"][0]["AllowedOrigins"] == ["*"]
 
     return weed_settings.s3_bucket
@@ -297,7 +286,7 @@ def test_delete_on_a_missing_key_does_not_raise(store: S3ObjectStore) -> None:
 
 @skip_without_weed
 def test_bucket_cors_preflight_allows_a_browser_origin(weed_settings: Settings, bucket: str) -> None:
-    """Confirms the CORS rule `storage-init` applies actually reaches a browser-style preflight, not
+    """Confirms the CORS rule `ensure_bucket` applies actually reaches a browser-style preflight, not
     just `get-bucket-cors` echoing back what was stored."""
     response = httpx.options(
         f"{weed_settings.s3_endpoint_url}/{bucket}/some-key",

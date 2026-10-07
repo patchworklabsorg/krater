@@ -11,6 +11,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
+from fastapi.exception_handlers import http_exception_handler
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.staticfiles import StaticFiles
 
@@ -36,6 +38,7 @@ from krater.worker.app import app as procrastinate_app
 
 STATIC_DIR = Path(__file__).parent / "static"
 SESSION_COOKIE_NAME = "krater_session"
+_HTML_ERROR_PAGES = {403: "errors/403.html", 404: "errors/404.html"}
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +100,17 @@ def create_app() -> FastAPI:
     @app.exception_handler(NotFound)
     def _handle_not_found(request: Request, exc: NotFound):
         return templates.TemplateResponse(request, "errors/404.html", status_code=404)
+
+    # Unknown URLs and the auth dependencies' 403s are plain `HTTPException`s, which FastAPI renders as
+    # JSON. Browsers get the site's error pages instead; API callers (SkyPilot's policy hook, Slack,
+    # the estimator's fetch) don't ask for HTML, so they keep the JSON body.
+    @app.exception_handler(StarletteHTTPException)
+    async def _handle_http_exception(request: Request, exc: StarletteHTTPException):
+        if exc.status_code in _HTML_ERROR_PAGES and "text/html" in request.headers.get("accept", ""):
+            return templates.TemplateResponse(
+                request, _HTML_ERROR_PAGES[exc.status_code], status_code=exc.status_code, headers=exc.headers
+            )
+        return await http_exception_handler(request, exc)
 
     @app.exception_handler(Exception)
     def _handle_unexpected_error(request: Request, exc: Exception):

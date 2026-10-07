@@ -10,7 +10,7 @@
     {{ macros.status_badge(project.status) }}
   </div>
   {% if project.repo_url %}
-    <p><a href="{{ project.repo_url }}">{{ project.repo_url }}</a></p>
+    <p class="project-link"><a href="{{ project.repo_url }}">{{ project.repo_url }}</a></p>
   {% endif %}
 
   <dl class="budget-summary">
@@ -123,9 +123,13 @@
 
 {% if is_admin %}
 <section class="card">
-  <h2>Admin</h2>
-
+  <div class="page-header">
+    <h2>Admin</h2>
+    <a class="back-link" href="/admin">Admin overview</a>
+  </div>
   {% if can_admin_decide %}
+    <div class="admin-action">
+    <h3>Decide without waiting for reviewers</h3>
     <form method="post" action="/projects/{{ project.id }}/admin-decide" class="form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="field">
@@ -138,9 +142,12 @@
         <button type="submit" name="decision" value="reject" class="button button--danger">Admin reject</button>
       </div>
     </form>
+    </div>
   {% endif %}
 
   {% if can_admin_adjust_budget %}
+    <div class="admin-action">
+    <h3>Adjust budget</h3>
     <form method="post" action="/projects/{{ project.id }}/admin-budget" class="form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="field">
@@ -162,9 +169,12 @@
       </div>
       <button type="submit" class="button">Adjust budget</button>
     </form>
+    </div>
   {% endif %}
 
   {% if can_admin_reclaim %}
+    <div class="admin-action">
+    <h3>Reclaim unspent budget</h3>
     <form method="post" action="/projects/{{ project.id }}/admin-reclaim" class="form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="field">
@@ -186,9 +196,12 @@
       </div>
       <button type="submit" class="button">Reclaim budget</button>
     </form>
+    </div>
   {% endif %}
 
   {% if can_admin_withdraw %}
+    <div class="admin-action">
+    <h3>Withdraw project</h3>
     <form method="post" action="/projects/{{ project.id }}/withdraw" class="form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="field">
@@ -198,9 +211,8 @@
       </div>
       <button type="submit" class="button button--danger">Withdraw project (admin)</button>
     </form>
+    </div>
   {% endif %}
-
-  <p class="muted"><a href="/admin">Admin overview</a></p>
 </section>
 {% endif %}
 
@@ -210,7 +222,11 @@
     <article class="revision">
       <div class="page-header">
         <h3>Revision {{ revision.number }} &middot; {{ revision.kind.value | capitalize }}</h3>
-        <span class="badge badge--outcome-{{ revision.outcome.value }}">{{ revision.outcome.value | capitalize }}</span>
+        {% if revision.submitted_at %}
+          <span class="badge badge--outcome-{{ revision.outcome.value }}">{{ revision.outcome.value | capitalize }}</span>
+        {% else %}
+          <span class="badge">Draft</span>
+        {% endif %}
       </div>
       <p class="muted">
         {% if revision.submitted_at %}Submitted {{ revision.submitted_at.strftime("%Y-%m-%d %H:%M UTC") }}{% else %}Draft, not yet submitted{% endif %}

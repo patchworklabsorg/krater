@@ -15,7 +15,9 @@
       {% endfor %}
     </ul>
   {% else %}
-    <p class="muted">Nothing waiting on your review.</p>
+    <div class="empty-state">
+      <p>Nothing waiting on your review.</p>
+    </div>
   {% endif %}
 </section>
 {% endblock %}

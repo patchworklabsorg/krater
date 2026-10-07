@@ -16,12 +16,21 @@
   --color-accent-strong: var(--color-deep-purple);
   --color-border: var(--color-lavender);
 
-  --content-max-width: 40rem;
+  --color-danger: #a33636;
+  --color-danger-bg: #fbe9e7;
+
+  --content-max-width: 52rem;
   --gutter: 1rem;
 }
 
 * {
   box-sizing: border-box;
+}
+
+/* Components below set `display`, which would otherwise beat the UA's `[hidden] { display: none }`
+   (e.g. the estimator's "Use this estimate" button showed before any estimate existed). */
+[hidden] {
+  display: none !important;
 }
 
 html,
@@ -52,13 +61,40 @@ a:hover {
   color: var(--color-accent);
 }
 
+a:focus-visible,
+button:focus-visible,
+select:focus-visible {
+  outline: 3px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+
 .site-header {
   background-color: var(--color-accent-strong);
   color: var(--color-white);
 }
 
+.skip-link {
+  position: absolute;
+  left: 0.5rem;
+  top: -3rem;
+  padding: 0.5rem 0.75rem;
+  background-color: var(--color-white);
+  color: var(--color-accent-strong);
+  border-radius: 0.4rem;
+  z-index: 10;
+}
+
+.skip-link:focus {
+  top: 0.5rem;
+}
+
 .site-header__inner {
-  max-width: 60rem;
+  max-width: var(--content-max-width);
   margin: 0 auto;
   padding: 0.75rem var(--gutter);
   display: flex;
@@ -79,28 +115,54 @@ a:hover {
 .site-nav {
   display: flex;
   flex-wrap: wrap;
-  gap: 1rem;
+  align-items: center;
+  gap: 0.25rem 1.25rem;
 }
 
 .site-nav a {
   color: var(--color-lavender);
   text-decoration: none;
   font-size: 0.95rem;
+  padding: 0.2rem 0;
+  border-bottom: 2px solid transparent;
 }
 
 .site-nav a:hover {
   color: var(--color-white);
 }
 
+.site-nav a[aria-current="page"] {
+  color: var(--color-white);
+  border-bottom-color: var(--color-lavender);
+}
+
+.site-nav a:focus-visible,
+.site-nav .link-button:focus-visible {
+  outline-color: var(--color-lavender);
+}
+
+.site-nav__account {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding-left: 1.25rem;
+  border-left: 1px solid rgba(199, 183, 226, 0.4);
+}
+
 .site-nav__user {
   color: var(--color-white);
   font-size: 0.95rem;
+  font-weight: 600;
 }
 
 .site-nav__logout {
   display: inline-flex;
   margin: 0;
   padding: 0;
+}
+
+.site-nav .link-button {
+  font-size: 0.95rem;
 }
 
 .link-button {
@@ -151,6 +213,24 @@ a:hover {
   color: var(--color-accent-strong);
 }
 
+.card > :first-child {
+  margin-top: 0;
+}
+
+.card > :last-child {
+  margin-bottom: 0;
+}
+
+.card h2 {
+  font-size: 1.3rem;
+  margin: 1.5rem 0 0.75rem;
+}
+
+.card h3 {
+  font-size: 1.05rem;
+  margin: 1.25rem 0 0.5rem;
+}
+
 .muted {
   color: var(--color-text-muted);
   font-size: 0.9rem;
@@ -171,8 +251,17 @@ a:hover {
 }
 
 .page-header h1,
+.page-header h2,
 .page-header h3 {
   margin: 0;
+}
+
+.page-header + * {
+  margin-top: 0.75rem;
+}
+
+.back-link {
+  font-size: 0.9rem;
 }
 
 /* Flash messages */
@@ -227,6 +316,12 @@ a:hover {
   color: var(--color-accent-strong);
 }
 
+.button:disabled,
+.button[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .button:focus-visible {
   outline: 3px solid var(--color-accent);
   outline-offset: 2px;
@@ -245,13 +340,18 @@ a:hover {
 }
 
 .button--danger {
-  border-color: #a33636;
-  color: #a33636;
+  border-color: var(--color-danger);
+  color: var(--color-danger);
 }
 
 .button--danger:hover {
-  background-color: #fbe9e7;
-  color: #a33636;
+  background-color: var(--color-danger-bg);
+  color: var(--color-danger);
+}
+
+.button--small {
+  padding: 0.3rem 0.65rem;
+  font-size: 0.85rem;
 }
 
 /* Forms */
@@ -263,9 +363,39 @@ a:hover {
   margin-bottom: 1.5rem;
 }
 
+/* Buttons sit at their natural width, not stretched across the column. */
+.form > .button,
+.estimator > .button {
+  align-self: flex-start;
+}
+
 .form--inline {
   display: inline-flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 1rem;
   margin: 0;
+}
+
+/* One self-contained admin action (its own heading, fields and button) among several on a card. */
+.admin-action {
+  padding: 1.25rem 0;
+  border-top: 1px solid var(--color-border);
+}
+
+.admin-action:first-child,
+.page-header + .admin-action {
+  border-top: none;
+  padding-top: 0;
+}
+
+.admin-action h3 {
+  margin: 0 0 0.25rem;
+}
+
+.admin-action .form {
+  margin: 0.75rem 0 0;
 }
 
 .action-row {
@@ -290,7 +420,8 @@ a:hover {
 .field input[type="url"],
 .field input[type="number"],
 .field select,
-.field textarea {
+.field textarea,
+.form--inline input[type="text"] {
   font: inherit;
   padding: 0.5rem 0.65rem;
   border: 1px solid var(--color-border);
@@ -300,9 +431,18 @@ a:hover {
 }
 
 .field input:focus-visible,
+.field select:focus-visible,
 .field textarea:focus-visible {
   outline: 3px solid var(--color-accent);
   outline-offset: 1px;
+}
+
+.field [aria-invalid="true"] {
+  border-color: var(--color-danger);
+}
+
+.field textarea {
+  resize: vertical;
 }
 
 .field-hint {
@@ -314,8 +454,12 @@ a:hover {
 .field-error {
   margin: 0;
   font-size: 0.85rem;
-  color: #a33636;
+  color: var(--color-danger);
   font-weight: 600;
+}
+
+.field-error:empty {
+  display: none;
 }
 
 /* Budget estimator (proposal/amendment draft form) */
@@ -333,6 +477,21 @@ a:hover {
 .estimator legend {
   font-weight: 700;
   padding: 0 0.35rem;
+}
+
+.estimator .field-hint,
+.estimator .policy-note {
+  margin: 0;
+}
+
+.estimator__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 1rem;
+}
+
+.estimator .action-row {
+  margin: 0;
 }
 
 /* Status badges */
@@ -384,17 +543,60 @@ a:hover {
   gap: 0.6rem;
 }
 
+.project-list {
+  gap: 0;
+}
+
 .project-list__item {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  justify-content: space-between;
   gap: 0.6rem;
-  padding: 0.6rem 0;
+  padding: 0.75rem 0;
   border-bottom: 1px solid var(--color-border);
 }
 
+.project-list__item:first-child {
+  padding-top: 0.25rem;
+}
+
+.project-list__item:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.project-list__item a {
+  font-weight: 600;
+}
+
+.review-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.link-list {
+  gap: 0.4rem;
+}
+
 .gallery-list {
-  gap: 1.25rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+  gap: 1rem;
+}
+
+.gallery-list__item {
+  display: flex;
+  flex-direction: column;
+  padding: 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.6rem;
+}
+
+.gallery-list__item p {
+  margin: 0.25rem 0 0;
 }
 
 .gallery-list__item h2 {
@@ -405,20 +607,58 @@ a:hover {
 .gallery-list__thumb {
   display: block;
   width: 100%;
-  max-width: 16rem;
-  height: 9rem;
+  aspect-ratio: 16 / 9;
+  height: auto;
   object-fit: cover;
   border: 1px solid var(--color-border);
-  border-radius: 0.5rem;
+  border-radius: 0.4rem;
   background-color: var(--color-quilt);
-  margin-bottom: 0.4rem;
+  margin-bottom: 0.6rem;
+}
+
+.gallery-list__thumb--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 2.5rem;
+  font-weight: 700;
+  color: var(--color-lavender);
+  background: linear-gradient(135deg, var(--color-quilt), #ece6f6);
 }
 
 .tag-list {
   display: flex;
   flex-wrap: wrap;
   gap: 0.4rem;
-  margin: 0.25rem 0;
+  margin: 0.25rem 0 1rem;
+}
+
+/* Parts of the draft editor that live outside the main save form. */
+.edit-section {
+  padding-top: 1.25rem;
+  margin-top: 0.25rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.submit-bar p {
+  margin: 0 0 0.75rem;
+}
+
+.field input[type="file"] {
+  font: inherit;
+  font-size: 0.9rem;
+}
+
+.field input[type="file"]::file-selector-button {
+  font: inherit;
+  font-weight: 600;
+  margin-right: 0.75rem;
+  padding: 0.4rem 0.8rem;
+  border: 1px solid var(--color-accent-strong);
+  border-radius: 0.4rem;
+  background-color: var(--color-white);
+  color: var(--color-accent-strong);
+  cursor: pointer;
 }
 
 .tag {
@@ -432,15 +672,19 @@ a:hover {
 /* Budget summary */
 
 .budget-summary {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 1.5rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: 0.75rem;
   margin: 1rem 0;
 }
 
 .budget-summary div {
   display: flex;
   flex-direction: column;
+  padding: 0.6rem 0.9rem;
+  background-color: var(--color-quilt);
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
 }
 
 .budget-summary dt {
@@ -453,6 +697,42 @@ a:hover {
   font-size: 1.25rem;
   font-weight: 700;
   color: var(--color-accent-strong);
+  font-variant-numeric: tabular-nums;
+}
+
+.budget-summary--details dd {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.role-change {
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.role-change input[type="text"] {
+  padding: 0.3rem 0.5rem;
+  font-size: 0.85rem;
+  min-width: 10rem;
+}
+
+.form--inline input[type="text"]:focus-visible {
+  outline: 3px solid var(--color-accent);
+  outline-offset: 1px;
 }
 
 .policy-note {
@@ -466,6 +746,11 @@ a:hover {
 .write-up {
   white-space: normal;
   line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.project-link {
+  overflow-wrap: anywhere;
 }
 
 /* SkyPilot workspace hint + budget banner */
@@ -487,9 +772,9 @@ a:hover {
 
 .skypilot-banner {
   padding: 0.6rem 0.9rem;
-  border: 1px solid #a33636;
-  background-color: #fbe9e7;
-  color: #a33636;
+  border: 1px solid var(--color-danger);
+  background-color: var(--color-danger-bg);
+  color: var(--color-danger);
   border-radius: 0.5rem;
   font-size: 0.9rem;
   font-weight: 600;
@@ -500,9 +785,18 @@ a:hover {
   border-top: 1px solid var(--color-border);
 }
 
-.revision:first-child {
+.revision:first-child,
+h2 + .revision {
   border-top: none;
   padding-top: 0;
+}
+
+.revision p {
+  margin: 0.4rem 0;
+}
+
+.revision .review-list {
+  margin-top: 0.6rem;
 }
 
 /* Screenshots (completion draft upload widget + gallery) */
@@ -565,6 +859,107 @@ a:hover {
   text-align: left;
   padding: 0.5rem 0.6rem;
   border-bottom: 1px solid var(--color-border);
+  vertical-align: top;
+}
+
+.table th {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+.table tbody tr:hover {
+  background-color: var(--color-quilt);
+}
+
+.table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+/* Numbers and money: right-aligned in fixed-width digits so columns line up. */
+.table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.table .nowrap {
+  white-space: nowrap;
+}
+
+.table .table__note {
+  padding-top: 0;
+  color: var(--color-danger);
+}
+
+/* Keep a row and its note visually together. */
+.table tr:has(+ tr .table__note) td {
+  border-bottom: none;
+}
+
+.filter-bar {
+  margin: 0.25rem 0 0.75rem;
+}
+
+/* Tables that share a card (e.g. /admin's per-status groups) get the same column widths. */
+.table--fixed {
+  table-layout: fixed;
+  min-width: 30rem;
+}
+
+.table--fixed th:first-child {
+  width: 50%;
+}
+
+.badge-stack {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.section-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.section-heading .count {
+  color: var(--color-text-muted);
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.empty-state {
+  padding: 1.25rem;
+  text-align: center;
+  color: var(--color-text-muted);
+  background-color: var(--color-quilt);
+  border: 1px dashed var(--color-border);
+  border-radius: 0.5rem;
+}
+
+.empty-state p {
+  margin: 0 0 0.75rem;
+}
+
+.empty-state p:last-child {
+  margin-bottom: 0;
+}
+
+@media (max-width: 40rem) {
+  .site-header__inner {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .site-nav__account {
+    padding-left: 0;
+    border-left: none;
+  }
 }
 
 @media (max-width: 30rem) {
