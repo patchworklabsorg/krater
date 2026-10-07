@@ -11,9 +11,9 @@ this list covers what comes after, plus loose ends from building v1.
   - a real Vast launch;
   - the 80% warning and 100% teardown with real spend;
   - how far `cost_report` drifts from the Vast bill. That sets the safety margin, if any, to take off the ceiling.
-- **Merge the Weave work Krater needs:** the stack patchworklabsorg/weave#156 to #161, app roles
-  (patchworklabsorg/weave#165) and the directory API (patchworklabsorg/weave#166), tracked in issue #163. Then give
-  `scripts/dev/weave_e2e_provision.rb` the Krater app roles, so the live role tests run.
+- **Run the live Weave role tests.** The Weave work Krater needs is merged on Weave `main`. Give
+  `scripts/dev/weave_e2e_provision.rb` the Krater app roles, so the live role tests in
+  `tests/live/test_weave_live.py` run.
 - **Merge Weave's sign-in and security fixes upstream** (for Weave's own sake). Patches `0002`/`0003` fix OAuth sign-in for returning users in Chrome and Safari, for any external client;
   the rest (the handoff's `weave-patches/WEAVE-BUG-REPORT.md`) close an account takeover through unsigned Slack
   events, owner takeover from the admin panel, locked users still signing in to OAuth apps, and signed-out `/admin`
@@ -57,8 +57,6 @@ this list covers what comes after, plus loose ends from building v1.
 - **Untested with 0.13.0's CLI:** `sky exec`, `sky jobs launch` and `sky serve up` going through the launch gate for
   real. They have no `--dryrun`, so they need a real Vast key. Resource labels on Vast are also untested. See
   [dev/skypilot-spike.md](dev/skypilot-spike.md).
-- **Watch the first GitHub runs of the SkyPilot contract job** (`.github/workflows/skypilot-contract.yml`, see
-  [dev/skypilot-contract.md](dev/skypilot-contract.md)). It was verified only in a Linux container that mimics it.
 - **Image allowlist in the launch gate,** to stop crypto mining or other abuse. It becomes more important if donated
   compute happens (below).
 - **Shared rate limiting.** The limiter is per-process in memory, so limits multiply with the number of web workers. Move
