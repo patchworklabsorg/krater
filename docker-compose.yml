@@ -1,6 +1,7 @@
 services:
   db:
     image: postgres:16
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-krater}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-krater}
@@ -27,15 +28,19 @@ services:
 
   portal:
     build: .
+    restart: unless-stopped
     env_file: ${KRATER_ENV_FILE:-.env}
+    # KRATER_BIND_ADDRESS=127.0.0.1 in production keeps the published ports off the network, so the
+    # only way in is through the TLS proxy (docs/dev/production.md). Applies to every port below.
     ports:
-      - "${PORT:-8000}:8000"
+      - "${KRATER_BIND_ADDRESS:-0.0.0.0}:${PORT:-8000}:8000"
     depends_on:
       migrate:
         condition: service_completed_successfully
 
   worker:
     build: .
+    restart: unless-stopped
     env_file: ${KRATER_ENV_FILE:-.env}
     command: ["procrastinate", "--app=krater.worker.app.app", "worker"]
     depends_on:
@@ -46,6 +51,7 @@ services:
   # docs/SPEC.md "Open questions". SeaweedFS rather than MinIO: MinIO stopped publishing community images in 2025.
   storage:
     image: chrislusf/seaweedfs:${SEAWEEDFS_VERSION:-latest}
+    restart: unless-stopped
     environment:
       S3_ACCESS_KEY: ${KRATER_S3_ACCESS_KEY_ID:-krater}
       S3_SECRET_KEY: ${KRATER_S3_SECRET_ACCESS_KEY:-krater-dev-secret}
@@ -57,7 +63,7 @@ services:
         "$$S3_ACCESS_KEY" "$$S3_SECRET_KEY" > /tmp/s3.json &&
         exec weed server -dir=/data -master.volumeSizeLimitMB=1024 -s3 -s3.port=8333 -s3.config=/tmp/s3.json
     ports:
-      - "${S3_PORT:-8333}:8333"
+      - "${KRATER_BIND_ADDRESS:-0.0.0.0}:${S3_PORT:-8333}:8333"
     volumes:
       - krater_storage_data:/data
 
@@ -75,6 +81,7 @@ services:
   skypilot:
     image: berkeleyskypilot/skypilot:0.13.0
     profiles: ["skypilot"]
+    restart: unless-stopped
     # No env_file here (nor on auth-proxy): it would hand every Krater secret (session key, DB and S3
     # credentials) to a server members submit work to. Only what's listed below is passed in.
     environment:
@@ -171,7 +178,7 @@ services:
         PY
         exec sky api start --deploy --foreground
     ports:
-      - "${SKYPILOT_PORT:-46580}:46580"
+      - "${KRATER_BIND_ADDRESS:-0.0.0.0}:${SKYPILOT_PORT:-46580}:46580"
     volumes:
       - krater_skypilot_data:/root/.sky
       # A local file holding the Vast API key, never committed. Falls back to /dev/null (an empty,
@@ -189,6 +196,7 @@ services:
   auth-proxy:
     image: quay.io/oauth2-proxy/oauth2-proxy:v7.6.0
     profiles: ["skypilot"]
+    restart: unless-stopped
     environment:
       OAUTH2_PROXY_HTTP_ADDRESS: "0.0.0.0:4180"
       OAUTH2_PROXY_UPSTREAMS: "http://skypilot:46580"
@@ -209,9 +217,83 @@ services:
       OAUTH2_PROXY_COOKIE_EXPIRE: "8h"
       OAUTH2_PROXY_COOKIE_SECURE: ${KRATER_SKYPILOT_AUTH_COOKIE_SECURE:-true}
     ports:
-      - "${SKYPILOT_AUTH_PROXY_PORT:-8080}:4180"
+      - "${KRATER_BIND_ADDRESS:-0.0.0.0}:${SKYPILOT_AUTH_PROXY_PORT:-8080}:4180"
+
+  # -- Production extras (docs/dev/production.md) --------------------------------------------------
+  # Opt-in, so dev and staging stay as they are: `--profile backup` and `--profile proxy`.
+
+  # Nightly `pg_dump` of Krater's database: the budget ledger and audit log live only there. Dumps land
+  # in KRATER_BACKUP_DIR on the host, which is what to copy off the machine; files older than
+  # KRATER_BACKUP_KEEP_DAYS are deleted. Restoring one is in docs/dev/production.md.
+  db-backup:
+    image: postgres:16
+    profiles: ["backup"]
+    restart: unless-stopped
+    environment:
+      PGHOST: db
+      PGUSER: ${POSTGRES_USER:-krater}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-krater}
+      PGDATABASE: ${POSTGRES_DB:-krater}
+      BACKUP_INTERVAL_SECONDS: ${KRATER_BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_KEEP_DAYS: ${KRATER_BACKUP_KEEP_DAYS:-14}
+    entrypoint: ["/bin/sh", "-c"]
+    # A one-item list for the same reason as `skypilot`'s command. Each dump is written under a temporary
+    # name and renamed when complete, so a half-written file is never mistaken for a good backup.
+    command:
+      - |
+        set -eu
+        while true; do
+          name="krater-$$(date -u +%Y%m%dT%H%M%SZ).dump"
+          if pg_dump --format=custom --file="/backups/$$name.partial"; then
+            mv "/backups/$$name.partial" "/backups/$$name"
+            echo "backup written: $$name"
+          else
+            rm -f "/backups/$$name.partial"
+            echo "backup FAILED at $$(date -u +%FT%TZ)" >&2
+          fi
+          find /backups -name 'krater-*.dump' -mtime +"$$BACKUP_KEEP_DAYS" -delete
+          sleep "$$BACKUP_INTERVAL_SECONDS"
+        done
+    volumes:
+      - ${KRATER_BACKUP_DIR:-./backups}:/backups
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # TLS in front of the portal, the screenshot bucket and the SkyPilot API server, with certificates
+  # from Let's Encrypt. Routes are in deploy/Caddyfile. Leave this profile off when the host already
+  # runs a reverse proxy, and point that one at the same services instead.
+  proxy:
+    image: caddy:${CADDY_VERSION:-2.10.2}
+    profiles: ["proxy"]
+    restart: unless-stopped
+    environment:
+      KRATER_DOMAIN: ${KRATER_DOMAIN:-}
+      # *.localhost names keep a site unserved (Caddy's local CA, never Let's Encrypt): screenshots kept
+      # with a hosted provider, or no SkyPilot profile.
+      KRATER_S3_DOMAIN: ${KRATER_S3_DOMAIN:-storage.localhost}
+      KRATER_SKYPILOT_DOMAIN: ${KRATER_SKYPILOT_DOMAIN:-skypilot.localhost}
+    # Checked here rather than with Compose's `${KRATER_DOMAIN:?}`, which would fail every
+    # `docker compose` command, with or without this profile.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        : "$${KRATER_DOMAIN:?set KRATER_DOMAIN to the portal's public hostname}" &&
+        exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - krater_caddy_data:/data
+      - krater_caddy_config:/config
+    depends_on:
+      - portal
 
 volumes:
   krater_db_data:
   krater_storage_data:
   krater_skypilot_data:
+  krater_caddy_data:
+  krater_caddy_config:

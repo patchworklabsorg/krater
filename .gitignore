@@ -32,3 +32,6 @@ htmlcov/
 
 # Logs
 *.log
+
+# Database dumps from the db-backup service (docker-compose.yml, --profile backup).
+/backups/

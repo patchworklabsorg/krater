@@ -13,6 +13,10 @@ this list covers what comes after, plus loose ends from building v1.
   - how far `cost_report` drifts from the Vast bill. That sets the safety margin, if any, to take off the ceiling.
 - **Run the live Weave role tests** against Weave `main` (`docs/dev/weave-e2e.md`).
   `scripts/dev/weave_e2e_provision.rb` now gives the fixture users Krater's app roles, but hasn't been run yet.
+- **Production deployment** ([dev/production.md](dev/production.md)). Compose now has opt-in `proxy` (Caddy, TLS)
+  and `backup` (nightly `pg_dump`) profiles, restart policies and a bind address. Still open: whether Krater on
+  alastor belongs in the NixOS infra repo like Weave, off-machine backup copies, a screenshot volume backup, and
+  alerting when the reconcile job fails. None of it has run on a real host yet.
 - **Set up Krater's roles in Weave** on each real deployment: a Weave superadmin creates `member`, `reviewer` and
   `admin` on the Krater app page, an admin adds the `directory` scope to the app, and admins give people the roles
   (see [weave-integration.md](weave-integration.md)).

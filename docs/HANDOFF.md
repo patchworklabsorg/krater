@@ -183,7 +183,10 @@ sign in.
 4. ~~**Give the Weave e2e fixture users Krater's app roles.**~~ Done: `scripts/dev/weave_e2e_provision.rb` creates
    the roles and sets `roles_provisioned`, so the live role tests in `tests/live/test_weave_live.py` no longer skip
    (`docs/dev/weave-e2e.md`). Not yet run against a real Weave `main`.
-5. The remaining items in `docs/FUTURE.md`.
+5. ~~**Production deployment pieces.**~~ Done in Compose: `proxy` and `backup` profiles, restart policies,
+   `KRATER_BIND_ADDRESS`, and the runbook `docs/dev/production.md`. Not yet run on a real host, and alastor may
+   want a NixOS version instead (that runbook's section 0).
+6. The remaining items in `docs/FUTURE.md`.
 
 ## 7. Gotchas learned the hard way
 
