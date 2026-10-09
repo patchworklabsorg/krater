@@ -21,13 +21,13 @@ idempotently create, in Weave's own database:
   confirmed emails;
 - a confidential OAuth application ("Krater (e2e)") with redirect URI
   `http://localhost:8201/auth/callback` and scopes `openid profile email groups roles slack directory`
-  (**recreated** every run, since its secret is hashed at rest and only readable right after creation).
+  (**recreated** every run, since its secret is hashed at rest and only readable right after creation). It's open
+  to everyone, so the non-member gets through Weave and Krater has to refuse them itself;
+- Krater's app roles `member`, `reviewer` and `admin` on that application (recreated with it): the member gets
+  `member`, the admin gets `member` and `admin`, and the non-member gets none.
 
-The script doesn't yet create Krater's app roles (`member`, `reviewer`, `admin`) or give them to the fixture users:
-that needs the Weave app-role models from patchworklabsorg/weave#165. Until it does, the fixture has no
-`roles_provisioned` key, and the tests that need roles skip with a clear reason. To run them now, create the roles
-on the Krater (e2e) app page as a Weave superadmin, give the member `member` and the admin `member` and `admin`, and
-add `"roles_provisioned": true` to `.weave_e2e_fixture.json`.
+The fixture it writes says `"roles_provisioned": true`. A fixture from an older run of the script doesn't, and the
+tests that need roles skip until you re-run it.
 
 It then writes two **gitignored** files in this repo's root:
 

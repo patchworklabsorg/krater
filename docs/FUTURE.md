@@ -11,9 +11,8 @@ this list covers what comes after, plus loose ends from building v1.
   - a real Vast launch;
   - the 80% warning and 100% teardown with real spend;
   - how far `cost_report` drifts from the Vast bill. That sets the safety margin, if any, to take off the ceiling.
-- **Run the live Weave role tests.** The Weave work Krater needs is merged on Weave `main`. Give
-  `scripts/dev/weave_e2e_provision.rb` the Krater app roles, so the live role tests in
-  `tests/live/test_weave_live.py` run.
+- **Run the live Weave role tests** against Weave `main` (`docs/dev/weave-e2e.md`).
+  `scripts/dev/weave_e2e_provision.rb` now gives the fixture users Krater's app roles, but hasn't been run yet.
 - **Set up Krater's roles in Weave** on each real deployment: a Weave superadmin creates `member`, `reviewer` and
   `admin` on the Krater app page, an admin adds the `directory` scope to the app, and admins give people the roles
   (see [weave-integration.md](weave-integration.md)).

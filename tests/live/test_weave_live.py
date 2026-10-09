@@ -2,8 +2,8 @@
 
 Unlike the rest of the suite, this drives a **real** Weave (OIDC discovery/JWKS, the magic-link sign-in
 flow and the `/oauth/authorize` consent screen) and a **real** running Krater in `KRATER_WEAVE_MODE=live`,
-over plain HTTP -- no mocks. Weave owns Krater's roles: the role checks below need a Weave with app roles
-and the directory API (issue #163), and skip until the fixture says its users have them.
+over plain HTTP -- no mocks. Weave owns Krater's roles: the role checks below need the fixture users to hold
+Krater's app roles in Weave, which `scripts/dev/weave_e2e_provision.rb` sets up, and skip otherwise.
 See `docs/dev/weave-e2e.md` for how to bring both up and provision the fixture users this file reads.
 
 It does the same OAuth Authorization Code + PKCE round trip a browser does (confirm a magic link, submit
@@ -118,10 +118,10 @@ def _krater_user(email: str) -> dict[str, Any] | None:
 
 
 def _needs_weave_roles(fixture: dict[str, Any]) -> None:
-    """Skip unless the provisioning script gave the fixture users Krater app roles in Weave (it can only
-    do that once Weave's app roles and directory API, issue #163, are merged)."""
+    """Skip unless the provisioning script gave the fixture users Krater app roles in Weave. A fixture
+    from before it did has no `roles_provisioned` key."""
     if not fixture.get("roles_provisioned"):
-        pytest.skip("the Weave fixture has no Krater app roles (weave_e2e_provision.rb needs Weave #163)")
+        pytest.skip("the Weave fixture has no Krater app roles; re-run scripts/dev/weave_e2e_setup.py")
 
 
 @pytest.fixture(scope="module")
