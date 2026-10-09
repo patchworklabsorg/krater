@@ -264,8 +264,10 @@ arm64; SkyPilot publishes arm64 images, so that works.
 
 Networking:
 - Slack must reach `portal` over public HTTPS.
-- The admin-policy endpoint is **internal only**. SkyPilot's policy calls carry no authentication, so the endpoint must be
-  reachable only from the `skypilot` container.
+- The admin-policy endpoint (the launch gate) must be **publicly reachable** at `KRATER_PUBLIC_URL`: SkyPilot calls it
+  from members' own machines as well as from the `skypilot` container. Its URL token is visible to every member, so the
+  endpoint has no side effects and only the server-side call's decision is enforced. See
+  [skypilot-integration.md](skypilot-integration.md) and [dev/production.md](dev/production.md).
 
 **Stack:** Python + FastAPI + Postgres. Python matters because Krater imports SkyPilot's own request decoder
 (`sky.admin_policy.UserRequest`) and client SDK, rather than reimplementing SkyPilot's wire format.
@@ -282,9 +284,10 @@ Networking:
    Still to confirm in the spike: the full flow on Docker Compose.
 3. **What happens at the ceiling.** Proposed: warn at 80%, block new launches and tear down at 100%, with no grace
    period. Consider a small admin-configurable grace so a running training job isn't killed at 100.1%.
-4. **Weave changes.** Krater needs the Weave stack patchworklabsorg/weave#156 to #161, plus app roles
-   (patchworklabsorg/weave#165) and the directory API (patchworklabsorg/weave#166), tracked in issue #163. None of it
-   is merged yet. See [weave-integration.md](weave-integration.md).
+4. **Weave changes:** resolved. Krater needs the Weave stack patchworklabsorg/weave#156 to #161, plus app roles
+   (patchworklabsorg/weave#165) and the directory API (patchworklabsorg/weave#166), tracked in
+   patchworklabsorg/weave#163. All of it was merged to Weave `main` on 2026-10-07. Each deployment still needs Krater's
+   roles and the `directory` scope set up on its Weave app. See [weave-integration.md](weave-integration.md).
 
 ## Parked / future work
 
