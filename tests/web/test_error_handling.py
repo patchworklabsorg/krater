@@ -107,3 +107,23 @@ def test_a_production_500_carries_its_request_id_into_the_log_and_the_page(
     assert request_id in response.text
     (record,) = [r for r in caplog.records if r.getMessage().startswith("unhandled exception")]
     assert record.request_id == request_id
+
+
+def test_weave_being_down_shows_a_page_to_browsers(client: TestClient, login_as, weave_stub, monkeypatch) -> None:
+    from krater.weave import WeaveUnavailableError
+    from tests.conftest import MEMBER_SUB
+
+    login_as(MEMBER_SUB)
+
+    def _down(sub: str, *, fresh: bool = False):
+        raise WeaveUnavailableError("down")
+
+    monkeypatch.setattr(weave_stub, "get_user", _down)
+
+    page = client.get("/projects/new", headers={"Accept": "text/html"})
+    api = client.get("/projects/new", headers={"Accept": "application/json"})
+
+    assert page.status_code == 503
+    assert "Weave isn't answering" in page.text
+    assert api.status_code == 503
+    assert api.json() == {"detail": "Weave is unavailable"}

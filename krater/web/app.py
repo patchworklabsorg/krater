@@ -39,7 +39,7 @@ from krater.worker.app import app as procrastinate_app
 
 STATIC_DIR = Path(__file__).parent / "static"
 SESSION_COOKIE_NAME = "krater_session"
-_HTML_ERROR_PAGES = {403: "errors/403.html", 404: "errors/404.html"}
+_HTML_ERROR_PAGES = {403: "errors/403.html", 404: "errors/404.html", 503: "errors/503.html"}
 
 logger = logging.getLogger(__name__)
 
