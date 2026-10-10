@@ -7,6 +7,7 @@ by members' own machines), never by a browser with a Krater session.
 from __future__ import annotations
 
 import json
+import logging
 
 import sqlalchemy as sa
 import yaml
@@ -142,3 +143,19 @@ def test_allow_returns_a_body_shaped_like_the_accepted_fixture(
     decoded = decode_response(response.text)
     assert decoded.task["resources"]["autostop"] == {"idle_minutes": 30, "down": True}
     assert decoded.task["resources"]["max_hourly_cost"] == 5.0
+
+
+def test_a_reject_logs_who_and_where_in_the_message_itself(client: TestClient, monkeypatch, caplog) -> None:
+    # Neither log format prints `extra=` fields, so the context has to be part of the message.
+    monkeypatch.setattr(get_settings(), "skypilot_policy_token", TOKEN)
+    # Alembic's `fileConfig` (run when the test database is migrated) disables loggers that already exist.
+    monkeypatch.setattr(logging.getLogger("krater.web.routers.skypilot_policy"), "disabled", False)
+
+    with caplog.at_level("WARNING", logger="krater.web.routers.skypilot_policy"):
+        _post(client, config={"active_workspace": "ganymede-nope"}, request_name="jobs.launch")
+
+    (record,) = [r for r in caplog.records if "skypilot launch blocked" in r.getMessage()]
+    message = record.getMessage()
+    assert "request=jobs.launch" in message
+    assert "workspace=ganymede-nope" in message
+    assert "at_client_side=True" in message

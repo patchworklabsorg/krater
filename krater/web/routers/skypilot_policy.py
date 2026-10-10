@@ -73,14 +73,14 @@ async def skypilot_launch_policy(
     decision = launch_policy.decide(policy_request, db_session, settings)
 
     if isinstance(decision, launch_policy.Reject):
+        # In the message itself, not `extra=`: neither log format prints extra fields.
         logger.warning(
-            "skypilot launch blocked: %s",
+            "skypilot launch blocked (request=%s workspace=%s user=%s at_client_side=%s): %s",
+            policy_request.request_name,
+            policy_request.skypilot_config.get("active_workspace"),
+            policy_request.user.name if policy_request.user else None,
+            policy_request.at_client_side,
             decision.message,
-            extra={
-                "at_client_side": policy_request.at_client_side,
-                "workspace": policy_request.skypilot_config.get("active_workspace"),
-                "user": policy_request.user.name if policy_request.user else None,
-            },
         )
         return Response(content=decision.message, status_code=400, media_type="text/plain")
 

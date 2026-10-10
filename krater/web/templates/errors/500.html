@@ -6,6 +6,7 @@
 <section class="card">
   <h1>Something went wrong</h1>
   <p>An unexpected error occurred. It's been logged, and we're looking into it.</p>
+  {% if request_id %}<p class="muted">If you report it, include this reference: <code>{{ request_id }}</code></p>{% endif %}
   <p><a class="button" href="/">Back to Krater</a></p>
 </section>
 {% endblock %}

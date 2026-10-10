@@ -18,8 +18,9 @@ from starlette.staticfiles import StaticFiles
 
 from krater.config import get_settings
 from krater.services.errors import NotAllowed, NotFound
-from krater.web.logging_config import configure_logging
+from krater.web.logging_config import configure_logging, request_id_var
 from krater.web.rate_limit import RateLimitMiddleware
+from krater.web.request_id import RESPONSE_HEADER as REQUEST_ID_HEADER
 from krater.web.request_id import RequestIdMiddleware
 from krater.web.routers import (
     admin,
@@ -114,12 +115,21 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(Exception)
     def _handle_unexpected_error(request: Request, exc: Exception):
-        logger.exception("unhandled exception handling %s %s", request.method, request.url.path)
+        # This runs outside `RequestIdMiddleware` (see below), which has already reset the request id by now;
+        # put it back from `request.state` (shared with the middleware through the ASGI scope) for this line.
+        request_id = getattr(request.state, "request_id", None)
+        token = request_id_var.set(request_id)
+        try:
+            logger.exception("unhandled exception handling %s %s", request.method, request.url.path)
+        finally:
+            request_id_var.reset(token)
         # Outside production, let it propagate: local dev/tests want the real traceback, not a page
         # asking them to look at logs that are, in this case, right there in the terminal.
         if get_settings().env != "production":
             raise exc
-        response = templates.TemplateResponse(request, "errors/500.html", status_code=500)
+        response = templates.TemplateResponse(request, "errors/500.html", {"request_id": request_id}, status_code=500)
+        if request_id:
+            response.headers[REQUEST_ID_HEADER] = request_id
         # This handler runs on Starlette's `ServerErrorMiddleware`, outside `SecurityHeadersMiddleware` --
         # see `apply_security_headers`'s docstring for why it has to be called directly here too.
         apply_security_headers(response, get_settings())

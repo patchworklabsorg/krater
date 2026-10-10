@@ -3,6 +3,8 @@ otherwise), and HTML 403/404 pages for browsers while API callers keep JSON."""
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -84,3 +86,24 @@ def test_signed_out_redirect_is_not_turned_into_an_error_page(client: TestClient
 
     assert response.status_code == 303
     assert response.headers["location"].startswith("/login")
+
+
+def test_a_production_500_carries_its_request_id_into_the_log_and_the_page(
+    client: TestClient, login_as, monkeypatch, caplog
+) -> None:
+    from tests.conftest import MEMBER_SUB
+
+    login_as(MEMBER_SUB)
+    _break_home_page(monkeypatch)
+    monkeypatch.setattr(get_settings(), "env", "production")
+    # Alembic's `fileConfig` (run when the test database is migrated) disables loggers that already exist.
+    monkeypatch.setattr(logging.getLogger("krater.web.app"), "disabled", False)
+    no_raise_client = TestClient(client.app, raise_server_exceptions=False)
+    no_raise_client.cookies = client.cookies
+
+    response = no_raise_client.get("/")
+
+    request_id = response.headers["X-Request-ID"]
+    assert request_id in response.text
+    (record,) = [r for r in caplog.records if r.getMessage().startswith("unhandled exception")]
+    assert record.request_id == request_id
