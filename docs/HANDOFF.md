@@ -184,8 +184,9 @@ sign in.
    the roles and sets `roles_provisioned`, so the live role tests in `tests/live/test_weave_live.py` no longer skip
    (`docs/dev/weave-e2e.md`). Not yet run against a real Weave `main`.
 5. ~~**Production deployment pieces.**~~ Done in Compose: `proxy` and `backup` profiles, restart policies,
-   `KRATER_BIND_ADDRESS`, and the runbook `docs/dev/production.md`. Not yet run on a real host, and alastor may
-   want a NixOS version instead (that runbook's section 0).
+   `KRATER_BIND_ADDRESS`, and the runbook `docs/dev/production.md`. For alastor there's a NixOS module instead, on
+   the unpushed `krater-module` branch of `patchworklabsorg/infra`; it builds the image on the host, so there's no
+   registry (runbook section 0.1, and `.github/workflows/deploy.yml`). None of it has run on a real host yet.
 6. The remaining items in `docs/FUTURE.md`.
 
 ## 7. Gotchas learned the hard way

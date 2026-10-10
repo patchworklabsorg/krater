@@ -3,19 +3,59 @@
 How to run Krater for real members: public HTTPS, restarts, backups and the settings that differ from staging. Do the
 staging run first ([staging.md](staging.md)); this page assumes everything there already worked.
 
-## 0. Where it runs: decide first
+## 0. Where it runs
 
-The SPEC names `alastor` (arm64) as the host. **Weave on alastor isn't run with Compose.** Its containers are defined
-in the NixOS infra repo (`modules/weave/default.nix`), with secrets in agenix files (Weave's `CLAUDE.md`, "Deployment").
-That leaves two options:
+- **On alastor: the NixOS module.** Weave on alastor isn't run with Compose: its containers are systemd units defined
+  in [patchworklabsorg/infra](https://github.com/patchworklabsorg/infra), behind the host's Traefik, with agenix
+  secrets. Krater has the same: `modules/krater` and `hosts/alastor/krater.nix` in that repo (section 0.1).
+- **On any other Docker host: this Compose file**, with the opt-in `proxy` (Caddy, automatic TLS) and `backup`
+  profiles. Sections 2 to 5 describe that path.
 
-- **Krater in the infra repo, like Weave.** This is probably the right fit for alastor. Recreate the services in
-  `docker-compose.yml` as NixOS containers, and put TLS on whatever reverse proxy alastor already runs for Weave. Use
-  this page as the checklist of what those containers need. It hasn't been written yet: it needs the infra repo.
-- **This Compose file, on any Docker host.** That's what the rest of this page describes, using the opt-in `proxy`
-  (Caddy, automatic TLS) and `backup` profiles.
+Section 1 (DNS, Weave, Slack, Vast) applies to both. The image builds for arm64, which alastor is, as well as amd64
+(checked under emulation; not yet run on arm64 hardware).
 
-Krater's image is built for arm64 as well as amd64 (`Dockerfile`), but it hasn't been run on arm64 yet.
+### 0.1 On alastor (NixOS)
+
+There's no registry image. `krater-build` fetches one pushed commit of this repo, builds it on alastor with this
+repo's `Dockerfile` and tags it `krater:<sha>`. A deploy is the manual `Deploy` workflow
+(`.github/workflows/deploy.yml`), which runs as the `krater-deploy` user:
+
+```bash
+echo <full sha> > /var/lib/krater/source-rev
+sudo systemctl start krater-build     # the running site keeps serving meanwhile
+sudo systemctl restart krater-web     # migrates, then starts; krater-worker follows
+```
+
+Settings live in `hosts/alastor/krater.nix` (hostnames, Weave client ids, the fallback commit). Secrets are one agenix
+file, `secrets/krater-env.age`, with the keys listed at the top of `modules/krater/default.nix`, plus
+`secrets/krater-vast-key.age`. The module splits them so each container gets only its own. Getting a module change
+onto alastor takes a merge in `patchworklabsorg/infra`, then `nix flake update patchwork-infra` and a deploy from
+`jaspermayone/infra`. Krater releases don't need that, only the `Deploy` workflow.
+
+Backups are a `krater-backup` timer (03:30 UTC) writing to `/var/lib/krater/backups`. Restore as in section 4, with
+`docker exec -i krater-db` in place of `docker compose ... exec -T db`, user and database `krater`.
+
+**SkyPilot bootstrap.** Krater's SkyPilot admin token only exists after SkyPilot's first start, so it lives in a host
+file rather than in agenix. Basic auth is on only while its password file exists, because while it's on, members
+can't sign in. Do this once, as root on alastor:
+
+```bash
+# 1. Before SkyPilot's first start. If it already started without this, stop it and empty /var/lib/krater/skypilot.
+install -m 600 /dev/null /var/lib/krater/secrets/skypilot-basic-auth-password
+openssl rand -hex 24 > /var/lib/krater/secrets/skypilot-basic-auth-password
+systemctl restart krater-skypilot
+
+# 2. Mint Krater's token and make it a SkyPilot admin (port: the module's skypilot.port).
+pw=$(cat /var/lib/krater/secrets/skypilot-basic-auth-password)
+curl -u "admin:$pw" -X POST http://127.0.0.1:3012/users/service-account-tokens   -H 'Content-Type: application/json' -d '{"token_name": "krater-admin"}'
+curl -u "admin:$pw" -X POST http://127.0.0.1:3012/users/update   -H 'Content-Type: application/json' -d '{"user_id": "<service_account_user_id>", "role": "admin"}'
+
+# 3. Store the token (`sky_...` from step 2), turn basic auth off, and restart.
+install -m 600 /dev/null /var/lib/krater/secrets/skypilot-service-token
+echo '<token>' > /var/lib/krater/secrets/skypilot-service-token
+rm /var/lib/krater/secrets/skypilot-basic-auth-password
+systemctl restart krater-skypilot krater-web
+```
 
 ## 1. Before the first deploy
 
@@ -156,4 +196,5 @@ To upgrade SkyPilot, follow the pin rules in HANDOFF section 4.
 - **Alerting.** Nothing tells anyone when the worker's reconcile job fails. That job enforces budgets. At least
   watch `docker compose logs worker` and the `db-backup` logs until a monitor exists.
 - **Off-machine backup copies** and a screenshot volume backup (section 4).
-- **The NixOS version** of this stack for alastor (section 0).
+- **The NixOS module has never run on NixOS.** It evaluates and its units build (in a `nixos/nix` container), and
+  the image builds from a GitHub commit for arm64, but nothing has started on alastor yet.
