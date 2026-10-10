@@ -11,8 +11,6 @@ this list covers what comes after, plus loose ends from building v1.
   - a real Vast launch;
   - the 80% warning and 100% teardown with real spend;
   - how far `cost_report` drifts from the Vast bill. That sets the safety margin, if any, to take off the ceiling.
-- **Run the live Weave role tests** against Weave `main` (`docs/dev/weave-e2e.md`).
-  `scripts/dev/weave_e2e_provision.rb` now gives the fixture users Krater's app roles, but hasn't been run yet.
 - **Production deployment** ([dev/production.md](dev/production.md)). Compose now has opt-in `proxy` (Caddy, TLS)
   and `backup` (nightly `pg_dump`) profiles, restart policies and a bind address. For alastor, a NixOS module in
   `patchworklabsorg/infra` (`modules/krater`) builds the image on the host. Still open: merging that module, its

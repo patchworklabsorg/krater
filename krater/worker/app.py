@@ -64,7 +64,9 @@ def skypilot_reconcile(timestamp: int) -> None:
     settings = get_settings()
     session = get_sessionmaker()()
     try:
-        reconcile(session, get_skypilot_client(), warn_percent=settings.skypilot_budget_warn_percent)
+        reconcile(
+            session, get_skypilot_client(), get_weave_client(), warn_percent=settings.skypilot_budget_warn_percent
+        )
     except SkyPilotError:
         # `reconcile` already catches per-step SkyPilot errors and logs+continues; this is a last-resort
         # net for anything that still escapes (e.g. a step raising before its own try/except is reached).

@@ -2,15 +2,16 @@
 #
 # Provisions a local Weave with everything the live Krater<->Weave e2e check
 # needs: three users (a member, an admin and a non-member), a confidential
-# OAuth application for Krater with the scopes Krater asks for, plus
-# `directory` for its client_credentials token, and Krater's app roles
-# (member, reviewer, admin) on that application. Idempotent (upsert-by-email),
-# so it can be re-run against the same dev database.
+# OAuth application for Krater with the scopes Krater asks for plus
+# `directory` for its client_credentials token, and Krater's app roles on that
+# application. Idempotent (upsert-by-email), so it can be re-run against the
+# same dev database.
 #
-# Weave owns Krater's roles (patchworklabsorg/weave#165, #166): the member
-# gets `member`, the admin gets `member` and `admin`, and the non-member gets
-# nothing. The application stays open to everyone, so Weave lets the
-# non-member through and Krater itself has to refuse them.
+# Weave owns Krater's roles (patchworklabsorg/weave#165, #166). This script
+# creates the roles `member`, `reviewer` and `admin` on the app (the
+# ApplicationRole model), and gives the member `member` and the admin `member`
+# and `admin` (ApplicationRoleAssignment). The non-member gets no role. The
+# result says `roles_provisioned: true`, so the live role tests run.
 #
 # This file lives in the Krater repo (it's Krater's e2e fixture, not a Weave
 # behavior change) but runs inside a Weave checkout:
@@ -38,6 +39,9 @@ def upsert_user(email:, first_name:, last_name:)
     user.password = User.generate_secure_password
     user.email_confirmed_at = Time.current
   end
+  # Weave refuses every app to a user who hasn't accepted the Code of Conduct
+  # (AppAccess, patchworklabsorg/weave#171), so the fixture users accept it.
+  user.slack_coc_accepted_at ||= Time.current
   user.save!
   user
 end
@@ -55,33 +59,39 @@ app_name = "Krater (e2e)"
 # only ever available on the record returned by .create!. Recreate each run
 # rather than updating, so this script always knows the current secret.
 Doorkeeper::Application.where(name: app_name).destroy_all
+# `access_policy: "everyone"` lets the non-member through Weave, so the check
+# proves that Krater itself refuses someone without the `member` role.
 app = Doorkeeper::Application.create!(
   name: app_name,
   redirect_uri: redirect_uri,
   confidential: true,
-  # Open to everyone, so the non-member reaches Krater's own refusal page
-  # rather than being stopped at Weave's authorize step.
+  scopes: "openid profile email groups roles slack directory",
   access_policy: "everyone",
-  scopes: "openid profile email groups roles slack directory"
+  requires_code_of_conduct: true
 )
 log "oauth application ready: uid=#{app.uid}"
 
 # -- Krater's app roles ------------------------------------------------------------------------
 
-# Roles belong to the application, so destroying it above dropped them too (a
-# database cascade, with no callbacks or jobs). Create them fresh each run.
-roles = {
-  "member" => "Ganymede member",
-  "reviewer" => "Krater reviewer",
-  "admin" => "Krater admin"
-}.to_h do |key, name|
-  [key, ApplicationRole.create!(application: app, key: key, name: name)]
+role_names = {
+  "member" => "Member",
+  "reviewer" => "Reviewer",
+  "admin" => "Admin"
+}
+
+roles = role_names.to_h do |key, name|
+  role = ApplicationRole.find_or_create_by!(application: app, key: key) { |r| r.name = name }
+  [key, role]
 end
 
-{ member => %w[member], admin => %w[member admin] }.each do |user, keys|
-  keys.each { |key| roles.fetch(key).assignments.create!(assignee: user) }
+def assign_role(role, user)
+  ApplicationRoleAssignment.find_or_create_by!(role: role, assignee: user)
 end
-log "app roles ready: #{roles.keys.join(', ')}"
+
+assign_role(roles.fetch("member"), member)
+assign_role(roles.fetch("member"), admin)
+assign_role(roles.fetch("admin"), admin)
+log "app roles ready: #{roles.keys.join(', ')}; member=[member], admin=[member, admin], non_member=[]"
 
 result = {
   issuer: (ENV["OIDC_ISSUER"].presence || "http://localhost:3000"),

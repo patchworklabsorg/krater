@@ -106,8 +106,8 @@ Both are dead ends without them, and neither is documented by SkyPilot itself --
    flow `docs/skypilot-integration.md` section 0 describes. A service-account token minted with the
    default (`user`) role is a legitimate, distinct, non-admin SkyPilot identity, which is what the launch
    gate actually cares about -- but it isn't an email, so it can't appear in Krater's own
-   `allowed_users` (built entirely from Weave emails, `krater/services/skypilot_sync.py`'s
-   `_team_emails`). The script grants this one test identity access to the demo project's workspace with
+   `allowed_users` (built entirely from Weave emails of active members, `krater/services/skypilot_sync.py`'s
+   `_provision_workspace`). The script grants this one test identity access to the demo project's workspace with
    one extra, out-of-band `workspaces/batch_add_users` call (by the SA's internal id, not through
    Krater), so the `sky` CLI can actually target it -- Krater's own provisioning contract is verified
    separately, by inspecting `allowed_users` after a real `sync_workspaces` call, without needing that

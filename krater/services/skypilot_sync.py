@@ -8,7 +8,10 @@ normal schedule) should never double up work or double-write ledger/audit rows.
 The reconciler acts as a system process with no human behind it, so every `audit.record` call here
 passes `actor=None` (see `AuditEvent.actor_id`, nullable for exactly this reason).
 
-See `docs/skypilot-integration.md` sections 1, 3 and 4, and `docs/dev/skypilot-spike.md` for the facts
+Workspace access follows Weave: `allowed_users` holds only team members whom Weave's directory lists as
+active with the `member` role (one `list_users_with_role` call per reconcile run, through `krater.weave`).
+
+See `docs/skypilot-integration.md` sections 0, 1, 3 and 4, and `docs/dev/skypilot-spike.md` for the facts
 this was built against (workspace naming, `allowed_users` semantics, the Vast-only cloud denylist, and
 `cost_report`'s row shape).
 """
@@ -24,8 +27,10 @@ from sqlalchemy.orm import Session
 
 from krater.models import AuditEvent, Project, ProjectStatus, SpendSnapshot, SpendSource, User
 from krater.services import audit, budget
+from krater.services.actor import GROUP_MEMBER
 from krater.skypilot.client import SkyPilotClient
 from krater.skypilot.errors import SkyPilotError, SkyPilotWorkspaceNotFoundError
+from krater.weave import WeaveClient, WeaveUnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +52,7 @@ COST_REPORT_DAYS = 3650
 AUDIT_WORKSPACE_TORN_DOWN = "skypilot_workspace_torn_down"
 AUDIT_BUDGET_WARNING = "budget_warning"
 AUDIT_BUDGET_TEARDOWN = "budget_teardown"
+AUDIT_ACCESS_REMOVED = "skypilot_access_removed"
 
 
 def workspace_name_for(project_id: uuid.UUID) -> str:
@@ -59,14 +65,29 @@ def workspace_name_for(project_id: uuid.UUID) -> str:
     return f"ganymede-{project_id.hex[:12]}"
 
 
-def _team_emails(session: Session, project: Project) -> list[str]:
-    """The submitter's email plus the emails of the credited builders on the project's latest revision
-    (`current_revision`: the newest revision, draft or submitted -- see `krater.services.projects`)."""
-    people = [project.submitter]
+def _team(session: Session, project: Project) -> list[User]:
+    """The submitter plus the credited builders on the project's latest revision (`current_revision`:
+    the newest revision, draft or submitted -- see `krater.services.projects`)."""
+    people = {project.submitter.id: project.submitter}
     revision = project.current_revision
     if revision is not None and revision.credited_builder_ids:
-        people.extend(session.scalars(sa.select(User).where(User.id.in_(revision.credited_builder_ids))))
-    return sorted({person.email for person in people})
+        for person in session.scalars(sa.select(User).where(User.id.in_(revision.credited_builder_ids))):
+            people[person.id] = person
+    return sorted(people.values(), key=lambda person: person.email)
+
+
+def _active_member_subs(weave_client: WeaveClient) -> frozenset[str] | None:
+    """The `sub` of everyone Weave lists as active with the `member` role, or `None` if Weave can't be
+    reached. One directory call for the whole reconcile run."""
+    try:
+        records = weave_client.list_users_with_role(GROUP_MEMBER)
+    except WeaveUnavailableError:
+        logger.warning(
+            "krater.skypilot could not reach Weave's directory; leaving every workspace's allowed_users as it is",
+            exc_info=True,
+        )
+        return None
+    return frozenset(record.sub for record in records if record.active)
 
 
 def _active_projects(session: Session) -> list[Project]:
@@ -89,13 +110,20 @@ def _per_project(session: Session, step: str, project: Project, work: Callable[[
         logger.exception("krater.skypilot reconcile step %s failed for project %s; continuing", step, project_id)
 
 
-def sync_workspaces(session: Session, client: SkyPilotClient) -> None:
+def sync_workspaces(session: Session, client: SkyPilotClient, weave_client: WeaveClient) -> None:
     """Keep every active project's SkyPilot workspace in step, and tear down finished ones.
 
     - Every `approved`/`pending_completion_review`/`completion_changes_requested` project gets (or
       keeps) a private, Vast-only workspace named `workspace_name_for(project.id)`, with
-      `allowed_users` kept equal to `_team_emails`. Always calls `create`/`update` (never skips), so a
-      team change is picked up on the very next reconcile -- cheap, and safe to re-run.
+      `allowed_users` kept equal to the emails of the team members (`_team`) whom Weave lists as
+      active with the `member` role. Always calls `create`/`update` (never skips), so a team or role
+      change is picked up on the very next reconcile -- cheap, and safe to re-run. The list sent is
+      kept on `Project.skypilot_allowed_users`, so taking someone out of it because they lost the
+      role writes exactly one `skypilot_access_removed` audit event.
+    - If Weave's directory can't be reached, no workspace is created or updated in this run. Removing
+      everyone during a Weave outage would cut off every team, and adding people unchecked would skip
+      the role check, so the workspaces stay as they are until a run reaches Weave. Teardown of
+      finished projects (below) doesn't need Weave and still runs.
     - Every `completed`/`withdrawn` project that still has a workspace gets its clusters downed, its
       managed jobs cancelled, one final `cost_report` total recorded (as a `SpendSnapshot`, if it
       changed, and in the `skypilot_workspace_torn_down` audit event's payload) *before* the workspace
@@ -109,22 +137,53 @@ def sync_workspaces(session: Session, client: SkyPilotClient) -> None:
 
     Each project is handled separately (`_per_project`): a failure for one is logged and skipped.
     """
-    for project in _active_projects(session):
-        _per_project(session, "sync_workspaces", project, lambda p=project: _provision_workspace(session, client, p))
+    member_subs = _active_member_subs(weave_client)
+    if member_subs is not None:
+        for project in _active_projects(session):
+            _per_project(
+                session,
+                "sync_workspaces",
+                project,
+                lambda p=project: _provision_workspace(session, client, p, member_subs),
+            )
 
     stmt = sa.select(Project).where(Project.status.in_(_TERMINAL_STATUSES), Project.skypilot_workspace.is_not(None))
     for project in list(session.scalars(stmt)):
         _per_project(session, "sync_workspaces", project, lambda p=project: _tear_down_workspace(session, client, p))
 
 
-def _provision_workspace(session: Session, client: SkyPilotClient, project: Project) -> None:
-    allowed_users = _team_emails(session, project)
+def _provision_workspace(
+    session: Session, client: SkyPilotClient, project: Project, member_subs: frozenset[str]
+) -> None:
+    team = _team(session, project)
+    allowed_users = sorted({person.email for person in team if person.weave_sub in member_subs})
     if project.skypilot_workspace is None:
         name = workspace_name_for(project.id)
         client.create_workspace(name, allowed_users=allowed_users)
         project.skypilot_workspace = name
     else:
+        # A workspace provisioned before Krater stored this list got the whole team.
+        previous = project.skypilot_allowed_users
+        if previous is None:
+            previous = sorted({person.email for person in team})
         client.update_workspace(project.skypilot_workspace, allowed_users=allowed_users)
+        for person in team:
+            lost_role = person.weave_sub not in member_subs
+            if lost_role and person.email in previous and person.email not in allowed_users:
+                audit.record(
+                    session,
+                    None,
+                    AUDIT_ACCESS_REMOVED,
+                    project=project,
+                    payload={
+                        "workspace": project.skypilot_workspace,
+                        "user_id": str(person.id),
+                        "weave_sub": person.weave_sub,
+                        "email": person.email,
+                    },
+                    reason="Weave no longer lists this person as an active member",
+                )
+    project.skypilot_allowed_users = allowed_users
     session.flush()
 
 
@@ -168,6 +227,7 @@ def _tear_down_workspace(session: Session, client: SkyPilotClient, project: Proj
     if not already_gone:
         client.delete_workspace(name)
     project.skypilot_workspace = None
+    project.skypilot_allowed_users = None
     audit.record(
         session,
         None,
@@ -341,7 +401,7 @@ def current_budget_flag(session: Session, project: Project, *, warn_percent: int
     return None
 
 
-def reconcile(session: Session, client: SkyPilotClient, *, warn_percent: int) -> None:
+def reconcile(session: Session, client: SkyPilotClient, weave_client: WeaveClient, *, warn_percent: int) -> None:
     """Run `sync_spend`, `enforce_budgets` and `sync_workspaces` in order, committing after each step.
 
     `sync_spend`/`enforce_budgets` before `sync_workspaces`: active projects get measured and their
@@ -356,12 +416,13 @@ def reconcile(session: Session, client: SkyPilotClient, *, warn_percent: int) ->
     reconcile (this function itself doesn't retry within a single call, since the periodic task is
     already the retry loop). Within `enforce_budgets` and `sync_workspaces`, the same applies per
     project (`_per_project`), so a step only fails as a whole on a call that isn't per project (e.g.
-    `sync_spend`'s single `cost_report`).
+    `sync_spend`'s single `cost_report`). A Weave outage never fails a step: `sync_workspaces` leaves
+    `allowed_users` as it is and carries on.
     """
     steps = (
         ("sync_spend", lambda: sync_spend(session, client)),
         ("enforce_budgets", lambda: enforce_budgets(session, client, warn_percent=warn_percent)),
-        ("sync_workspaces", lambda: sync_workspaces(session, client)),
+        ("sync_workspaces", lambda: sync_workspaces(session, client, weave_client)),
     )
     for name, step in steps:
         try:

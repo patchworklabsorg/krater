@@ -2,8 +2,8 @@
 
 Unlike the rest of the suite, this drives a **real** Weave (OIDC discovery/JWKS, the magic-link sign-in
 flow and the `/oauth/authorize` consent screen) and a **real** running Krater in `KRATER_WEAVE_MODE=live`,
-over plain HTTP -- no mocks. Weave owns Krater's roles: the role checks below need the fixture users to hold
-Krater's app roles in Weave, which `scripts/dev/weave_e2e_provision.rb` sets up, and skip otherwise.
+over plain HTTP -- no mocks. Weave owns Krater's roles: `scripts/dev/weave_e2e_provision.rb` gives the fixture
+users Krater's app roles and marks the fixture `roles_provisioned`. The role checks skip without that mark.
 See `docs/dev/weave-e2e.md` for how to bring both up and provision the fixture users this file reads.
 
 It does the same OAuth Authorization Code + PKCE round trip a browser does (confirm a magic link, submit
@@ -118,8 +118,8 @@ def _krater_user(email: str) -> dict[str, Any] | None:
 
 
 def _needs_weave_roles(fixture: dict[str, Any]) -> None:
-    """Skip unless the provisioning script gave the fixture users Krater app roles in Weave. A fixture
-    from before it did has no `roles_provisioned` key."""
+    """Skip unless the provisioning script gave the fixture users Krater app roles in Weave. An old fixture,
+    written before the script created roles, has no `roles_provisioned` mark."""
     if not fixture.get("roles_provisioned"):
         pytest.skip("the Weave fixture has no Krater app roles; re-run scripts/dev/weave_e2e_setup.py")
 
@@ -324,3 +324,15 @@ def test_directory_lists_admins(fixture: dict[str, Any], weave_client: LiveWeave
     subs = {record.sub for record in weave_client.list_users_with_role("ganymede:admin")}
 
     assert fixture["users"]["admin"]["sub"] in subs
+
+
+def test_directory_lists_members(fixture: dict[str, Any], weave_client: LiveWeaveClient) -> None:
+    """The one call the SkyPilot reconciler makes to decide who keeps workspace access."""
+    _needs_weave_roles(fixture)
+
+    records = {record.sub: record for record in weave_client.list_users_with_role("ganymede:member")}
+
+    assert fixture["users"]["member"]["sub"] in records
+    assert fixture["users"]["admin"]["sub"] in records
+    assert fixture["users"]["non_member"]["sub"] not in records
+    assert all(records[fixture["users"][key]["sub"]].active for key in ("member", "admin"))

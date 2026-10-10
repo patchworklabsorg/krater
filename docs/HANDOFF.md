@@ -107,7 +107,8 @@ sign in.
     Weave's directory API on every action;
   - the proposal → review → approval workflow, amendments, and completion review;
   - the configurable approval policy and the append-only budget ledger;
-  - SkyPilot: the launch gate and the reconcile job (workspaces, spend, 80% warning, 100% teardown);
+  - SkyPilot: the launch gate and the reconcile job (workspaces, spend, 80% warning, 100% teardown). Workspace
+    access follows Weave: someone who loses `member` leaves every project workspace on the next reconcile;
   - Slack review channels;
   - screenshot uploads and the gallery;
   - the `/pricing` page and the budget estimator;
@@ -180,9 +181,9 @@ sign in.
    Slack's `force` flag: without it, Slack invited nobody whenever any one invitee failed, including people already
    in the channel. (Found from Slack's documented behavior; not yet seen against real Slack.)
 3. ~~**A CI job for the SkyPilot contract test**~~ Done (section 4).
-4. ~~**Give the Weave e2e fixture users Krater's app roles.**~~ Done: `scripts/dev/weave_e2e_provision.rb` creates
-   the roles and sets `roles_provisioned`, so the live role tests in `tests/live/test_weave_live.py` no longer skip
-   (`docs/dev/weave-e2e.md`). Not yet run against a real Weave `main`.
+4. ~~**Live Weave role tests.**~~ Done: `scripts/dev/weave_e2e_provision.rb` creates Krater's app roles in Weave
+   and gives them to the fixture users. All 8 tests in `tests/live/test_weave_live.py` pass against Weave `main`
+   (`docs/dev/weave-e2e.md`).
 5. ~~**Production deployment pieces.**~~ Done in Compose: `proxy` and `backup` profiles, restart policies,
    `KRATER_BIND_ADDRESS`, and the runbook `docs/dev/production.md`. For alastor there's a NixOS module instead, on
    the unpushed `krater-module` branch of `patchworklabsorg/infra`; it builds the image on the host, so there's no

@@ -30,11 +30,14 @@ from krater.services.skypilot_sync import workspace_name_for
 SUBMITTER_EMAIL = "mia@example.com"
 REVIEWER_EMAIL = "rae@example.com"
 
+# Their stub Weave subs. The reconciler only lets in people the stub directory lists as members.
+STUB_SUBS = {SUBMITTER_EMAIL: "PWLMEMBERONE", REVIEWER_EMAIL: "PWLREVIEWERONE"}
+
 
 def _actor(session, *, email: str, name: str, groups: frozenset[str]) -> Actor:
     user = session.query(User).filter_by(email=email).one_or_none()
     if user is None:
-        user = User(weave_sub=f"CONTRACT-{email}", display_name=name, email=email)
+        user = User(weave_sub=STUB_SUBS[email], display_name=name, email=email)
         session.add(user)
         session.flush()
     return Actor(user=user, groups=groups)

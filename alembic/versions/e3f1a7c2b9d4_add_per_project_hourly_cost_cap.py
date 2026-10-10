@@ -1,7 +1,7 @@
 """add per-project hourly cost cap
 
 Revision ID: e3f1a7c2b9d4
-Revises: b7ba424bfaeb
+Revises: 5f3b46edeb95
 Create Date: 2026-10-10 18:40:00.000000
 
 `projects.max_hourly_cost_cents`: an admin-set hourly price cap for this project's SkyPilot launches.
@@ -17,7 +17,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "e3f1a7c2b9d4"
-down_revision: str | Sequence[str] | None = "b7ba424bfaeb"
+down_revision: str | Sequence[str] | None = "5f3b46edeb95"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

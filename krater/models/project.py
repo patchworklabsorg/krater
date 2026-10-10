@@ -6,7 +6,7 @@ import uuid
 from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from krater.db import Base
@@ -56,6 +56,9 @@ class Project(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         sa.Boolean, nullable=False, default=False, server_default=sa.false()
     )
     skypilot_workspace: Mapped[str | None] = mapped_column(sa.String(255), nullable=True)
+    # The `allowed_users` Krater last sent to the workspace, so the reconciler can tell who it removed.
+    # `None` until the first update after this column was added (the workspace then holds the whole team).
+    skypilot_allowed_users: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
     # This project's own hourly price cap for a SkyPilot launch, set by an admin
     # (`krater.services.projects.set_hourly_cost_cap`). `None` means the global default,
     # `Settings.skypilot_max_hourly_cost_cents`; see `krater.services.launch_policy.hourly_cap_cents`.
