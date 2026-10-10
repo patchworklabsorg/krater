@@ -61,7 +61,7 @@ ENFORCED_REQUEST_NAMES = frozenset(
 
 #: Project statuses in which compute launches are allowed. Draft/pending/changes-requested projects
 #: haven't been funded yet; completed/withdrawn ones no longer have live budget to spend.
-_ACTIVE_STATUSES = frozenset(
+LAUNCHABLE_STATUSES = frozenset(
     {ProjectStatus.APPROVED, ProjectStatus.PENDING_COMPLETION_REVIEW, ProjectStatus.COMPLETION_CHANGES_REQUESTED}
 )
 
@@ -249,7 +249,7 @@ def decide(request: PolicyRequest, session: Session, settings: Settings) -> Poli
         if project is None:
             return Reject(f"Workspace '{workspace}' isn't a Ganymede project on Krater. {_WORKSPACE_HELP}")
 
-        if project.status not in _ACTIVE_STATUSES:
+        if project.status not in LAUNCHABLE_STATUSES:
             if not _is_on_team(session, project, request.user):
                 return Reject(_GENERIC_NOT_ACTIVE_MESSAGE)
             return Reject(
@@ -275,4 +275,4 @@ def decide(request: PolicyRequest, session: Session, settings: Settings) -> Poli
     return Allow(task=task, skypilot_config=skypilot_config)
 
 
-__all__ = ["Allow", "ENFORCED_REQUEST_NAMES", "PolicyDecision", "Reject", "decide"]
+__all__ = ["ENFORCED_REQUEST_NAMES", "LAUNCHABLE_STATUSES", "Allow", "PolicyDecision", "Reject", "decide"]

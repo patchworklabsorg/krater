@@ -34,7 +34,7 @@
     </p>
   {% endif %}
 
-  {% if project.skypilot_workspace %}
+  {% if can_launch %}
     <p class="skypilot-hint">
       SkyPilot workspace: <code>{{ project.skypilot_workspace }}</code>.
       Sign in with <code>sky api login</code> and launch with

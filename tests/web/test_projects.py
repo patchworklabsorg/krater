@@ -550,3 +550,26 @@ def test_an_admin_cannot_add_budget_to_their_own_project(
     from krater.services import budget as budget_service
 
     assert budget_service.ceiling_cents(db_session, project) == 10_000
+
+
+# --------------------------------------------------------------------------------------------------
+# Launch instructions only while the launch gate would allow a launch
+# --------------------------------------------------------------------------------------------------
+
+
+def test_launch_instructions_disappear_once_a_project_is_withdrawn(
+    client: TestClient, login_as, approved_project, db_session: Session
+) -> None:
+    member = login_as(MEMBER_SUB)
+    reviewer = login_as(REVIEWER_SUB)
+    project = approved_project(member, reviewer)
+    project.skypilot_workspace = "ganymede-abc123abc123"
+    db_session.flush()
+    login_as(MEMBER_SUB)
+
+    assert "sky launch -w ganymede-abc123abc123" in client.get(f"/projects/{project.id}").text
+
+    project.status = ProjectStatus.WITHDRAWN
+    db_session.flush()
+
+    assert "sky launch -w" not in client.get(f"/projects/{project.id}").text

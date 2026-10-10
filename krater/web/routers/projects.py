@@ -34,6 +34,7 @@ from krater.services import projects as project_service
 from krater.services import screenshots as screenshot_service
 from krater.services.actor import Actor
 from krater.services.errors import InvalidState, NotAllowed, NotFound, ValidationFailed
+from krater.services.launch_policy import LAUNCHABLE_STATUSES
 from krater.services.skypilot_sync import current_budget_flag
 from krater.slack import get_slack_client
 from krater.storage import ObjectStore, get_object_store
@@ -338,6 +339,9 @@ def _build_detail_context(
         "users_by_id": users_by_id,
         "is_submitter": is_submitter,
         "is_admin": actor.is_admin,
+        # The workspace outlives a finished project until the reconciler tears it down: only show how to launch
+        # into it while the launch gate would actually allow it.
+        "can_launch": project.skypilot_workspace is not None and project.status in LAUNCHABLE_STATUSES,
         "has_draft": has_draft,
         "can_edit_draft": is_submitter and has_draft,
         "can_submit": is_submitter and has_draft and current.kind is not RevisionKind.COMPLETION,
