@@ -177,11 +177,15 @@ write any email there, so it doesn't decide who sees details.
 **Change** the request (return the encoded mutated request) on every non-rejected call, `validate` included, so that:
 - the cluster autodowns after idling (`skypilot_autodown_idle_minutes`, `down: true`) unless the user's own
   `autostop` is already at least as strict;
-- every resource candidate's `max_hourly_cost` is capped at `min(the user's value, skypilot_max_hourly_cost_cents /
-  100 / num_nodes)`. SkyPilot applies the cap to each node, so it's split across the task's `num_nodes` to keep the
-  whole launch under it (Vast is single-node anyway; this covers any other cloud a workspace might allow). Vast bids
-  are clamped to the same per-node figure. The simple version is a global default; later it could be something like
-  5% of the remaining budget.
+- every resource candidate's `max_hourly_cost` is capped at `min(the user's value, the project's hourly cap /
+  num_nodes)`. The project's cap is its own `max_hourly_cost_cents`, which an admin sets on the project page, or else
+  the global default `skypilot_max_hourly_cost_cents`. SkyPilot applies the cap to each node, so it's split across the
+  task's `num_nodes` to keep the whole launch under it (Vast is single-node anyway; this covers any other cloud a
+  workspace might allow). Vast bids are clamped to the same per-node figure.
+- a request whose workspace isn't a Krater project is never price-capped (autodown still applies). Only `validate`/
+  `optimize` hops get that far, since enforced ones are rejected first, and they often arrive without
+  `active_workspace`. One `sky launch` makes several policy calls; capping that hop at the global default could cut a
+  project's higher cap before the hop that carries the workspace sees it.
 
 Labelling the cluster with the project ID (for Vast attribution) wasn't verified in the spike (resource labels on
 Vast specifically weren't tested) and isn't implemented yet -- the workspace alone attributes spend for now.

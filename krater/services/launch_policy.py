@@ -163,26 +163,35 @@ def _num_nodes(task: dict[str, Any]) -> int:
     return 1
 
 
-def per_node_cap_dollars(task: dict[str, Any], settings: Settings) -> float:
-    """The hourly cap for each machine in `task`: the configured cap split evenly across its `num_nodes`.
+def hourly_cap_cents(project: Project, settings: Settings) -> int:
+    """The hourly price cap for one launch into `project`: its own `max_hourly_cost_cents` if an admin set
+    one, otherwise the global default (`settings.skypilot_max_hourly_cost_cents`)."""
+    if project.max_hourly_cost_cents is not None:
+        return project.max_hourly_cost_cents
+    return settings.skypilot_max_hourly_cost_cents
+
+
+def per_node_cap_dollars(task: dict[str, Any], cap_cents: int) -> float:
+    """The hourly cap for each machine in `task`: `cap_cents` split evenly across its `num_nodes`.
 
     SkyPilot applies `max_hourly_cost` (and Vast applies a bid) to each node, so capping every node at the
     full amount let a 20-node launch cost 20 times the cap. Splitting it keeps the whole launch under the
     cap; a launch with more nodes than the cap can pay for finds no offers, which is the point.
     """
-    return settings.skypilot_max_hourly_cost_cents / 100 / _num_nodes(task)
+    return cap_cents / 100 / _num_nodes(task)
 
 
-def _apply_mutations(task: dict[str, Any], settings: Settings) -> dict[str, Any]:
-    """Force autodown and cap `max_hourly_cost` (and any Vast bid override) on every resource candidate
-    in `task`, in place."""
-    cap_dollars = per_node_cap_dollars(task, settings)
+def _apply_mutations(task: dict[str, Any], settings: Settings, cap_cents: int | None) -> dict[str, Any]:
+    """Force autodown on every resource candidate in `task`, in place, and cap `max_hourly_cost` (and any
+    Vast bid override) at `cap_cents` split across its nodes -- unless `cap_cents` is `None` (see `decide`)."""
+    cap_dollars = per_node_cap_dollars(task, cap_cents) if cap_cents is not None else None
     resources = task.setdefault("resources", {})
     for resource in _resource_items(resources):
-        existing_cost = resource.get("max_hourly_cost")
-        resource["max_hourly_cost"] = (
-            min(existing_cost, cap_dollars) if isinstance(existing_cost, int | float) else cap_dollars
-        )
+        if cap_dollars is not None:
+            existing_cost = resource.get("max_hourly_cost")
+            resource["max_hourly_cost"] = (
+                min(existing_cost, cap_dollars) if isinstance(existing_cost, int | float) else cap_dollars
+            )
 
         autostop = resource.get("autostop")
         user_is_stricter = (
@@ -200,7 +209,7 @@ def _apply_mutations(task: dict[str, Any], settings: Settings) -> dict[str, Any]
         # `vast.create_instance_kwargs` bid, independent of (and layered on top of) the request's
         # top-level `skypilot_config` clamped in `decide()` below.
         overrides = resource.get("_cluster_config_overrides")
-        if isinstance(overrides, dict):
+        if cap_dollars is not None and isinstance(overrides, dict):
             _clamp_vast_bid(overrides.get("vast"), cap_dollars)
     return task
 
@@ -209,24 +218,31 @@ def decide(request: PolicyRequest, session: Session, settings: Settings) -> Poli
     """Decide whether to allow `request`'s launch.
 
     Only `request_name`s in `ENFORCED_REQUEST_NAMES` can be rejected -- see that constant's docstring.
-    Every request (enforced or not) that isn't rejected gets `task` mutated the same way: autodown
-    forced after `settings.skypilot_autodown_idle_minutes` (unless the user's own `autostop` is already
-    stricter), every resource's `max_hourly_cost` capped at
-    `min(user's value, settings.skypilot_max_hourly_cost_cents / 100 / num_nodes)` (see
-    `per_node_cap_dollars`), and any Vast `create_instance_kwargs`
-    bid (`price`/`bid_price`, task-level or in `skypilot_config`) clamped to the same cap (see
+    Every request that isn't rejected gets autodown forced after `settings.skypilot_autodown_idle_minutes`
+    (unless the user's own `autostop` is already stricter). When the request's workspace is a Krater
+    project, every resource's `max_hourly_cost` is also capped at `min(user's value, the project's cap /
+    num_nodes)` (see `hourly_cap_cents`, `per_node_cap_dollars`), and any Vast `create_instance_kwargs` bid
+    (`price`/`bid_price`, task-level or in `skypilot_config`) clamped to the same figure (see
     `_clamp_vast_bid`) -- `max_hourly_cost` alone doesn't stop a member from bidding above it directly.
+
+    A request with no project workspace is never capped. Every request that can provision is enforced, and
+    an enforced one without a project workspace is rejected, so that only ever lets through a `validate`/
+    `optimize` hop, which routinely arrives without `active_workspace` (see `ENFORCED_REQUEST_NAMES`). One
+    `sky launch` makes several policy calls, and capping that hop at the global default could cut a
+    project's higher cap before the launch hop that carries the workspace ever sees it.
 
     Does at most three simple, indexed reads (the project lookup, plus `budget.remaining_cents`'s two
     selects) and never writes -- this is called on the hot path of every `sky launch`.
     """
     workspace = request.skypilot_config.get("active_workspace")
+    project = None
+    if workspace and workspace != "default":
+        project = session.scalar(sa.select(Project).where(Project.skypilot_workspace == workspace))
 
     if request.request_name in ENFORCED_REQUEST_NAMES:
         if not workspace or workspace == "default":
             return Reject(f"No Ganymede project workspace selected. {_WORKSPACE_HELP}")
 
-        project = session.scalar(sa.select(Project).where(Project.skypilot_workspace == workspace))
         if project is None:
             return Reject(f"Workspace '{workspace}' isn't a Ganymede project on Krater. {_WORKSPACE_HELP}")
 
@@ -236,10 +252,20 @@ def decide(request: PolicyRequest, session: Session, settings: Settings) -> Poli
         if budget.remaining_cents(session, project) <= 0:
             return Reject(_BUDGET_MESSAGE)
 
-    task = _apply_mutations(copy.deepcopy(request.task), settings)
+    cap_cents = hourly_cap_cents(project, settings) if project is not None else None
+    task = _apply_mutations(copy.deepcopy(request.task), settings, cap_cents)
     skypilot_config = copy.deepcopy(request.skypilot_config)
-    _clamp_vast_bid(skypilot_config.get("vast"), per_node_cap_dollars(task, settings))
+    if cap_cents is not None:
+        _clamp_vast_bid(skypilot_config.get("vast"), per_node_cap_dollars(task, cap_cents))
     return Allow(task=task, skypilot_config=skypilot_config)
 
 
-__all__ = ["ENFORCED_REQUEST_NAMES", "LAUNCHABLE_STATUSES", "Allow", "PolicyDecision", "Reject", "decide"]
+__all__ = [
+    "ENFORCED_REQUEST_NAMES",
+    "LAUNCHABLE_STATUSES",
+    "Allow",
+    "PolicyDecision",
+    "Reject",
+    "decide",
+    "hourly_cap_cents",
+]

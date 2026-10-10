@@ -239,14 +239,28 @@ def test_validate_is_never_rejected_for_exhausted_budget(db_session: Session, me
     assert isinstance(decision, launch_policy.Allow)
 
 
-def test_validate_still_gets_the_same_mutations(db_session: Session) -> None:
+def test_validate_without_a_project_gets_autodown_but_no_price_cap(db_session: Session) -> None:
+    # The price cap belongs to a project; capping a workspace-less hop at the default could cut a project's
+    # higher cap before the launch hop that carries the workspace sees it (see `decide`'s docstring).
     task = {"resources": {"infra": "vast", "max_hourly_cost": 999.0}}
 
     decision = launch_policy.decide(_request(task=task, workspace=None, request_name="validate"), db_session, SETTINGS)
 
     assert isinstance(decision, launch_policy.Allow)
-    assert decision.task["resources"]["max_hourly_cost"] == 5.0
+    assert decision.task["resources"]["max_hourly_cost"] == 999.0
     assert decision.task["resources"]["autostop"] == {"idle_minutes": 30, "down": True}
+
+
+def test_validate_into_a_project_workspace_gets_that_projects_cap(db_session: Session, member: Actor) -> None:
+    project = _approved_project(db_session, member)
+    project.max_hourly_cost_cents = 200
+    db_session.flush()
+    task = {"resources": {"infra": "vast", "max_hourly_cost": 999.0}}
+
+    decision = launch_policy.decide(_request(task=task, request_name="validate"), db_session, SETTINGS)
+
+    assert isinstance(decision, launch_policy.Allow)
+    assert decision.task["resources"]["max_hourly_cost"] == 2.0
 
 
 # --------------------------------------------------------------------------------------------------
@@ -462,14 +476,12 @@ def test_vast_bid_below_the_cap_is_kept(db_session: Session, member: Actor) -> N
     assert decision.skypilot_config["vast"]["create_instance_kwargs"]["price"] == 1.0
 
 
-def test_vast_bid_is_capped_for_a_never_rejected_request_name_too(db_session: Session) -> None:
-    """The cap applies to `skypilot_config` on every allowed call, including `validate` (no project or
-    workspace needed at all), matching `max_hourly_cost`'s own "advisory calls still get mutated" rule."""
+def test_vast_bid_is_capped_for_a_never_rejected_request_name_too(db_session: Session, member: Actor) -> None:
+    """The bid is clamped on every allowed call into a project workspace, `validate` included."""
+    _approved_project(db_session, member)
     config = {"vast": {"create_instance_kwargs": {"price": 99.0}}}
 
-    decision = launch_policy.decide(
-        _request(workspace=None, request_name="validate", skypilot_config=config), db_session, SETTINGS
-    )
+    decision = launch_policy.decide(_request(request_name="validate", skypilot_config=config), db_session, SETTINGS)
 
     assert isinstance(decision, launch_policy.Allow)
     assert decision.skypilot_config["vast"]["create_instance_kwargs"]["price"] == 5.0
@@ -564,3 +576,78 @@ def test_a_project_with_no_budget_at_all_gets_the_budget_message(db_session: Ses
     assert isinstance(decision, launch_policy.Reject)
     assert "no compute budget left" in decision.message
     assert "$0.00" not in decision.message
+
+
+# --------------------------------------------------------------------------------------------------
+# Per-project caps: an admin can set a project's own hourly cap; without one it gets the default.
+# --------------------------------------------------------------------------------------------------
+
+
+def test_a_project_without_its_own_cap_gets_the_default(db_session: Session, member: Actor) -> None:
+    project = _approved_project(db_session, member)
+
+    assert launch_policy.hourly_cap_cents(project, SETTINGS) == 500
+
+
+@pytest.mark.parametrize(("project_cap_cents", "expected"), [(1_000, 10.0), (150, 1.5)])
+def test_a_projects_own_cap_replaces_the_default_either_way(
+    db_session: Session, member: Actor, project_cap_cents: int, expected: float
+) -> None:
+    project = _approved_project(db_session, member)
+    project.max_hourly_cost_cents = project_cap_cents
+    db_session.flush()
+    task = {"resources": {"infra": "vast", "max_hourly_cost": 999.0}}
+    config = {"vast": {"create_instance_kwargs": {"price": 999.0}}}
+
+    decision = launch_policy.decide(_request(task=task, skypilot_config=config), db_session, SETTINGS)
+
+    assert isinstance(decision, launch_policy.Allow)
+    assert decision.task["resources"]["max_hourly_cost"] == expected
+    assert decision.skypilot_config["vast"]["create_instance_kwargs"]["price"] == expected
+
+
+def test_a_projects_own_cap_is_split_across_num_nodes(db_session: Session, member: Actor) -> None:
+    project = _approved_project(db_session, member)
+    project.max_hourly_cost_cents = 1_000
+    db_session.flush()
+    task = {"num_nodes": 4, "resources": {"infra": "vast"}}
+
+    decision = launch_policy.decide(_request(task=task), db_session, SETTINGS)
+
+    assert isinstance(decision, launch_policy.Allow)
+    assert decision.task["resources"]["max_hourly_cost"] == 2.5
+
+
+def _chain(db_session: Session, hops: list[tuple[str, str | None]], task: dict) -> dict:
+    """Feed each hop's mutated task and config into the next, the way one `sky launch` passes through the
+    policy several times (client-side `launch`, server-side `validate`, server-side `launch`)."""
+    config: dict = {}
+    for request_name, workspace in hops:
+        decision = launch_policy.decide(
+            _request(task=task, workspace=workspace, request_name=request_name, skypilot_config=config),
+            db_session,
+            SETTINGS,
+        )
+        assert isinstance(decision, launch_policy.Allow), decision
+        task = decision.task
+        config = {k: v for k, v in decision.skypilot_config.items() if k != "active_workspace"}
+    return task
+
+
+@pytest.mark.parametrize(
+    "hops",
+    [
+        [("validate", None), ("launch", "ganymede-test")],
+        [("launch", "ganymede-test"), ("validate", None), ("launch", "ganymede-test")],
+    ],
+)
+def test_a_cap_above_the_default_survives_a_workspace_less_hop(
+    db_session: Session, member: Actor, hops: list[tuple[str, str | None]]
+) -> None:
+    project = _approved_project(db_session, member)
+    project.max_hourly_cost_cents = 1_000
+    db_session.flush()
+
+    task = _chain(db_session, hops, {"num_nodes": 2, "resources": {"infra": "vast", "max_hourly_cost": 999.0}})
+
+    assert task["resources"]["max_hourly_cost"] == 5.0  # the project's $10.00, split across 2 nodes
