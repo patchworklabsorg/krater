@@ -262,3 +262,88 @@ def test_withdraw_from_a_terminal_state_is_invalid(db_session: Session, member: 
 
     with pytest.raises(InvalidState):
         projects.withdraw(db_session, member, project=project)
+
+
+# --------------------------------------------------------------------------------------------------
+# Per-project hourly cap
+# --------------------------------------------------------------------------------------------------
+
+DEFAULT_CAP = 500
+
+
+def _set_cap(db_session: Session, actor: Actor, project, cap_cents: int | None, reason: str = "GPU-heavy work."):
+    return projects.set_hourly_cost_cap(
+        db_session, actor, project=project, cap_cents=cap_cents, default_cap_cents=DEFAULT_CAP, reason=reason
+    )
+
+
+def test_an_admin_can_set_and_clear_a_projects_hourly_cap(db_session: Session, member: Actor, admin: Actor) -> None:
+    project = _approved_project(db_session, member, admin)
+
+    _set_cap(db_session, admin, project, 1_200)
+    assert project.max_hourly_cost_cents == 1_200
+    _set_cap(db_session, admin, project, None, reason="Back to normal.")
+    assert project.max_hourly_cost_cents is None
+
+    # Both rows share a transaction (and so a `created_at`), so compare them as a set.
+    events = db_session.query(AuditEvent).filter_by(project_id=project.id, action="admin_set_hourly_cap").all()
+    assert {
+        (e.reason, e.payload["old_cap_cents"], e.payload["new_cap_cents"], e.payload["uses_default"]) for e in events
+    } == {
+        ("GPU-heavy work.", 500, 1_200, False),
+        ("Back to normal.", 1_200, 500, True),
+    }
+
+
+def test_the_hourly_cap_can_be_set_before_approval(db_session: Session, member: Actor, admin: Actor) -> None:
+    project = _submitted_project(db_session, member)
+
+    _set_cap(db_session, admin, project, 800)
+
+    assert project.max_hourly_cost_cents == 800
+
+
+def test_setting_the_hourly_cap_needs_an_admin_and_a_reason(
+    db_session: Session, member: Actor, admin: Actor, reviewer: Actor
+) -> None:
+    project = _approved_project(db_session, member, admin)
+
+    with pytest.raises(NotAllowed):
+        _set_cap(db_session, reviewer, project, 800)
+    with pytest.raises(ValidationFailed) as exc_info:
+        _set_cap(db_session, admin, project, 800, reason="  ")
+    assert "reason" in exc_info.value.errors
+
+
+@pytest.mark.parametrize("cap_cents", [0, -100])
+def test_the_hourly_cap_must_be_above_zero(db_session: Session, member: Actor, admin: Actor, cap_cents: int) -> None:
+    project = _approved_project(db_session, member, admin)
+
+    with pytest.raises(ValidationFailed) as exc_info:
+        _set_cap(db_session, admin, project, cap_cents)
+
+    assert "cap_cents" in exc_info.value.errors
+
+
+def test_a_finished_projects_hourly_cap_cannot_change(db_session: Session, member: Actor, admin: Actor) -> None:
+    project = _approved_project(db_session, member, admin)
+    projects.withdraw(db_session, member, project=project)
+
+    with pytest.raises(InvalidState):
+        _set_cap(db_session, admin, project, 800)
+
+
+def test_an_admin_can_lower_but_not_raise_their_own_projects_cap(
+    db_session: Session, member: Actor, admin: Actor
+) -> None:
+    submitter_admin = Actor(user=member.user, groups=frozenset({GROUP_MEMBER, GROUP_ADMIN}))
+    project = _approved_project(db_session, submitter_admin, admin)
+
+    with pytest.raises(NotAllowed):
+        _set_cap(db_session, submitter_admin, project, 1_000)
+    _set_cap(db_session, submitter_admin, project, 200)
+    # Clearing an override below the default would raise the cap that applies, so that's refused too.
+    with pytest.raises(NotAllowed):
+        _set_cap(db_session, submitter_admin, project, None)
+
+    assert project.max_hourly_cost_cents == 200

@@ -573,3 +573,89 @@ def test_launch_instructions_disappear_once_a_project_is_withdrawn(
     db_session.flush()
 
     assert "sky launch -w" not in client.get(f"/projects/{project.id}").text
+
+
+# --------------------------------------------------------------------------------------------------
+# Per-project hourly cap
+# --------------------------------------------------------------------------------------------------
+
+
+def test_an_admin_sets_a_projects_hourly_cap_from_its_page(
+    client: TestClient, login_as, approved_project, db_session: Session
+) -> None:
+    member = login_as(MEMBER_SUB)
+    reviewer = login_as(REVIEWER_SUB)
+    project = approved_project(member, reviewer)
+    project.skypilot_workspace = "ganymede-abc123abc123"
+    db_session.flush()
+    login_as(ADMIN_SUB)
+
+    page = client.get(f"/projects/{project.id}")
+    assert "Each launch is capped at $5.00/hour" in page.text
+    assert "Ganymede&#39;s default" in page.text
+
+    response = client.post(
+        f"/projects/{project.id}/admin-hourly-cap",
+        data={"csrf_token": get_csrf_token(page.text), "amount": "12.50", "reason": "Needs H100s."},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    db_session.refresh(project)
+    assert project.max_hourly_cost_cents == 1_250
+    page = client.get(f"/projects/{project.id}")
+    assert "Each launch is capped at $12.50/hour" in page.text
+    assert "this project&#39;s own cap" in page.text
+
+
+def test_a_blank_hourly_cap_goes_back_to_the_default(
+    client: TestClient, login_as, approved_project, db_session: Session
+) -> None:
+    member = login_as(MEMBER_SUB)
+    reviewer = login_as(REVIEWER_SUB)
+    project = approved_project(member, reviewer)
+    project.max_hourly_cost_cents = 900
+    db_session.flush()
+    login_as(ADMIN_SUB)
+
+    csrf = get_csrf_token(client.get(f"/projects/{project.id}").text)
+    response = client.post(
+        f"/projects/{project.id}/admin-hourly-cap",
+        data={"csrf_token": csrf, "amount": "", "reason": "Done with the big runs."},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    db_session.refresh(project)
+    assert project.max_hourly_cost_cents is None
+
+
+def test_the_hourly_cap_form_shows_errors_by_the_field(client: TestClient, login_as, approved_project) -> None:
+    member = login_as(MEMBER_SUB)
+    reviewer = login_as(REVIEWER_SUB)
+    project = approved_project(member, reviewer)
+    login_as(ADMIN_SUB)
+
+    for amount, message in (("0", "above zero"), ("lots", "valid dollar amount")):
+        csrf = get_csrf_token(client.get(f"/projects/{project.id}").text)
+        response = client.post(
+            f"/projects/{project.id}/admin-hourly-cap", data={"csrf_token": csrf, "amount": amount, "reason": "x"}
+        )
+        assert response.status_code == 422
+        assert message in response.text
+
+
+def test_a_non_admin_cannot_set_the_hourly_cap(client: TestClient, login_as, approved_project) -> None:
+    member = login_as(MEMBER_SUB)
+    reviewer = login_as(REVIEWER_SUB)
+    project = approved_project(member, reviewer)
+    login_as(REVIEWER_SUB)
+
+    page = client.get(f"/projects/{project.id}")
+    assert "Set hourly cap" not in page.text
+    response = client.post(
+        f"/projects/{project.id}/admin-hourly-cap",
+        data={"csrf_token": get_csrf_token(page.text), "amount": "50", "reason": "x"},
+    )
+
+    assert response.status_code == 403

@@ -39,6 +39,8 @@
       SkyPilot workspace: <code>{{ project.skypilot_workspace }}</code>.
       Sign in with <code>sky api login</code> and launch with
       <code>sky launch -w {{ project.skypilot_workspace }} ...</code>.
+      Each launch is capped at {{ hourly_cap_cents | dollars }}/hour, shared across its machines
+      ({{ "Ganymede's default" if hourly_cap_is_default else "this project's own cap" }}).
     </p>
   {% endif %}
 
@@ -128,8 +130,8 @@
     <a class="back-link" href="/admin">Admin overview</a>
   </div>
   {% if admin_own_project %}
-    <p class="policy-note">You submitted this project or are credited on it, so another admin has to decide it or add
-      to its budget. You can still cut or reclaim its budget, or withdraw it.</p>
+    <p class="policy-note">You submitted this project or are credited on it, so another admin has to decide it, add
+      to its budget or raise its hourly cap. You can still cut or reclaim its budget, lower its cap, or withdraw it.</p>
   {% endif %}
   {% if can_admin_decide %}
     <div class="admin-action">
@@ -199,6 +201,39 @@
         {% if error_form == "admin_reclaim" and errors.reason %}<p class="field-error">{{ errors.reason }}</p>{% endif %}
       </div>
       <button type="submit" class="button">Reclaim budget</button>
+    </form>
+    </div>
+  {% endif %}
+
+  {% if can_admin_set_hourly_cap %}
+    <div class="admin-action">
+    <h3>Hourly cap per launch</h3>
+    <p class="muted">
+      Now {{ hourly_cap_cents | dollars }}/hour
+      ({{ "the default" if hourly_cap_is_default else "this project's own cap; the default is " ~ (default_hourly_cap_cents | dollars) }}).
+      SkyPilot only rents machines under this rate, split across a launch's machines. It doesn't limit total
+      spend; the budget does.
+    </p>
+    <form method="post" action="/projects/{{ project.id }}/admin-hourly-cap" class="form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="field">
+        <label for="admin-hourly-cap-amount">New cap (USD per hour)</label>
+        <input
+          type="text"
+          id="admin-hourly-cap-amount"
+          name="amount"
+          inputmode="decimal"
+          placeholder="Blank for the default ({{ default_hourly_cap_cents | dollars }})"
+          value="{{ posted.amount if error_form == 'admin_hourly_cap' else hourly_cap_input }}"
+        >
+        {% if error_form == "admin_hourly_cap" and errors.cap_cents %}<p class="field-error">{{ errors.cap_cents }}</p>{% endif %}
+      </div>
+      <div class="field">
+        <label for="admin-hourly-cap-reason">Reason (required)</label>
+        <textarea id="admin-hourly-cap-reason" name="reason" rows="2">{{ posted.reason if error_form == "admin_hourly_cap" else "" }}</textarea>
+        {% if error_form == "admin_hourly_cap" and errors.reason %}<p class="field-error">{{ errors.reason }}</p>{% endif %}
+      </div>
+      <button type="submit" class="button">Set hourly cap</button>
     </form>
     </div>
   {% endif %}

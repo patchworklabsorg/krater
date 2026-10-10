@@ -34,7 +34,7 @@ from krater.services import projects as project_service
 from krater.services import screenshots as screenshot_service
 from krater.services.actor import Actor
 from krater.services.errors import InvalidState, NotAllowed, NotFound, ValidationFailed
-from krater.services.launch_policy import LAUNCHABLE_STATUSES
+from krater.services.launch_policy import LAUNCHABLE_STATUSES, hourly_cap_cents
 from krater.services.skypilot_sync import current_budget_flag
 from krater.slack import get_slack_client
 from krater.storage import ObjectStore, get_object_store
@@ -43,7 +43,7 @@ from krater.web.csrf import verify_csrf_token
 from krater.web.deps import fresh_actor
 from krater.web.flash import flash
 from krater.web.forms import UnknownEmails, parse_credited_builder_emails, parse_tags
-from krater.web.money import InvalidDollarAmount, cents_to_input, parse_dollars
+from krater.web.money import InvalidDollarAmount, cents_to_input, format_cents, parse_dollars
 from krater.web.templates import templates
 from krater.worker.app import (
     slack_archive_channel,
@@ -358,6 +358,13 @@ def _build_detail_context(
         and project.status in (ProjectStatus.APPROVED, ProjectStatus.PENDING_COMPLETION_REVIEW),
         "can_admin_reclaim": actor.is_admin and summary.ceiling_cents > 0,
         "can_admin_withdraw": actor.is_admin and project.status not in _TERMINAL_STATUSES,
+        "hourly_cap_cents": hourly_cap_cents(project, get_settings()),
+        "hourly_cap_is_default": project.max_hourly_cost_cents is None,
+        "hourly_cap_input": ""
+        if project.max_hourly_cost_cents is None
+        else cents_to_input(project.max_hourly_cost_cents),
+        "default_hourly_cap_cents": get_settings().skypilot_max_hourly_cost_cents,
+        "can_admin_set_hourly_cap": actor.is_admin and project.status not in _TERMINAL_STATUSES,
         "errors": errors or {},
         "error_form": error_form,
         "posted": posted or {},
@@ -930,6 +937,61 @@ def admin_reclaim_budget(
         )
 
     return _success_redirect(db_session, request, project_id, "Budget reclaimed.", after_commit=_notify)
+
+
+@router.post("/projects/{project_id}/admin-hourly-cap", dependencies=[Depends(verify_csrf_token)])
+def admin_set_hourly_cap(
+    request: Request,
+    project_id: uuid.UUID,
+    db_session: Annotated[Session, Depends(get_session)],
+    actor: Annotated[Actor, Depends(fresh_actor)],
+    amount: Annotated[str, Form()] = "",
+    reason: Annotated[str, Form()] = "",
+):
+    project = _get_visible_project(db_session, actor, project_id)
+    posted = {"amount": amount, "reason": reason}
+    # Blank means "back to the default cap".
+    cap_cents: int | None = None
+    if amount.strip():
+        try:
+            cap_cents = parse_dollars(amount)
+        except InvalidDollarAmount as exc:
+            context = _build_detail_context(
+                db_session, project, actor, errors={"cap_cents": str(exc)}, error_form="admin_hourly_cap", posted=posted
+            )
+            return templates.TemplateResponse(request, "projects/detail.html", context, status_code=422)
+
+    default_cap_cents = get_settings().skypilot_max_hourly_cost_cents
+    try:
+        project_service.set_hourly_cost_cap(
+            db_session, actor, project=project, cap_cents=cap_cents, default_cap_cents=default_cap_cents, reason=reason
+        )
+    except (ValidationFailed, NotAllowed) as exc:
+        # As with the budget form: an admin's NotAllowed is the own-project rule, shown by the field.
+        if isinstance(exc, NotAllowed) and not actor.is_admin:
+            raise
+        db_session.rollback()
+        errors = exc.errors if isinstance(exc, ValidationFailed) else {"cap_cents": str(exc)}
+        context = _build_detail_context(
+            db_session, project, actor, errors=errors, error_form="admin_hourly_cap", posted=posted
+        )
+        return templates.TemplateResponse(request, "projects/detail.html", context, status_code=422)
+    except InvalidState as exc:
+        return _invalid_state_redirect(db_session, request, project_id, exc)
+
+    new_cap = format_cents(cap_cents if cap_cents is not None else default_cap_cents)
+    described = f"{new_cap}/hour" + (" (the default)" if cap_cents is None else "")
+
+    def _notify() -> None:
+        slack_post_admin_override.defer(
+            project_id=str(project.id),
+            action="admin_set_hourly_cap",
+            actor_name=actor.user.display_name,
+            reason=reason,
+            extra=f"Hourly cap per launch: {described}",
+        )
+
+    return _success_redirect(db_session, request, project_id, f"Hourly cap set to {described}.", after_commit=_notify)
 
 
 # --------------------------------------------------------------------------------------------------

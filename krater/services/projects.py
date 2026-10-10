@@ -647,7 +647,8 @@ def _open_next_draft(session: Session, rejected: ProjectRevision) -> ProjectRevi
 
 
 _OWN_PROJECT_MESSAGE = (
-    "Admins can't decide, or add budget to, a project they submitted or are credited on. Ask another admin."
+    "Admins can't decide, add budget to, or raise the hourly cap of a project they submitted or are credited on. "
+    "Ask another admin."
 )
 
 
@@ -788,6 +789,52 @@ def reclaim_budget(
         session, actor, "admin_reclaim_budget", project=project, payload={"amount_cents": amount_cents}, reason=reason
     )
     return entry
+
+
+def set_hourly_cost_cap(
+    session: Session,
+    actor: Actor,
+    *,
+    project: Project,
+    cap_cents: int | None,
+    default_cap_cents: int,
+    reason: str,
+) -> Project:
+    """Admin override: set `project`'s own hourly price cap for SkyPilot launches, or clear it (`None`) so
+    it uses the global default, `default_cap_cents`. Admin only; `reason` is required.
+
+    Raises `ValidationFailed` for a cap that isn't positive (budget and withdrawal are how launches get
+    blocked), `InvalidState` on a finished project, and `NotAllowed` for an admin raising the cap on their
+    own project (see `admin_decide`). "Raising" compares the caps that actually apply, so clearing an
+    override below the default counts too. Writes an `AuditEvent` with both effective caps.
+    """
+    if not actor.is_admin:
+        raise NotAllowed("Only an admin may change a project's hourly cap.")
+    if cap_cents is not None and cap_cents <= 0:
+        raise ValidationFailed({"cap_cents": "Enter an hourly cap above zero, or leave it blank for the default."})
+
+    old_effective = project.max_hourly_cost_cents if project.max_hourly_cost_cents is not None else default_cap_cents
+    new_effective = cap_cents if cap_cents is not None else default_cap_cents
+    if new_effective > old_effective and _is_own_project(actor, project):
+        raise NotAllowed(_OWN_PROJECT_MESSAGE)
+    if not (reason and reason.strip()):
+        raise ValidationFailed({"reason": "A reason is required."})
+
+    _lock_project(session, project)
+    if project.status in _TERMINAL_STATUSES:
+        raise InvalidState(f"Cannot change the hourly cap of a project that is already {project.status.value!r}.")
+
+    project.max_hourly_cost_cents = cap_cents
+    audit.record(
+        session,
+        actor,
+        "admin_set_hourly_cap",
+        project=project,
+        payload={"old_cap_cents": old_effective, "new_cap_cents": new_effective, "uses_default": cap_cents is None},
+        reason=reason,
+    )
+    session.flush()
+    return project
 
 
 # --------------------------------------------------------------------------------------------------
