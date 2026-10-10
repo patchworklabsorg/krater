@@ -44,12 +44,15 @@ POLL_BACKOFF_FACTOR = 2.0
 
 # There's no per-workspace cloud *allowlist* in SkyPilot (a workspace-level `allowed_clouds` key fails
 # schema validation -- "did you mean `allowed_users`?", per the spike). Restricting a workspace to Vast
-# means denying every other cloud individually. List taken verbatim from
-# `tests/fixtures/skypilot/workspaces_disable_all_clouds_except_vast_request.json`.
+# means denying every other cloud individually: this is every compute cloud in SkyPilot 0.13.0's
+# `sky.utils.registry.CLOUD_REGISTRY` except `vast`. The spike's
+# `tests/fixtures/skypilot/workspaces_disable_all_clouds_except_vast_request.json` missed `slurm` and `verda`, which
+# left both launchable. Re-check the registry on every SkyPilot upgrade; docker-compose.yml's `default` workspace
+# keeps the same list (plus `vast`).
 _CLOUDS_TO_DISABLE = [
     "aws", "azure", "cudo", "do", "fluidstack", "gcp", "hyperbolic", "ibm", "kubernetes", "lambda",
     "mithril", "nebius", "oci", "paperspace", "primeintellect", "runpod", "scp", "seeweb", "shadeform",
-    "ssh", "vsphere", "yotta",
+    "slurm", "ssh", "verda", "vsphere", "yotta",
 ]  # fmt: skip
 
 

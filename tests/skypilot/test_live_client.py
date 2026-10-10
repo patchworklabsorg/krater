@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import itertools
 import json
+from pathlib import Path
 
 import httpx
 import pytest
@@ -120,6 +121,34 @@ def test_create_workspace_sends_bearer_token_and_vast_only_config(
     # Every other cloud denied, per the spike's "no per-workspace allowlist" finding.
     assert body["config"]["aws"] == {"disabled": True}
     assert "vast" not in body["config"]
+
+
+#: Every compute cloud in SkyPilot 0.13.0's `sky.utils.registry.CLOUD_REGISTRY`, checked against the staging server.
+#: Update it (and the deny-lists) when SkyPilot is upgraded.
+SKYPILOT_0_13_CLOUDS = {
+    "aws", "azure", "cudo", "do", "fluidstack", "gcp", "hyperbolic", "ibm", "kubernetes", "lambda", "mithril",
+    "nebius", "oci", "paperspace", "primeintellect", "runpod", "scp", "seeweb", "shadeform", "slurm", "ssh", "vast",
+    "verda", "vsphere", "yotta",
+}  # fmt: skip
+
+
+def test_a_project_workspace_disables_every_cloud_but_vast(
+    fake_server: FakeSkyPilotServer, client: LiveSkyPilotClient
+) -> None:
+    client.create_workspace("ganymede-abc123", allowed_users=["a@x.com"])
+
+    request = next(r for r in fake_server.requests if r.url.path == "/workspaces/create")
+    config = json.loads(request.content)["config"]
+    disabled = {cloud for cloud, value in config.items() if value == {"disabled": True}}
+    assert disabled == SKYPILOT_0_13_CLOUDS - {"vast"}
+
+
+def test_the_default_workspace_in_compose_disables_every_cloud() -> None:
+    compose = (Path(__file__).resolve().parents[2] / "docker-compose.yml").read_text(encoding="utf-8")
+
+    missing = [cloud for cloud in sorted(SKYPILOT_0_13_CLOUDS) if f"{cloud}: {{disabled: true}}" not in compose]
+
+    assert missing == []
 
 
 def test_update_workspace_replaces_allowed_users(fake_server: FakeSkyPilotServer, client: LiveSkyPilotClient) -> None:

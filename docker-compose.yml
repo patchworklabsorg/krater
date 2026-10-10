@@ -133,6 +133,7 @@ services:
         # The "default" workspace isn't tied to any Ganymede project -- disable every cloud in it so
         # nothing can be launched outside a project's own (per-project) workspace. There is no
         # workspace-level cloud allowlist (spike section 2): each cloud has to be deny-listed individually.
+        # Every compute cloud in SkyPilot's registry; keep in sync with krater/skypilot/live.py's list.
         workspaces:
           default:
             aws: {disabled: true}
@@ -154,8 +155,10 @@ services:
             scp: {disabled: true}
             seeweb: {disabled: true}
             shadeform: {disabled: true}
+            slurm: {disabled: true}
             ssh: {disabled: true}
             vast: {disabled: true}
+            verda: {disabled: true}
             vsphere: {disabled: true}
             yotta: {disabled: true}
         CFG
