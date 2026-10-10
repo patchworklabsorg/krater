@@ -723,7 +723,7 @@ def admin_adjust_budget(
     """Admin override: adjust a project's budget ceiling by a signed amount. Admin only.
 
     Only on an `approved` or `pending_completion_review` project. `reason` is required. Raises
-    `ValidationFailed` if `amount_cents` would take the ceiling below zero, and `NotAllowed` for
+    `ValidationFailed` if `amount_cents` is zero or would take the ceiling below zero, and `NotAllowed` for
     an increase on the admin's own project (see `admin_decide`; a cut is fine). Writes an `AuditEvent`.
     """
     if not actor.is_admin:
@@ -732,6 +732,8 @@ def admin_adjust_budget(
         raise NotAllowed(_OWN_PROJECT_MESSAGE)
     if not (reason and reason.strip()):
         raise ValidationFailed({"reason": "A reason is required."})
+    if amount_cents == 0:
+        raise ValidationFailed({"amount_cents": "Enter an amount other than zero."})
 
     _lock_project(session, project)
     if project.status not in (ProjectStatus.APPROVED, ProjectStatus.PENDING_COMPLETION_REVIEW):

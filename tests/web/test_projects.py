@@ -496,6 +496,21 @@ def test_create_project_rejects_a_budget_past_the_maximum(client: TestClient, lo
     assert "Enter an amount up to $1,000,000.00." in response.text
 
 
+def test_admin_budget_rejects_zero_and_huge_amounts(client: TestClient, login_as, approved_project) -> None:
+    member = login_as(MEMBER_SUB)
+    reviewer = login_as(REVIEWER_SUB)
+    project = approved_project(member, reviewer)
+    login_as(ADMIN_SUB)
+
+    for amount, message in (("0", "other than zero"), ("99999999", "up to $1,000,000.00")):
+        csrf = get_csrf_token(client.get(f"/projects/{project.id}").text)
+        response = client.post(
+            f"/projects/{project.id}/admin-budget", data={"csrf_token": csrf, "amount": amount, "reason": "x"}
+        )
+        assert response.status_code == 422
+        assert message in response.text
+
+
 # --------------------------------------------------------------------------------------------------
 # Admins can't decide or add budget to their own project
 # --------------------------------------------------------------------------------------------------

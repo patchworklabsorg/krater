@@ -176,6 +176,16 @@ def test_an_admin_cannot_add_budget_to_their_own_project_but_can_cut_it(
     assert budget.ceiling_cents(db_session, project) == 8_000
 
 
+def test_admin_adjust_budget_refuses_zero(db_session: Session, member: Actor, admin: Actor) -> None:
+    project = _approved_project(db_session, member, admin)
+
+    with pytest.raises(ValidationFailed) as exc_info:
+        projects.admin_adjust_budget(db_session, admin, project=project, amount_cents=0, reason="Nothing.")
+
+    assert "amount_cents" in exc_info.value.errors
+    assert db_session.query(AuditEvent).filter_by(project_id=project.id, action="admin_adjust_budget").count() == 0
+
+
 def test_reclaim_budget_reduces_ceiling(db_session: Session, member: Actor, admin: Actor) -> None:
     project = _approved_project(db_session, member, admin, budget_requested_cents=10_000)
 
