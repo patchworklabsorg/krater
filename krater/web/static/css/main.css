@@ -748,9 +748,10 @@ code {
   margin: 0;
 }
 
+/* Two columns on a desktop card: four squeezed in a row cut off the "Pricing basis" options. */
 .estimator__grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
   gap: 1rem;
 }
 
