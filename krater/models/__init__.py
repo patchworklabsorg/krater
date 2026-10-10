@@ -7,6 +7,7 @@ from krater.models.enums import (
     ApprovalStage,
     BudgetEntryKind,
     ProjectStatus,
+    QuiltOutboxState,
     ReviewDecision,
     ReviewSource,
     RevisionKind,
@@ -16,6 +17,7 @@ from krater.models.enums import (
 from krater.models.gpu_price import GpuPrice
 from krater.models.project import Project
 from krater.models.project_revision import ProjectRevision
+from krater.models.quilt_outbox import QuiltOutbox
 from krater.models.review import Review
 from krater.models.slack_notification import SlackNotification
 from krater.models.spend_snapshot import SpendSnapshot
@@ -31,6 +33,8 @@ __all__ = [
     "Project",
     "ProjectRevision",
     "ProjectStatus",
+    "QuiltOutbox",
+    "QuiltOutboxState",
     "Review",
     "ReviewDecision",
     "ReviewSource",
