@@ -60,7 +60,16 @@ def create_app() -> FastAPI:
     settings = get_settings()
     configure_logging(settings)
 
-    app = FastAPI(title="Krater", lifespan=_lifespan)
+    # The interactive API docs list every route, the policy hook and Slack endpoints included; nobody needs
+    # them in production.
+    api_docs = settings.env != "production"
+    app = FastAPI(
+        title="Krater",
+        lifespan=_lifespan,
+        docs_url="/docs" if api_docs else None,
+        redoc_url="/redoc" if api_docs else None,
+        openapi_url="/openapi.json" if api_docs else None,
+    )
 
     # Middleware order matters here (see each middleware's own docstring):
     #  - `RequestIdMiddleware` outermost, so every log line from everything inside it -- including

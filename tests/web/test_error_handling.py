@@ -127,3 +127,14 @@ def test_weave_being_down_shows_a_page_to_browsers(client: TestClient, login_as,
     assert "Weave isn't answering" in page.text
     assert api.status_code == 503
     assert api.json() == {"detail": "Weave is unavailable"}
+
+
+def test_the_api_docs_are_off_in_production(monkeypatch) -> None:
+    from krater.web.app import create_app
+
+    monkeypatch.setattr(get_settings(), "env", "production")
+    app = create_app()
+
+    assert app.docs_url is None
+    assert app.redoc_url is None
+    assert app.openapi_url is None
