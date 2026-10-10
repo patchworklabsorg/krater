@@ -64,7 +64,7 @@ class Settings(BaseSettings):
     skypilot_reconcile_interval_minutes: int = 5
     skypilot_budget_warn_percent: int = 80
     skypilot_autodown_idle_minutes: int = 30
-    skypilot_max_hourly_cost_cents: int = 500  # per-instance cap forced onto every launch
+    skypilot_max_hourly_cost_cents: int = 500  # default hourly cap per launch; a project can have its own
 
     # GPU pricing (see docs/dev/pricing.md): fetched straight from SkyPilot's public Vast catalog CSV,
     # not the SkyPilot API server -- no workspace/auth needed, and it's the exact same data the

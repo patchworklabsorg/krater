@@ -56,6 +56,10 @@ class Project(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         sa.Boolean, nullable=False, default=False, server_default=sa.false()
     )
     skypilot_workspace: Mapped[str | None] = mapped_column(sa.String(255), nullable=True)
+    # This project's own hourly price cap for a SkyPilot launch, set by an admin
+    # (`krater.services.projects.set_hourly_cost_cap`). `None` means the global default,
+    # `Settings.skypilot_max_hourly_cost_cents`; see `krater.services.launch_policy.hourly_cap_cents`.
+    max_hourly_cost_cents: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
 
     submitter: Mapped[User] = relationship(foreign_keys=[submitter_id], back_populates="projects")
     current_revision: Mapped[ProjectRevision | None] = relationship(
