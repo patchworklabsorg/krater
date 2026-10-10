@@ -21,6 +21,7 @@ from krater.models import (
     Project,
     ProjectRevision,
     ProjectStatus,
+    QuiltOutbox,
     Review,
     ReviewDecision,
     ReviewSource,
@@ -55,6 +56,7 @@ def _cleanup(engine: Engine, *, project_id: uuid.UUID, user_ids: list[uuid.UUID]
             )
         )
         session.execute(sa.delete(BudgetEntry).where(BudgetEntry.project_id == project_id))
+        session.execute(sa.delete(QuiltOutbox).where(QuiltOutbox.external_id == str(project_id)))
         session.execute(sa.delete(ProjectRevision).where(ProjectRevision.project_id == project_id))
         session.execute(sa.delete(Project).where(Project.id == project_id))
         session.execute(sa.delete(User).where(User.id.in_(user_ids)))

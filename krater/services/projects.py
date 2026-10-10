@@ -40,7 +40,7 @@ from krater.models import (
     RevisionKind,
     RevisionOutcome,
 )
-from krater.services import approval_policy, audit, budget
+from krater.services import approval_policy, audit, budget, quilt_events
 from krater.services.actor import Actor
 from krater.services.errors import InvalidState, NotAllowed, NotFound, ValidationFailed
 
@@ -267,6 +267,7 @@ def submit(session: Session, actor: Actor, *, project: Project) -> Project:
     # `amendment`: the project stays `approved` while the amendment is reviewed.
 
     session.flush()
+    quilt_events.sync_project(session, project)
     return project
 
 
@@ -417,6 +418,7 @@ def submit_completion(session: Session, actor: Actor, *, project: Project) -> Pr
     project.status = ProjectStatus.PENDING_COMPLETION_REVIEW
 
     session.flush()
+    quilt_events.sync_project(session, project)
     return project
 
 
@@ -539,6 +541,7 @@ def record_review(
     elif approval_policy.is_satisfied(session, revision):
         _apply_approve(session, actor, revision)
 
+    quilt_events.sync_project(session, project)
     return review
 
 
@@ -680,6 +683,7 @@ def admin_decide(
         payload={"revision_id": str(revision.id), "decision": decision.value},
         reason=reason,
     )
+    quilt_events.sync_project(session, project)
     return revision
 
 
@@ -719,6 +723,7 @@ def admin_adjust_budget(
     audit.record(
         session, actor, "admin_adjust_budget", project=project, payload={"amount_cents": amount_cents}, reason=reason
     )
+    quilt_events.sync_project(session, project)
     return entry
 
 
@@ -753,6 +758,7 @@ def reclaim_budget(
     audit.record(
         session, actor, "admin_reclaim_budget", project=project, payload={"amount_cents": amount_cents}, reason=reason
     )
+    quilt_events.sync_project(session, project)
     return entry
 
 
@@ -809,6 +815,7 @@ def withdraw(session: Session, actor: Actor, *, project: Project, reason: str | 
         )
 
     session.flush()
+    quilt_events.sync_project(session, project)
     return project
 
 
