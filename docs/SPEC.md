@@ -4,7 +4,8 @@ Revised Sep 26, 2026. Supersedes the Sep 24 draft (drafted with @Adam). Roles li
 Oct 7, 2026; see "Roles & authentication").
 The previous draft was checked against the Weave codebase and the SkyPilot docs and source. This revision fixes the
 places where it assumed capabilities that don't exist. The integration details are in
-[weave-integration.md](weave-integration.md) and [skypilot-integration.md](skypilot-integration.md).
+[weave-integration.md](weave-integration.md), [skypilot-integration.md](skypilot-integration.md) and
+[quilt-integration.md](quilt-integration.md).
 
 ## What changed from the Sep 24 draft
 
@@ -238,6 +239,9 @@ Uploads use presigned URLs, and only objects from approved completion revisions 
   - The reconciler warns the project channel at 80% of the ceiling, and tears down the project's clusters and managed
     jobs at 100%.
 - **No automatic expiry.** Stalled projects are reclaimed manually by an admin (`BudgetEntry(reclaim)`).
+- **Quilt.** Krater tells Quilt (Patchwork Labs finance) about each submission, each ledger entry and each change of
+  spend, through Quilt's patch API. The events go through an outbox table in the same transaction as the change.
+  See [quilt-integration.md](quilt-integration.md).
 
 ## Admin overrides
 
@@ -257,7 +261,7 @@ arm64; SkyPilot publishes arm64 images, so that works.
 | Service | What it is |
 | --- | --- |
 | `portal` | FastAPI web app: UI, OIDC, Slack endpoints, public gallery, SkyPilot admin-policy endpoint |
-| `worker` | Same image, runs background jobs: Slack work, the spend reconciler, reviewer-channel sync |
+| `worker` | Same image, runs background jobs: Slack work, the spend reconciler, reviewer-channel sync, events to Quilt |
 | `db` | Postgres |
 | `skypilot` | SkyPilot API server with the Vast credentials; out of scope except for its configuration |
 | `storage` | Temporary self-hosted S3-compatible storage (SeaweedFS) for gallery screenshots, until a provider is chosen |

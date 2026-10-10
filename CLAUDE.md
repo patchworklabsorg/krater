@@ -6,7 +6,8 @@ Guidance for Claude Code (and humans) working in this repo.
 
 Krater is the Project Ganymede portal (Patchwork Labs): proposal review, compute budget allocation/enforcement, and a
 public gallery. **Read `docs/SPEC.md` before changing behavior.** Integration contracts live in
-`docs/weave-integration.md` (sign-in and roles) and `docs/skypilot-integration.md` (budget enforcement).
+`docs/weave-integration.md` (sign-in and roles), `docs/skypilot-integration.md` (budget enforcement) and
+`docs/quilt-integration.md` (submission and budget events to Quilt).
 
 ## Stack
 
@@ -40,6 +41,7 @@ krater/
   models/          SQLAlchemy models, one module per aggregate
   services/        domain logic (framework-free): approval_policy, projects, budget, audit, users
   weave/           WeaveClient protocol: OIDC sign-in, directory API, role mapping, dev stub
+  quilt/           Quilt patch API client and the outbox sender (the only code that knows Quilt's URLs)
   web/             FastAPI app factory, routers, deps (current user, authz), templates/, static/
   worker/          procrastinate app + tasks
 alembic/           migrations
@@ -61,7 +63,9 @@ tests/             mirrors krater/ layout
   Krater has no role tables, no admin users page and no disable switch: those are done in Weave.
 - **All Weave access goes through `krater.weave`.** Nothing else imports httpx for Weave or knows Weave's URLs.
   Krater asks for `openid profile email groups roles slack`, and calls the directory with a client_credentials token
-  of its own app (scope `directory`).
+  of its own app (scope `directory`). Its token for Quilt (scope `quilt`) comes from `WeaveClient.quilt_token`.
+- **Events for Quilt go through the outbox.** A service that changes a project's status, title, ledger or spend
+  calls `krater.services.quilt_events.sync_project` in the same transaction. Never post to Quilt from a request.
 - **Every admin override writes an `AuditEvent`** (who, what, reason). Budget changes write a `BudgetEntry` (append-only;
   never update or delete ledger rows).
 - **Stub mode** (`KRATER_WEAVE_MODE=stub`) replaces Weave with a local fixture of fake users for dev and tests. The
