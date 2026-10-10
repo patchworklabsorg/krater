@@ -106,6 +106,18 @@ def _clean_url(field: str, value: str | None) -> str | None:
     return value
 
 
+def link_errors(**links: str | None) -> dict[str, str]:
+    """Field name -> message for each of `links` that `create_project`/`update_draft` would refuse, so a form
+    can show every problem at once instead of the service stopping at the first bad link."""
+    errors: dict[str, str] = {}
+    for field, value in links.items():
+        try:
+            _clean_url(field, value)
+        except ValidationFailed as exc:
+            errors.update(exc.errors)
+    return errors
+
+
 def create_project(
     session: Session,
     actor: Actor,

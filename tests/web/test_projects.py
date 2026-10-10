@@ -433,3 +433,51 @@ def test_admin_reclaim_requires_a_reason(client: TestClient, login_as, approved_
 
     assert response.status_code == 422
     assert "reason" in response.text.lower()
+
+
+# --------------------------------------------------------------------------------------------------
+# Bad links come back as field errors, never a 500
+# --------------------------------------------------------------------------------------------------
+
+
+def test_create_project_rejects_a_non_http_repo_link_as_a_field_error(
+    client: TestClient, login_as, db_session: Session
+) -> None:
+    member = login_as(MEMBER_SUB)
+    csrf = get_csrf_token(client.get("/projects/new").text)
+
+    response = client.post(
+        "/projects/new",
+        data={
+            "csrf_token": csrf,
+            "title": "Keep me",
+            "repo_url": "ssh://git@example.com/x.git",
+            "write_up": "Typed text that must survive.",
+            "budget_requested": "10",
+        },
+    )
+
+    assert response.status_code == 422
+    assert "Enter a full http:// or https:// URL." in response.text
+    assert "Typed text that must survive." in response.text
+    assert project_service.list_projects_for_user(db_session, user_id=member.id) == []
+
+
+def test_edit_rejects_a_non_http_repo_link_as_a_field_error(client: TestClient, login_as, create_project) -> None:
+    member = login_as(MEMBER_SUB)
+    project = create_project(member)
+    csrf = get_csrf_token(client.get(f"/projects/{project.id}/edit").text)
+
+    response = client.post(
+        f"/projects/{project.id}/edit",
+        data={
+            "csrf_token": csrf,
+            "title": "T",
+            "repo_url": "javascript:alert(1)",
+            "write_up": "W",
+            "budget_requested": "1",
+        },
+    )
+
+    assert response.status_code == 422
+    assert "Enter a full http:// or https:// URL." in response.text

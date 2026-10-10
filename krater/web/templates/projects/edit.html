@@ -30,7 +30,8 @@
 
     <div class="field">
       <label for="repo_url">Repo link</label>
-      <input type="url" id="repo_url" name="repo_url" value="{{ values.repo_url }}" placeholder="https://github.com/...">
+      <input type="url" id="repo_url" name="repo_url" value="{{ values.repo_url }}" placeholder="https://github.com/..."{% if errors.repo_url %} aria-invalid="true"{% endif %}>
+      {% if errors.repo_url %}<p class="field-error">{{ errors.repo_url }}</p>{% endif %}
     </div>
 
     <div class="field">
@@ -59,7 +60,8 @@
     {% if draft.kind.value == "completion" %}
       <div class="field">
         <label for="demo_url">Demo link</label>
-        <input type="url" id="demo_url" name="demo_url" value="{{ values.demo_url }}" placeholder="https://...">
+        <input type="url" id="demo_url" name="demo_url" value="{{ values.demo_url }}" placeholder="https://..."{% if errors.demo_url %} aria-invalid="true"{% endif %}>
+        {% if errors.demo_url %}<p class="field-error">{{ errors.demo_url }}</p>{% endif %}
       </div>
 
       <div class="field">

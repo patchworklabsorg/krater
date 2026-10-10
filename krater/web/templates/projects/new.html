@@ -16,7 +16,8 @@
 
     <div class="field">
       <label for="repo_url">Repo link (optional)</label>
-      <input type="url" id="repo_url" name="repo_url" value="{{ values.repo_url }}" placeholder="https://github.com/...">
+      <input type="url" id="repo_url" name="repo_url" value="{{ values.repo_url }}" placeholder="https://github.com/..."{% if errors.repo_url %} aria-invalid="true"{% endif %}>
+      {% if errors.repo_url %}<p class="field-error">{{ errors.repo_url }}</p>{% endif %}
     </div>
 
     <div class="field">

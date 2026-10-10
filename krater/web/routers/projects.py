@@ -246,6 +246,7 @@ def create_project(
             budget_cents = parse_dollars(raw_budget)
         except InvalidDollarAmount as exc:
             errors["budget_requested_cents"] = str(exc)
+    errors.update(project_service.link_errors(repo_url=repo_url))
 
     if errors:
         context = {
@@ -533,6 +534,8 @@ def update_draft(
             builder_ids = parse_credited_builder_emails(db_session, credited_builder_emails)
         except UnknownEmails as exc:
             errors["credited_builder_emails"] = f"Unknown email(s): {', '.join(exc.emails)}"
+    is_completion = draft.kind is RevisionKind.COMPLETION
+    errors.update(project_service.link_errors(repo_url=repo_url, demo_url=demo_url if is_completion else None))
 
     if errors:
         context = {
