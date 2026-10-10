@@ -50,7 +50,8 @@ services:
   # Temporary self-hosted S3-compatible storage (gallery screenshots) until a real provider is chosen; see
   # docs/SPEC.md "Open questions". SeaweedFS rather than MinIO: MinIO stopped publishing community images in 2025.
   storage:
-    image: chrislusf/seaweedfs:${SEAWEEDFS_VERSION:-latest}
+    # 4.47 is what staging ran (2026-10-10). Bump deliberately, after a staging run on the new version.
+    image: chrislusf/seaweedfs:${SEAWEEDFS_VERSION:-4.47}
     restart: unless-stopped
     environment:
       S3_ACCESS_KEY: ${KRATER_S3_ACCESS_KEY_ID:-krater}

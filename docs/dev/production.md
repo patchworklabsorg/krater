@@ -118,7 +118,7 @@ KRATER_S3_PUBLIC_ENDPOINT_URL=https://storage.krater.example.org
 KRATER_SKYPILOT_PUBLIC_URL=https://sky.krater.example.org
 KRATER_SKYPILOT_AUTH_COOKIE_SECURE=true
 
-SEAWEEDFS_VERSION=...                                # pin the version staging ran; never `latest`
+SEAWEEDFS_VERSION=4.47                               # the version staging ran; never `latest`
 KRATER_BACKUP_DIR=/srv/krater/backups                # outside the checkout
 ```
 
