@@ -280,7 +280,7 @@ echo "Provisioning its workspace (python -m krater.skypilot.reconcile_once)..."
 # The member's identity here is a service-account token, not a real Weave/oauth2-proxy SSO login (this
 # environment has neither Docker nor a running oauth2-proxy) -- see docs/dev/skypilot-contract.md for
 # why that's the right stand-in for "a signed-in non-admin user" here. Krater's own provisioning always
-# grants access by *email* (`_team_emails`, docs/skypilot-integration.md section 1); grant this
+# grants access by *email* (`_provision_workspace`, docs/skypilot-integration.md section 1); grant this
 # specific test identity access too, out of band, so it can actually target the workspace Krater just
 # created for the real submitter's email.
 curl -sf -X POST "http://127.0.0.1:${SKY_API_PORT}/workspaces/batch_add_users" \

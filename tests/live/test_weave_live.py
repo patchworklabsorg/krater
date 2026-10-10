@@ -324,3 +324,15 @@ def test_directory_lists_admins(fixture: dict[str, Any], weave_client: LiveWeave
     subs = {record.sub for record in weave_client.list_users_with_role("ganymede:admin")}
 
     assert fixture["users"]["admin"]["sub"] in subs
+
+
+def test_directory_lists_members(fixture: dict[str, Any], weave_client: LiveWeaveClient) -> None:
+    """The one call the SkyPilot reconciler makes to decide who keeps workspace access."""
+    _needs_weave_roles(fixture)
+
+    records = {record.sub: record for record in weave_client.list_users_with_role("ganymede:member")}
+
+    assert fixture["users"]["member"]["sub"] in records
+    assert fixture["users"]["admin"]["sub"] in records
+    assert fixture["users"]["non_member"]["sub"] not in records
+    assert all(records[fixture["users"][key]["sub"]].active for key in ("member", "admin"))

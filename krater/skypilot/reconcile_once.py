@@ -15,6 +15,7 @@ from krater.config import get_settings
 from krater.db import get_sessionmaker
 from krater.services.skypilot_sync import reconcile
 from krater.skypilot import get_skypilot_client
+from krater.weave import get_weave_client
 
 
 def main() -> None:
@@ -22,7 +23,9 @@ def main() -> None:
     settings = get_settings()
     session = get_sessionmaker()()
     try:
-        reconcile(session, get_skypilot_client(), warn_percent=settings.skypilot_budget_warn_percent)
+        reconcile(
+            session, get_skypilot_client(), get_weave_client(), warn_percent=settings.skypilot_budget_warn_percent
+        )
     finally:
         session.close()
 

@@ -13,8 +13,9 @@ from sqlalchemy.orm import Session
 
 from krater.models import AuditEvent, BudgetEntryKind, ProjectStatus, ReviewDecision, ReviewSource, SpendSnapshot
 from krater.services import budget, projects
-from krater.services.actor import Actor
+from krater.services.actor import GROUP_MEMBER, Actor
 from krater.services.skypilot_sync import (
+    AUDIT_ACCESS_REMOVED,
     AUDIT_BUDGET_TEARDOWN,
     AUDIT_BUDGET_WARNING,
     AUDIT_WORKSPACE_TORN_DOWN,
@@ -27,6 +28,8 @@ from krater.services.skypilot_sync import (
 )
 from krater.skypilot.errors import SkyPilotRequestFailedError, SkyPilotUnavailableError
 from krater.skypilot.fake import FakeSkyPilotClient
+from krater.weave import StubWeaveClient, WeaveUnavailableError
+from tests.services.conftest import register_in_weave
 
 WARN_PERCENT = 80
 
@@ -53,10 +56,10 @@ def client() -> FakeSkyPilotClient:
 # --------------------------------------------------------------------------------------------------
 
 
-def test_approved_project_gets_a_workspace(db_session: Session, member: Actor, reviewer: Actor, client) -> None:
+def test_approved_project_gets_a_workspace(db_session: Session, member: Actor, reviewer: Actor, client, weave) -> None:
     project = _approve(db_session, member, reviewer)
 
-    sync_workspaces(db_session, client)
+    sync_workspaces(db_session, client, weave)
 
     expected_name = workspace_name_for(project.id)
     assert project.skypilot_workspace == expected_name
@@ -64,25 +67,26 @@ def test_approved_project_gets_a_workspace(db_session: Session, member: Actor, r
 
 
 def test_a_team_change_updates_allowed_users(
-    db_session: Session, member: Actor, reviewer: Actor, client, make_user
+    db_session: Session, member: Actor, reviewer: Actor, client, make_user, weave
 ) -> None:
     project = _approve(db_session, member, reviewer)
-    sync_workspaces(db_session, client)
+    sync_workspaces(db_session, client, weave)
     name = project.skypilot_workspace
 
     builder = make_user(email="builder@example.com")
+    register_in_weave(weave, builder, frozenset({GROUP_MEMBER}))
     amendment = projects.start_amendment(db_session, member, project=project)
     projects.update_draft(db_session, member, project=project, credited_builder_ids=[builder.id])
     assert amendment.credited_builder_ids == [builder.id]
 
-    sync_workspaces(db_session, client)
+    sync_workspaces(db_session, client, weave)
 
     assert client.workspaces[name] == sorted([member.user.email, builder.email])
 
 
-def test_a_completed_project_gets_torn_down(db_session: Session, member: Actor, reviewer: Actor, client) -> None:
+def test_a_completed_project_gets_torn_down(db_session: Session, member: Actor, reviewer: Actor, client, weave) -> None:
     project = _approve(db_session, member, reviewer)
-    sync_workspaces(db_session, client)
+    sync_workspaces(db_session, client, weave)
     name = project.skypilot_workspace
     client.add_cluster(name, cost_cents=500)
     client.add_managed_job(name)
@@ -95,7 +99,7 @@ def test_a_completed_project_gets_torn_down(db_session: Session, member: Actor, 
     db_session.refresh(project)
     assert project.status is ProjectStatus.COMPLETED
 
-    sync_workspaces(db_session, client)
+    sync_workspaces(db_session, client, weave)
 
     assert project.skypilot_workspace is None
     assert name not in client.workspaces
@@ -112,10 +116,10 @@ def test_a_completed_project_gets_torn_down(db_session: Session, member: Actor, 
 
 
 def test_a_completed_project_gets_a_final_spend_snapshot_before_teardown(
-    db_session: Session, member: Actor, reviewer: Actor, client
+    db_session: Session, member: Actor, reviewer: Actor, client, weave
 ) -> None:
     project = _approve(db_session, member, reviewer)
-    sync_workspaces(db_session, client)
+    sync_workspaces(db_session, client, weave)
     name = project.skypilot_workspace
     cluster_name = client.add_cluster(name, cost_cents=500)
     sync_spend(db_session, client)
@@ -134,7 +138,7 @@ def test_a_completed_project_gets_a_final_spend_snapshot_before_teardown(
     # rows back to this project) is about to disappear.
     client.set_cluster_cost(cluster_name, 700)
 
-    sync_workspaces(db_session, client)
+    sync_workspaces(db_session, client, weave)
 
     assert project.skypilot_workspace is None
     assert budget.latest_spend_cents(db_session, project) == 700
@@ -146,33 +150,35 @@ def test_a_completed_project_gets_a_final_spend_snapshot_before_teardown(
     assert event.payload["final_spend_cents"] == 700
 
 
-def test_a_withdrawn_project_gets_torn_down_too(db_session: Session, member: Actor, reviewer: Actor, client) -> None:
+def test_a_withdrawn_project_gets_torn_down_too(
+    db_session: Session, member: Actor, reviewer: Actor, client, weave
+) -> None:
     project = _approve(db_session, member, reviewer)
-    sync_workspaces(db_session, client)
+    sync_workspaces(db_session, client, weave)
     name = project.skypilot_workspace
 
     projects.withdraw(db_session, member, project=project)
     assert project.status is ProjectStatus.WITHDRAWN
 
-    sync_workspaces(db_session, client)
+    sync_workspaces(db_session, client, weave)
 
     assert project.skypilot_workspace is None
     assert name not in client.workspaces
 
 
 def test_a_completed_projects_serve_service_is_torn_down_too(
-    db_session: Session, member: Actor, reviewer: Actor, client
+    db_session: Session, member: Actor, reviewer: Actor, client, weave
 ) -> None:
     """A Serve service (`sky serve up`) provisions its own controller/replica clusters outside
     `list_clusters`' accounting -- teardown must down it explicitly, or it (and its compute) keeps
     running past the workspace's own deletion."""
     project = _approve(db_session, member, reviewer)
-    sync_workspaces(db_session, client)
+    sync_workspaces(db_session, client, weave)
     name = project.skypilot_workspace
     service_name = client.add_service(name)
 
     projects.withdraw(db_session, member, project=project)
-    sync_workspaces(db_session, client)
+    sync_workspaces(db_session, client, weave)
 
     assert client.list_services(name) == []
     assert service_name  # sanity: a real name was generated and torn down, not a no-op on nothing
@@ -189,18 +195,18 @@ def _torn_down_events(session: Session, project) -> list[AuditEvent]:
 
 
 def test_a_finished_project_whose_workspace_vanished_is_recorded_as_torn_down(
-    db_session: Session, member: Actor, reviewer: Actor, client
+    db_session: Session, member: Actor, reviewer: Actor, client, weave
 ) -> None:
     """Deleted by hand behind Krater's back: a real server fails every call scoped to it, which used to
     fail the teardown (and, before per-project isolation, the whole step) on every reconcile."""
     project = _approve(db_session, member, reviewer)
-    sync_workspaces(db_session, client)
+    sync_workspaces(db_session, client, weave)
     name = project.skypilot_workspace
     client.add_cluster(name, cost_cents=500)
     projects.withdraw(db_session, member, project=project)
     client.remove_workspace_out_of_band(name)
 
-    sync_workspaces(db_session, client)
+    sync_workspaces(db_session, client, weave)
 
     assert project.skypilot_workspace is None
     [event] = _torn_down_events(db_session, project)
@@ -210,19 +216,19 @@ def test_a_finished_project_whose_workspace_vanished_is_recorded_as_torn_down(
 
 
 def test_a_vanished_workspace_after_a_state_reset_keeps_the_last_recorded_spend(
-    db_session: Session, member: Actor, reviewer: Actor, client
+    db_session: Session, member: Actor, reviewer: Actor, client, weave
 ) -> None:
     """A SkyPilot state reset also wipes `cost_report`'s history, which reads as zero spend; that must
     not overwrite the spend Krater already recorded."""
     project = _approve(db_session, member, reviewer)
-    sync_workspaces(db_session, client)
+    sync_workspaces(db_session, client, weave)
     name = project.skypilot_workspace
     client.add_cluster(name, cost_cents=700)
     sync_spend(db_session, client)
     projects.withdraw(db_session, member, project=project)
     client.remove_workspace_out_of_band(name, keep_cost_history=False)
 
-    sync_workspaces(db_session, client)
+    sync_workspaces(db_session, client, weave)
 
     assert project.skypilot_workspace is None
     [event] = _torn_down_events(db_session, project)
@@ -231,14 +237,14 @@ def test_a_vanished_workspace_after_a_state_reset_keeps_the_last_recorded_spend(
 
 
 def test_an_active_projects_vanished_workspace_is_recreated(
-    db_session: Session, member: Actor, reviewer: Actor, client
+    db_session: Session, member: Actor, reviewer: Actor, client, weave
 ) -> None:
     project = _approve(db_session, member, reviewer)
-    sync_workspaces(db_session, client)
+    sync_workspaces(db_session, client, weave)
     name = project.skypilot_workspace
     client.remove_workspace_out_of_band(name)
 
-    sync_workspaces(db_session, client)
+    sync_workspaces(db_session, client, weave)
 
     assert project.skypilot_workspace == name
     assert client.workspaces[name] == [member.user.email]
@@ -267,14 +273,14 @@ class _FailingForClient(FakeSkyPilotClient):
 
 
 def test_one_projects_teardown_failure_does_not_block_the_others(
-    db_session: Session, member: Actor, reviewer: Actor
+    db_session: Session, member: Actor, reviewer: Actor, weave
 ) -> None:
     """It fails at the very last SkyPilot call, after the final-spend snapshot was already written, so
     that snapshot must be rolled back with the rest of the project's partial work."""
     client = _FailingForClient("delete_workspace")
     broken = _approve(db_session, member, reviewer)
     healthy = _approve(db_session, member, reviewer)
-    sync_workspaces(db_session, client)
+    sync_workspaces(db_session, client, weave)
     broken_name = broken.skypilot_workspace
     client.add_cluster(broken_name, cost_cents=300)
     projects.withdraw(db_session, member, project=broken)
@@ -283,7 +289,7 @@ def test_one_projects_teardown_failure_does_not_block_the_others(
     client.failing_workspace = broken_name
 
     with patch("krater.services.skypilot_sync.logger") as log:
-        sync_workspaces(db_session, client)
+        sync_workspaces(db_session, client, weave)
 
     assert newcomer.skypilot_workspace == workspace_name_for(newcomer.id)
     assert healthy.skypilot_workspace is None
@@ -297,9 +303,170 @@ def test_one_projects_teardown_failure_does_not_block_the_others(
 
     # Once SkyPilot recovers, the next pass finishes the job.
     client.failing_workspace = None
-    sync_workspaces(db_session, client)
+    sync_workspaces(db_session, client, weave)
     assert broken.skypilot_workspace is None
     assert _torn_down_events(db_session, broken)[0].payload["final_spend_cents"] == 300
+
+
+# --------------------------------------------------------------------------------------------------
+# sync_workspaces: access follows the Weave member role
+# --------------------------------------------------------------------------------------------------
+
+
+class _WeaveDown(StubWeaveClient):
+    """A stub Weave whose directory can't be reached."""
+
+    def list_users_with_role(self, role: str):
+        raise WeaveUnavailableError("simulated Weave outage")
+
+
+def _access_removed_events(session: Session, project) -> list[AuditEvent]:
+    stmt = select(AuditEvent).where(AuditEvent.action == AUDIT_ACCESS_REMOVED, AuditEvent.project_id == project.id)
+    return list(session.scalars(stmt))
+
+
+def _team_of_two(session: Session, member: Actor, reviewer: Actor, make_user, weave):
+    """An approved project with a provisioned workspace, whose team is `member` plus a credited builder
+    who also holds the member role."""
+    project = _approve(session, member, reviewer)
+    builder = make_user(email="builder@example.com")
+    register_in_weave(weave, builder, frozenset({GROUP_MEMBER}))
+    projects.start_amendment(session, member, project=project)
+    projects.update_draft(session, member, project=project, credited_builder_ids=[builder.id])
+    sync_workspaces(session, client := FakeSkyPilotClient(), weave)
+    assert client.workspaces[project.skypilot_workspace] == sorted([member.user.email, builder.email])
+    return project, builder, client
+
+
+def test_a_member_who_lost_the_role_is_removed(
+    db_session: Session, member: Actor, reviewer: Actor, make_user, weave
+) -> None:
+    project, builder, client = _team_of_two(db_session, member, reviewer, make_user, weave)
+
+    weave.set_roles(builder.weave_sub, [])
+    sync_workspaces(db_session, client, weave)
+
+    assert client.workspaces[project.skypilot_workspace] == [member.user.email]
+    assert project.skypilot_allowed_users == [member.user.email]
+    [event] = _access_removed_events(db_session, project)
+    assert event.actor_id is None
+    assert event.payload == {
+        "workspace": project.skypilot_workspace,
+        "user_id": str(builder.id),
+        "weave_sub": builder.weave_sub,
+        "email": builder.email,
+    }
+
+
+def test_a_member_locked_in_weave_is_removed(
+    db_session: Session, member: Actor, reviewer: Actor, make_user, weave
+) -> None:
+    project, builder, client = _team_of_two(db_session, member, reviewer, make_user, weave)
+
+    weave.set_active(builder.weave_sub, False)
+    sync_workspaces(db_session, client, weave)
+
+    assert client.workspaces[project.skypilot_workspace] == [member.user.email]
+    assert len(_access_removed_events(db_session, project)) == 1
+
+
+def test_an_active_member_stays(db_session: Session, member: Actor, reviewer: Actor, make_user, weave) -> None:
+    project, builder, client = _team_of_two(db_session, member, reviewer, make_user, weave)
+
+    sync_workspaces(db_session, client, weave)
+
+    assert client.workspaces[project.skypilot_workspace] == sorted([member.user.email, builder.email])
+    assert _access_removed_events(db_session, project) == []
+
+
+def test_the_removal_is_audited_once_per_removal(
+    db_session: Session, member: Actor, reviewer: Actor, make_user, weave
+) -> None:
+    project, builder, client = _team_of_two(db_session, member, reviewer, make_user, weave)
+
+    weave.set_roles(builder.weave_sub, [])
+    sync_workspaces(db_session, client, weave)
+    sync_workspaces(db_session, client, weave)
+    assert len(_access_removed_events(db_session, project)) == 1
+
+    # Weave gives the role back, then takes it away again: a second removal, so a second event.
+    weave.set_roles(builder.weave_sub, ["member"])
+    sync_workspaces(db_session, client, weave)
+    assert builder.email in client.workspaces[project.skypilot_workspace]
+    weave.set_roles(builder.weave_sub, [])
+    sync_workspaces(db_session, client, weave)
+
+    assert len(_access_removed_events(db_session, project)) == 2
+
+
+def test_a_builder_without_the_role_is_never_added_or_audited(
+    db_session: Session, member: Actor, reviewer: Actor, make_user, weave
+) -> None:
+    project = _approve(db_session, member, reviewer)
+    sync_workspaces(db_session, client := FakeSkyPilotClient(), weave)
+    outsider = make_user(email="outsider@example.com")
+    register_in_weave(weave, outsider, frozenset())
+    projects.start_amendment(db_session, member, project=project)
+    projects.update_draft(db_session, member, project=project, credited_builder_ids=[outsider.id])
+
+    sync_workspaces(db_session, client, weave)
+
+    assert client.workspaces[project.skypilot_workspace] == [member.user.email]
+    assert _access_removed_events(db_session, project) == []
+
+
+def test_a_workspace_from_before_the_stored_list_audits_the_removal(
+    db_session: Session, member: Actor, reviewer: Actor, make_user, weave
+) -> None:
+    """Workspaces provisioned before `skypilot_allowed_users` existed hold the whole team."""
+    project, builder, client = _team_of_two(db_session, member, reviewer, make_user, weave)
+    project.skypilot_allowed_users = None
+    db_session.flush()
+
+    weave.set_roles(builder.weave_sub, [])
+    sync_workspaces(db_session, client, weave)
+
+    assert client.workspaces[project.skypilot_workspace] == [member.user.email]
+    assert len(_access_removed_events(db_session, project)) == 1
+
+
+def test_weave_down_leaves_allowed_users_untouched_and_still_enforces_spend(
+    db_session: Session, member: Actor, reviewer: Actor, make_user, weave
+) -> None:
+    project, builder, client = _team_of_two(db_session, member, reviewer, make_user, weave)
+    name = project.skypilot_workspace
+    before = list(client.workspaces[name])
+    client.add_cluster(name, cost_cents=200_000)  # over the 100_000 budget
+    # A project approved during the outage waits for Weave before it gets a workspace.
+    pending = _approve(db_session, member, reviewer)
+    db_session.commit()
+
+    reconcile(db_session, client, _WeaveDown(), warn_percent=WARN_PERCENT)
+
+    assert client.workspaces[name] == before
+    assert _access_removed_events(db_session, project) == []
+    assert pending.skypilot_workspace is None
+    assert budget.latest_spend_cents(db_session, project) == 200_000
+    assert client.list_clusters(name) == []
+    teardowns = db_session.scalars(
+        select(AuditEvent).where(AuditEvent.action == AUDIT_BUDGET_TEARDOWN, AuditEvent.project_id == project.id)
+    ).all()
+    assert len(teardowns) == 1
+
+
+def test_weave_down_still_tears_down_a_finished_project(
+    db_session: Session, member: Actor, reviewer: Actor, client, weave
+) -> None:
+    project = _approve(db_session, member, reviewer)
+    sync_workspaces(db_session, client, weave)
+    name = project.skypilot_workspace
+    projects.withdraw(db_session, member, project=project)
+
+    sync_workspaces(db_session, client, _WeaveDown())
+
+    assert project.skypilot_workspace is None
+    assert project.skypilot_allowed_users is None
+    assert name not in client.workspaces
 
 
 # --------------------------------------------------------------------------------------------------
@@ -308,10 +475,10 @@ def test_one_projects_teardown_failure_does_not_block_the_others(
 
 
 def test_spend_snapshots_are_written_only_on_change(
-    db_session: Session, member: Actor, reviewer: Actor, client
+    db_session: Session, member: Actor, reviewer: Actor, client, weave
 ) -> None:
     project = _approve(db_session, member, reviewer)
-    sync_workspaces(db_session, client)
+    sync_workspaces(db_session, client, weave)
     name = project.skypilot_workspace
     cluster = client.add_cluster(name, cost_cents=1000)
 
@@ -339,9 +506,9 @@ def test_spend_snapshots_are_written_only_on_change(
 # --------------------------------------------------------------------------------------------------
 
 
-def test_the_warning_fires_once(db_session: Session, member: Actor, reviewer: Actor, client) -> None:
+def test_the_warning_fires_once(db_session: Session, member: Actor, reviewer: Actor, client, weave) -> None:
     project = _approve(db_session, member, reviewer, budget_cents=1000)
-    sync_workspaces(db_session, client)
+    sync_workspaces(db_session, client, weave)
     name = project.skypilot_workspace
     client.add_cluster(name, cost_cents=850)  # 85% >= 80% warn threshold
     sync_spend(db_session, client)
@@ -358,10 +525,10 @@ def test_the_warning_fires_once(db_session: Session, member: Actor, reviewer: Ac
 
 
 def test_teardown_at_100_percent_downs_clusters_and_cancels_jobs(
-    db_session: Session, member: Actor, reviewer: Actor, client
+    db_session: Session, member: Actor, reviewer: Actor, client, weave
 ) -> None:
     project = _approve(db_session, member, reviewer, budget_cents=1000)
-    sync_workspaces(db_session, client)
+    sync_workspaces(db_session, client, weave)
     name = project.skypilot_workspace
     client.add_cluster(name, cost_cents=1200)  # over budget
     client.add_managed_job(name)
@@ -379,10 +546,10 @@ def test_teardown_at_100_percent_downs_clusters_and_cancels_jobs(
 
 
 def test_teardown_at_100_percent_downs_serve_services_too(
-    db_session: Session, member: Actor, reviewer: Actor, client
+    db_session: Session, member: Actor, reviewer: Actor, client, weave
 ) -> None:
     project = _approve(db_session, member, reviewer, budget_cents=1000)
-    sync_workspaces(db_session, client)
+    sync_workspaces(db_session, client, weave)
     name = project.skypilot_workspace
     client.add_cluster(name, cost_cents=1200)  # over budget
     service_name = client.add_service(name)
@@ -395,10 +562,10 @@ def test_teardown_at_100_percent_downs_serve_services_too(
 
 
 def test_teardown_does_not_repeat_without_new_clusters(
-    db_session: Session, member: Actor, reviewer: Actor, client
+    db_session: Session, member: Actor, reviewer: Actor, client, weave
 ) -> None:
     project = _approve(db_session, member, reviewer, budget_cents=1000)
-    sync_workspaces(db_session, client)
+    sync_workspaces(db_session, client, weave)
     name = project.skypilot_workspace
     client.add_cluster(name, cost_cents=1200)
     sync_spend(db_session, client)
@@ -413,13 +580,13 @@ def test_teardown_does_not_repeat_without_new_clusters(
 
 
 def test_teardown_downs_a_new_cluster_but_does_not_spam_a_new_audit_event(
-    db_session: Session, member: Actor, reviewer: Actor, client
+    db_session: Session, member: Actor, reviewer: Actor, client, weave
 ) -> None:
     """A new cluster appearing after the first teardown (still over the *same* ceiling) must still be
     torn down every run, but the audit trail dedupes to one event per crossing (like the warning) with
     a running count, rather than a fresh row every reconcile tick."""
     project = _approve(db_session, member, reviewer, budget_cents=1000)
-    sync_workspaces(db_session, client)
+    sync_workspaces(db_session, client, weave)
     name = project.skypilot_workspace
     client.add_cluster(name, cost_cents=1200)
     sync_spend(db_session, client)
@@ -438,7 +605,7 @@ def test_teardown_downs_a_new_cluster_but_does_not_spam_a_new_audit_event(
 
 
 def test_teardown_tears_down_a_relaunched_cluster_with_a_reused_name(
-    db_session: Session, member: Actor, admin: Actor, client
+    db_session: Session, member: Actor, admin: Actor, client, weave
 ) -> None:
     """The HIGH finding: a member relaunches a cluster under the *same name* after the ceiling was
     raised. Gating the teardown on "have I seen this cluster name before" (rather than tearing down
@@ -448,7 +615,7 @@ def test_teardown_tears_down_a_relaunched_cluster_with_a_reused_name(
     projects.admin_decide(
         db_session, admin, revision=project.current_revision, decision=ReviewDecision.APPROVE, reason="ok"
     )
-    sync_workspaces(db_session, client)
+    sync_workspaces(db_session, client, weave)
     workspace = project.skypilot_workspace
 
     client.add_cluster(workspace, 10_000, name="train")
@@ -468,9 +635,11 @@ def test_teardown_tears_down_a_relaunched_cluster_with_a_reused_name(
     assert len(events) == 2  # re-armed by the ceiling change, per-crossing
 
 
-def test_raising_the_ceiling_re_arms_the_warning(db_session: Session, member: Actor, reviewer: Actor, client) -> None:
+def test_raising_the_ceiling_re_arms_the_warning(
+    db_session: Session, member: Actor, reviewer: Actor, client, weave
+) -> None:
     project = _approve(db_session, member, reviewer, budget_cents=1000)
-    sync_workspaces(db_session, client)
+    sync_workspaces(db_session, client, weave)
     name = project.skypilot_workspace
     cluster_name = client.add_cluster(name, cost_cents=850)
     sync_spend(db_session, client)
@@ -497,12 +666,12 @@ def test_raising_the_ceiling_re_arms_the_warning(db_session: Session, member: Ac
 
 
 def test_one_projects_enforcement_failure_does_not_block_the_others(
-    db_session: Session, member: Actor, reviewer: Actor
+    db_session: Session, member: Actor, reviewer: Actor, weave
 ) -> None:
     client = _FailingForClient("list_clusters")
     broken = _approve(db_session, member, reviewer, budget_cents=1000)
     healthy = _approve(db_session, member, reviewer, budget_cents=1000)
-    sync_workspaces(db_session, client)
+    sync_workspaces(db_session, client, weave)
     client.add_cluster(broken.skypilot_workspace, cost_cents=1200)
     healthy_cluster = client.add_cluster(healthy.skypilot_workspace, cost_cents=1200)
     sync_spend(db_session, client)
@@ -546,7 +715,9 @@ class _OutageOnceClient(FakeSkyPilotClient):
         return super().cost_report(days)
 
 
-def test_an_outage_in_one_step_does_not_block_the_others(db_session: Session, member: Actor, reviewer: Actor) -> None:
+def test_an_outage_in_one_step_does_not_block_the_others(
+    db_session: Session, member: Actor, reviewer: Actor, weave
+) -> None:
     flaky_client = _OutageOnceClient()
     project = _approve(db_session, member, reviewer)
     # Commit the test's own setup first: `reconcile` rolls back the *session* on a failed step (not
@@ -556,7 +727,7 @@ def test_an_outage_in_one_step_does_not_block_the_others(db_session: Session, me
 
     # sync_spend (step 1) raises once; enforce_budgets (step 2) and sync_workspaces (step 3) must still
     # run and have their work committed.
-    reconcile(db_session, flaky_client, warn_percent=WARN_PERCENT)
+    reconcile(db_session, flaky_client, weave, warn_percent=WARN_PERCENT)
 
     db_session.refresh(project)
     assert project.skypilot_workspace == workspace_name_for(project.id)
@@ -564,12 +735,12 @@ def test_an_outage_in_one_step_does_not_block_the_others(db_session: Session, me
 
     # A later reconcile succeeds and the spend step catches up.
     flaky_client.add_cluster(project.skypilot_workspace, cost_cents=42)
-    reconcile(db_session, flaky_client, warn_percent=WARN_PERCENT)
+    reconcile(db_session, flaky_client, weave, warn_percent=WARN_PERCENT)
     assert budget.latest_spend_cents(db_session, project) == 42
 
 
 def test_reconcile_runs_spend_and_enforcement_before_workspace_teardown(
-    db_session: Session, member: Actor, reviewer: Actor, client
+    db_session: Session, member: Actor, reviewer: Actor, client, weave
 ) -> None:
     """`sync_spend` and `enforce_budgets` must run (and see this pass's numbers) before
     `sync_workspaces`'s teardown work, so an active project's budget is enforced against this pass's
@@ -585,16 +756,16 @@ def test_reconcile_runs_spend_and_enforcement_before_workspace_teardown(
         call_order.append("enforce_budgets")
         return real_enforce_budgets(session, client, warn_percent=warn_percent)
 
-    def spy_sync_workspaces(session, client):
+    def spy_sync_workspaces(session, client, weave_client):
         call_order.append("sync_workspaces")
-        return real_sync_workspaces(session, client)
+        return real_sync_workspaces(session, client, weave_client)
 
     with (
         patch("krater.services.skypilot_sync.sync_spend", spy_sync_spend),
         patch("krater.services.skypilot_sync.enforce_budgets", spy_enforce_budgets),
         patch("krater.services.skypilot_sync.sync_workspaces", spy_sync_workspaces),
     ):
-        reconcile(db_session, client, warn_percent=WARN_PERCENT)
+        reconcile(db_session, client, weave, warn_percent=WARN_PERCENT)
 
     assert call_order == ["sync_spend", "enforce_budgets", "sync_workspaces"]
 
