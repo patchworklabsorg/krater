@@ -24,6 +24,9 @@ from krater.weave.errors import WeaveAuthError
 from krater.weave.roles import RoleMapping
 from krater.weave.types import WeaveIdentity, WeaveUser
 
+#: The fake client_credentials token `quilt_token` returns. A real Quilt refuses it (Weave never issued it).
+STUB_QUILT_TOKEN = "stub-quilt-token"
+
 #: The bundled fixture, used whenever `settings.weave_stub_users_file` is blank.
 DEFAULT_STUB_USERS_FILE = Path(__file__).parent / "stub_users.json"
 
@@ -53,6 +56,9 @@ class StubWeaveClient:
         self._mapping = role_mapping if role_mapping is not None else RoleMapping.default()
 
         self._users_by_sub: dict[str, StubUser] = {}
+        # How often `quilt_token` / `invalidate_quilt_token` were called, for tests.
+        self.quilt_token_requests = 0
+        self.quilt_token_invalidations = 0
         for entry in raw_users:
             raw_roles = entry.get("roles")
             user = StubUser(
@@ -98,6 +104,13 @@ class StubWeaveClient:
     def list_users_with_role(self, role: str) -> list[WeaveUser]:
         records = (self._record(user) for user in self._users_by_sub.values())
         return [record for record in records if role in record.roles]
+
+    def quilt_token(self) -> str:
+        self.quilt_token_requests += 1
+        return STUB_QUILT_TOKEN
+
+    def invalidate_quilt_token(self) -> None:
+        self.quilt_token_invalidations += 1
 
     # -- Stub-only helpers ---------------------------------------------------------------------------
 
@@ -162,4 +175,4 @@ class StubWeaveClient:
         )
 
 
-__all__ = ["DEFAULT_STUB_USERS_FILE", "StubUser", "StubWeaveClient"]
+__all__ = ["DEFAULT_STUB_USERS_FILE", "STUB_QUILT_TOKEN", "StubUser", "StubWeaveClient"]
