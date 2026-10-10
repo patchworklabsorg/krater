@@ -436,7 +436,7 @@ def test_admin_reclaim_requires_a_reason(client: TestClient, login_as, approved_
 
 
 # --------------------------------------------------------------------------------------------------
-# Bad links come back as field errors, never a 500
+# Bad links and out-of-range budgets come back as field errors, never a 500
 # --------------------------------------------------------------------------------------------------
 
 
@@ -481,3 +481,16 @@ def test_edit_rejects_a_non_http_repo_link_as_a_field_error(client: TestClient, 
 
     assert response.status_code == 422
     assert "Enter a full http:// or https:// URL." in response.text
+
+
+def test_create_project_rejects_a_budget_past_the_maximum(client: TestClient, login_as) -> None:
+    login_as(MEMBER_SUB)
+    csrf = get_csrf_token(client.get("/projects/new").text)
+
+    response = client.post(
+        "/projects/new",
+        data={"csrf_token": csrf, "title": "Big", "write_up": "W", "budget_requested": "21,474,836.48"},
+    )
+
+    assert response.status_code == 422
+    assert "Enter an amount up to $1,000,000.00." in response.text

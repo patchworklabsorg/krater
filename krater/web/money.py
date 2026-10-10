@@ -14,6 +14,10 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 #: optional 1-2 digit decimal part.
 _VALID_AMOUNT = re.compile(r"^-?\d+(\.\d{1,2})?$")
 
+#: The largest amount (either sign) a form accepts: $1,000,000.00, far past any Ganymede budget. The cents
+#: columns are 32-bit (they overflow at about $21.4M), so an unchecked typo would otherwise be a 500.
+MAX_AMOUNT_CENTS = 100_000_000
+
 
 class InvalidDollarAmount(ValueError):
     """Raised by `parse_dollars` when the input string isn't a valid dollar amount."""
@@ -24,7 +28,8 @@ def parse_dollars(raw: str, *, allow_negative: bool = False) -> int:
 
     Accepts an optional leading `$`, thousands separators (`,`), and up to two decimal places.
     Raises `InvalidDollarAmount` (with a message fit to show next to the field) for anything else,
-    including a negative amount when `allow_negative` is `False`, or a zero/blank amount.
+    including a blank amount, a negative amount when `allow_negative` is `False`, or one past
+    `MAX_AMOUNT_CENTS`. Zero is allowed here; callers that need a non-zero amount check for it.
     """
     text = raw.strip().replace("$", "").replace(",", "")
     if not text:
@@ -40,7 +45,10 @@ def parse_dollars(raw: str, *, allow_negative: bool = False) -> int:
     if not allow_negative and value < 0:
         raise InvalidDollarAmount("Enter a positive amount.")
 
-    return int((value * 100).to_integral_value(rounding=ROUND_HALF_UP))
+    cents = int((value * 100).to_integral_value(rounding=ROUND_HALF_UP))
+    if abs(cents) > MAX_AMOUNT_CENTS:
+        raise InvalidDollarAmount(f"Enter an amount up to {format_cents(MAX_AMOUNT_CENTS)}.")
+    return cents
 
 
 def format_cents(cents: int) -> str:
@@ -58,4 +66,4 @@ def cents_to_input(cents: int) -> str:
     return f"{sign}{whole}.{remainder:02d}"
 
 
-__all__ = ["InvalidDollarAmount", "cents_to_input", "format_cents", "parse_dollars"]
+__all__ = ["MAX_AMOUNT_CENTS", "InvalidDollarAmount", "cents_to_input", "format_cents", "parse_dollars"]

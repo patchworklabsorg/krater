@@ -56,3 +56,14 @@ def test_parse_dollars_allows_zero() -> None:
 )
 def test_format_cents(cents: int, expected: str) -> None:
     assert format_cents(cents) == expected
+
+
+@pytest.mark.parametrize("raw", ["1,000,000.01", "21,474,836.48", "-1,000,000.01"])
+def test_parse_dollars_refuses_amounts_past_the_maximum(raw: str) -> None:
+    # The cents columns are 32-bit: an unchecked typo would otherwise overflow them and 500.
+    with pytest.raises(InvalidDollarAmount, match=r"up to \$1,000,000\.00"):
+        parse_dollars(raw, allow_negative=True)
+
+
+def test_parse_dollars_accepts_the_maximum_itself() -> None:
+    assert parse_dollars("-1,000,000.00", allow_negative=True) == -100_000_000
