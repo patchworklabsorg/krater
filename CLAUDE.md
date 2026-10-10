@@ -74,5 +74,8 @@ tests/             mirrors krater/ layout
 
 ## Brand
 
-Patchwork palette: Ink `#2a2050` (text), Grape `#6c3ec1` (primary accent), Deep Purple `#4b006e`, Lavender `#c7b7e2`,
-Quilt `#f7f5fb` (background).
+Krater uses Patchwork's "quilt" design system, the same one as Weave and patchworklabs.org: Ink `#2a2050` text on
+Quilt `#f7f5fb` paper, Grape `#6c3ec1` as the primary accent, violet/orchid/sky/teal patches, stitched (dashed)
+cards and buttons, Geist for text and Shantell Sans for headings, and a dark mode. The tokens and motifs live in
+`krater/web/static/css/main.css`, copied from Weave's `app/assets/tailwind/application.css`; keep the two in sync.
+Style through the existing classes (`.card`, `.button--primary`, `.badge--<status>` ...) rather than new colors.

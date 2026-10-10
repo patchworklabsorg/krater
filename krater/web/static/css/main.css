@@ -1,27 +1,141 @@
-/* Krater base styles. Hand-written, no framework. Brand palette from CLAUDE.md. */
+/* Krater base styles. Hand-written, no framework.
+
+   The look is Patchwork's "quilt" design system, shared by Weave (app/assets/tailwind/application.css) and
+   patchworklabs.org (globals.css): lavender paper with a faint quilted lattice, stitched (dashed) cards and
+   buttons, Geist for text and Shantell Sans for headings, and a dark mode that re-maps the same tokens. The
+   palette and motif values below are copied from Weave's file; keep them in sync with it. Fonts are in
+   fonts.css, the theme switch in ../js/theme.js. */
+
+/* ── Tokens ── */
 
 :root {
-  --color-ink: #2a2050;
-  --color-grape: #6c3ec1;
-  --color-deep-purple: #4b006e;
-  --color-lavender: #c7b7e2;
-  --color-quilt: #f7f5fb;
-  --color-white: #ffffff;
+  color-scheme: light;
 
-  --color-bg: var(--color-quilt);
-  --color-surface: var(--color-white);
-  --color-text: var(--color-ink);
-  --color-text-muted: #5b5570;
-  --color-accent: var(--color-grape);
-  --color-accent-strong: var(--color-deep-purple);
-  --color-border: var(--color-lavender);
+  /* Grounds & ink */
+  --color-quilt: #f7f5fb; /* page background, lavender-tinted paper */
+  --color-paper: #fefdff; /* card surface */
+  --color-ink: #2a2050; /* primary text, the stitch color */
+  --color-ink-soft: #5d5584; /* secondary text */
+  --color-ink-faint: #8a83a8; /* decoration only: too faint for small text on quilt */
 
-  --color-danger: #a33636;
-  --color-danger-bg: #fbe9e7;
+  /* Patches */
+  --color-grape: #6c3ec1; /* primary */
+  --color-grape-strong: #5a31a6; /* Weave's brand-600: primary hover */
+  --color-grape-soft: #ebe3f9;
+  --color-violet: #9b7fd4;
+  --color-violet-soft: #f0ebfb;
+  --color-orchid: #a44fc8;
+  --color-orchid-soft: #f4e6f9;
+  --color-sky: #2f7cd6;
+  --color-sky-soft: #dfebfa;
+  --color-teal: #2aa187;
+  --color-teal-soft: #daf1ea;
+
+  /* Hairlines (Weave's neutral-300 and -400) */
+  --color-line: #e3ddf1;
+  --color-line-strong: #c9c1de;
+
+  /* Not in the quilt palette: Weave borrows Tailwind's reds for errors. */
+  --color-danger: #b42318;
+  --color-danger-soft: #fdeceb;
+
+  /* Motif plumbing */
+  --shadow-stitch: rgb(42 32 80 / 0.12);
+  --shadow-stitch-strong: rgb(42 32 80 / 0.18);
+  --lattice-line: rgb(108 62 193 / 0.045);
+  --btn-stitch-ink: #fff;
+  --btn-stitch-seam: rgb(255 255 255 / 0.55);
+
+  --font-sans: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-display: "Shantell Sans", "Geist", ui-sans-serif, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
   --content-max-width: 52rem;
   --gutter: 1rem;
 }
+
+/* Dark mode, "the quilt at night". The set appears twice, once for the toggle's explicit choice and once for
+   the OS preference; keep them identical (as Weave does). */
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --color-quilt: #16112a;
+  --color-paper: #1f1938;
+  --color-ink: #e9e4f7;
+  --color-ink-soft: #a79ecb;
+  --color-ink-faint: #7d74a1;
+
+  --color-grape: #a988e9;
+  --color-grape-strong: #9271d6;
+  --color-grape-soft: #322557;
+  --color-violet: #b8a1e4;
+  --color-violet-soft: #2c2349;
+  --color-orchid: #cd8ce6;
+  --color-orchid-soft: #3a214c;
+  --color-sky: #74a9eb;
+  --color-sky-soft: #1d2c49;
+  --color-teal: #4fc4a9;
+  --color-teal-soft: #163a32;
+
+  --color-line: #383063;
+  --color-line-strong: #524878;
+
+  --color-danger: #f1958a;
+  --color-danger-soft: #3d1a24;
+
+  --shadow-stitch: rgb(0 0 0 / 0.4);
+  --shadow-stitch-strong: rgb(0 0 0 / 0.5);
+  --lattice-line: rgb(169 136 233 / 0.05);
+  --btn-stitch-ink: #16112a;
+  --btn-stitch-seam: rgb(22 17 42 / 0.5);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+
+    --color-quilt: #16112a;
+    --color-paper: #1f1938;
+    --color-ink: #e9e4f7;
+    --color-ink-soft: #a79ecb;
+    --color-ink-faint: #7d74a1;
+
+    --color-grape: #a988e9;
+    --color-grape-strong: #9271d6;
+    --color-grape-soft: #322557;
+    --color-violet: #b8a1e4;
+    --color-violet-soft: #2c2349;
+    --color-orchid: #cd8ce6;
+    --color-orchid-soft: #3a214c;
+    --color-sky: #74a9eb;
+    --color-sky-soft: #1d2c49;
+    --color-teal: #4fc4a9;
+    --color-teal-soft: #163a32;
+
+    --color-line: #383063;
+    --color-line-strong: #524878;
+
+    --color-danger: #f1958a;
+    --color-danger-soft: #3d1a24;
+
+    --shadow-stitch: rgb(0 0 0 / 0.4);
+    --shadow-stitch-strong: rgb(0 0 0 / 0.5);
+    --lattice-line: rgb(169 136 233 / 0.05);
+    --btn-stitch-ink: #16112a;
+    --btn-stitch-seam: rgb(22 17 42 / 0.5);
+  }
+}
+
+/* Text on a *-soft patch: the patch color pulled toward ink, so small text clears 4.5:1 in both themes (the
+   bare patch colors don't on their soft partners). */
+:root {
+  --on-grape-soft: color-mix(in srgb, var(--color-grape) 70%, var(--color-ink));
+  --on-orchid-soft: color-mix(in srgb, var(--color-orchid) 60%, var(--color-ink));
+  --on-sky-soft: color-mix(in srgb, var(--color-sky) 65%, var(--color-ink));
+  --on-teal-soft: color-mix(in srgb, var(--color-teal) 55%, var(--color-ink));
+}
+
+/* ── Base ── */
 
 * {
   box-sizing: border-box;
@@ -39,43 +153,127 @@ body {
   padding: 0;
 }
 
+/* The quilted ground: a faint diamond lattice over the lavender paper (Weave's `.quilt-bg`). */
 body {
-  background-color: var(--color-bg);
-  color: var(--color-text);
-  font-family:
-    "Segoe UI",
-    system-ui,
-    -apple-system,
-    Roboto,
-    Helvetica,
-    Arial,
-    sans-serif;
+  min-height: 100vh;
+  background-color: var(--color-quilt);
+  background-image:
+    repeating-linear-gradient(45deg, var(--lattice-line) 0 1px, transparent 1px 34px),
+    repeating-linear-gradient(-45deg, var(--lattice-line) 0 1px, transparent 1px 34px);
+  background-size: 48px 48px;
+  background-attachment: fixed;
+  color: var(--color-ink);
+  font-family: var(--font-sans);
   line-height: 1.5;
 }
 
+h1,
+h2,
+h3 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--color-ink);
+}
+
 a {
-  color: var(--color-accent-strong);
+  color: var(--color-grape);
+  font-weight: 500;
+  text-decoration: underline dashed;
+  text-underline-offset: 2px;
 }
 
 a:hover {
-  color: var(--color-accent);
+  color: var(--color-ink);
 }
 
 a:focus-visible,
 button:focus-visible,
-select:focus-visible {
-  outline: 3px solid var(--color-accent);
+select:focus-visible,
+summary:focus-visible {
+  outline: 3px solid var(--color-violet);
   outline-offset: 2px;
 }
 
 code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 0.9em;
 }
 
+.muted {
+  color: var(--color-ink-soft);
+  font-size: 0.9rem;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ── Quilt motifs ── */
+
+/* A strip of stitched pastel patches, like the bound edge of a quilt. */
+.quilt-binding {
+  position: relative;
+  height: 10px;
+  background-image: repeating-linear-gradient(
+    90deg,
+    var(--color-grape) 0 26px,
+    var(--color-violet) 26px 52px,
+    var(--color-sky) 52px 78px,
+    var(--color-teal) 78px 104px,
+    var(--color-orchid) 104px 130px
+  );
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.25);
+}
+
+.quilt-binding::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: repeating-linear-gradient(90deg, rgb(255 255 255 / 0.5) 0 4px, transparent 4px 10px);
+  opacity: 0.5;
+  mix-blend-mode: overlay;
+}
+
+/* A tiny grandmother's-flower-garden rosette, for the brand mark, eyebrows and empty states. */
+.rosette {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.15em;
+  background:
+    radial-gradient(circle at 50% 27%, var(--color-grape) 0 22%, transparent 23%),
+    radial-gradient(circle at 27% 63%, var(--color-violet) 0 22%, transparent 23%),
+    radial-gradient(circle at 73% 63%, var(--color-sky) 0 22%, transparent 23%),
+    radial-gradient(circle at 50% 50%, var(--color-teal) 0 20%, transparent 21%);
+}
+
+.eyebrow {
+  margin: 0 0 0.5rem;
+  font-family: var(--font-display);
+  font-size: 0.875rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--color-grape);
+}
+
+.eyebrow .rosette {
+  margin-right: 0.35rem;
+}
+
+/* ── Header ── */
+
 .site-header {
-  background-color: var(--color-accent-strong);
-  color: var(--color-white);
+  background-color: var(--color-paper);
+  border-bottom: 2px dashed var(--color-line-strong);
 }
 
 .skip-link {
@@ -83,9 +281,10 @@ code {
   left: 0.5rem;
   top: -3rem;
   padding: 0.5rem 0.75rem;
-  background-color: var(--color-white);
-  color: var(--color-accent-strong);
-  border-radius: 0.4rem;
+  background-color: var(--color-paper);
+  color: var(--color-grape);
+  border: 2px dashed var(--color-ink-soft);
+  border-radius: 0.6rem;
   z-index: 10;
 }
 
@@ -105,11 +304,18 @@ code {
 }
 
 .site-header__brand {
-  color: var(--color-white);
-  font-size: 1.25rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--color-ink);
+  font-family: var(--font-display);
+  font-size: 1.4rem;
   font-weight: 700;
   text-decoration: none;
-  letter-spacing: 0.02em;
+}
+
+.site-header__brand:hover {
+  color: var(--color-grape);
 }
 
 .site-nav {
@@ -120,25 +326,21 @@ code {
 }
 
 .site-nav a {
-  color: var(--color-lavender);
+  color: var(--color-ink-soft);
   text-decoration: none;
   font-size: 0.95rem;
   padding: 0.2rem 0;
-  border-bottom: 2px solid transparent;
+  border-bottom: 2px dashed transparent;
 }
 
 .site-nav a:hover {
-  color: var(--color-white);
+  color: var(--color-grape);
 }
 
 .site-nav a[aria-current="page"] {
-  color: var(--color-white);
-  border-bottom-color: var(--color-lavender);
-}
-
-.site-nav a:focus-visible,
-.site-nav .link-button:focus-visible {
-  outline-color: var(--color-lavender);
+  color: var(--color-ink);
+  font-weight: 600;
+  border-bottom-color: var(--color-grape);
 }
 
 .site-nav__account {
@@ -146,11 +348,11 @@ code {
   align-items: center;
   gap: 0.75rem;
   padding-left: 1.25rem;
-  border-left: 1px solid rgba(199, 183, 226, 0.4);
+  border-left: 2px dashed var(--color-line);
 }
 
 .site-nav__user {
-  color: var(--color-white);
+  color: var(--color-ink);
   font-size: 0.95rem;
   font-weight: 600;
 }
@@ -171,46 +373,36 @@ code {
   margin: 0;
   padding: 0;
   font: inherit;
-  color: var(--color-lavender);
+  font-weight: 500;
+  color: var(--color-ink-soft);
   text-decoration: none;
   cursor: pointer;
 }
 
 .link-button:hover {
-  color: var(--color-white);
+  color: var(--color-grape);
 }
 
-.stub-user-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
-.stub-user-list li {
-  padding: 0.75rem;
-  border: 1px solid var(--color-border);
-  border-radius: 0.5rem;
-}
+/* ── Layout and cards ── */
 
 .content {
   max-width: var(--content-max-width);
   margin: 0 auto;
-  padding: 2rem var(--gutter);
+  padding: 2rem var(--gutter) 5rem; /* bottom room so the theme toggle never covers the last button */
 }
 
+/* A patch: a stitched card with a soft offset shadow, like fabric lifting off the quilt. */
 .card {
-  background-color: var(--color-surface);
-  border: 1px solid var(--color-border);
+  background-color: var(--color-paper);
+  border: 2px dashed var(--color-ink-soft);
   border-radius: 0.75rem;
+  box-shadow: 4px 5px 0 var(--shadow-stitch);
   padding: 1.5rem;
 }
 
 .card h1 {
   margin-top: 0;
-  color: var(--color-accent-strong);
+  font-size: 2rem;
 }
 
 .card > :first-child {
@@ -231,9 +423,20 @@ code {
   margin: 1.25rem 0 0.5rem;
 }
 
-.muted {
-  color: var(--color-text-muted);
-  font-size: 0.9rem;
+/* The signed-out landing card: bound along its top edge and sitting slightly askew, like Weave's front door.
+   Only this one tilts; rotated forms and tables would render soft. */
+.card--hero {
+  overflow: hidden;
+  padding-top: 0;
+  transform: rotate(-0.6deg);
+}
+
+.card--hero > .quilt-binding {
+  margin: 0 -1.5rem 1.75rem;
+}
+
+.card--hero h1 {
+  font-size: 2.5rem;
 }
 
 .content > .card + .card,
@@ -264,7 +467,7 @@ code {
   font-size: 0.9rem;
 }
 
-/* Flash messages */
+/* ── Flash messages ── */
 
 .flash-list {
   margin-bottom: 1.5rem;
@@ -273,70 +476,82 @@ code {
 .flash {
   margin: 0 0 0.5rem;
   padding: 0.75rem 1rem;
-  border-radius: 0.5rem;
-  border: 1px solid transparent;
+  border-radius: 0.6rem;
+  border: 2px dashed transparent;
+  font-weight: 500;
 }
 
 .flash--success {
-  background-color: #e6f4ea;
-  border-color: #b7ddc3;
-  color: #1e4620;
+  background-color: var(--color-teal-soft);
+  border-color: var(--color-teal);
+  color: var(--on-teal-soft);
 }
 
 .flash--error {
-  background-color: #fbe9e7;
-  border-color: #f0b8b0;
-  color: #611a15;
+  background-color: var(--color-danger-soft);
+  border-color: var(--color-danger);
+  color: var(--color-danger);
 }
 
 .flash--info {
-  background-color: var(--color-quilt);
-  border-color: var(--color-border);
-  color: var(--color-text);
+  background-color: var(--color-sky-soft);
+  border-color: var(--color-sky);
+  color: var(--on-sky-soft);
 }
 
-/* Buttons */
+/* ── Buttons ── */
 
+/* Secondary by default: ink seam on paper (Weave's `.btn-stitch-ghost`). */
 .button {
-  display: inline-block;
-  padding: 0.55rem 1rem;
-  border-radius: 0.5rem;
-  border: 1px solid var(--color-accent-strong);
-  background-color: var(--color-white);
-  color: var(--color-accent-strong);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  padding: 0.55rem 1.1rem;
+  border-radius: 0.6rem;
+  border: 2px dashed var(--color-ink-soft);
+  background-color: transparent;
+  color: var(--color-ink);
   font: inherit;
   font-weight: 600;
   text-decoration: none;
   cursor: pointer;
   line-height: 1.2;
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease,
+    background-color 0.15s ease;
 }
 
 .button:hover {
-  background-color: var(--color-quilt);
-  color: var(--color-accent-strong);
+  background-color: var(--color-grape-soft);
+  color: var(--color-ink);
+  transform: translateY(-1px);
 }
 
 .button:disabled,
 .button[aria-disabled="true"] {
   opacity: 0.55;
   cursor: not-allowed;
+  transform: none;
 }
 
 .button:focus-visible {
-  outline: 3px solid var(--color-accent);
+  outline: 3px solid var(--color-violet);
   outline-offset: 2px;
 }
 
+/* Primary: grape fill with a light dashed seam (Weave's `.btn-stitch`). */
 .button--primary {
-  background-color: var(--color-accent-strong);
-  border-color: var(--color-accent-strong);
-  color: var(--color-white);
+  background-color: var(--color-grape);
+  border-color: var(--btn-stitch-seam);
+  color: var(--btn-stitch-ink);
 }
 
 .button--primary:hover {
-  background-color: var(--color-accent);
-  border-color: var(--color-accent);
-  color: var(--color-white);
+  background-color: var(--color-grape-strong);
+  color: var(--btn-stitch-ink);
+  box-shadow: 3px 4px 0 var(--shadow-stitch-strong);
 }
 
 .button--danger {
@@ -345,7 +560,7 @@ code {
 }
 
 .button--danger:hover {
-  background-color: var(--color-danger-bg);
+  background-color: var(--color-danger-soft);
   color: var(--color-danger);
 }
 
@@ -354,7 +569,25 @@ code {
   font-size: 0.85rem;
 }
 
-/* Forms */
+@media (prefers-reduced-motion: reduce) {
+  .button,
+  .theme-toggle,
+  .gallery-list__item {
+    transition: none;
+  }
+
+  .button:hover,
+  .theme-toggle:hover,
+  .gallery-list__item:hover {
+    transform: none;
+  }
+
+  .card--hero {
+    transform: none;
+  }
+}
+
+/* ── Forms ── */
 
 .form {
   display: flex;
@@ -381,7 +614,7 @@ code {
 /* One self-contained admin action (its own heading, fields and button) among several on a card. */
 .admin-action {
   padding: 1.25rem 0;
-  border-top: 1px solid var(--color-border);
+  border-top: 2px dashed var(--color-line);
 }
 
 .admin-action:first-child,
@@ -423,18 +656,26 @@ code {
 .field textarea,
 .form--inline input[type="text"] {
   font: inherit;
-  padding: 0.5rem 0.65rem;
-  border: 1px solid var(--color-border);
-  border-radius: 0.4rem;
-  background-color: var(--color-white);
-  color: var(--color-text);
+  padding: 0.55rem 0.75rem;
+  border: 2px solid var(--color-line);
+  border-radius: 0.5rem;
+  background-color: var(--color-paper);
+  color: var(--color-ink);
+  transition: border-color 0.15s ease;
+}
+
+.field input::placeholder,
+.field textarea::placeholder {
+  color: var(--color-ink-faint);
 }
 
 .field input:focus-visible,
 .field select:focus-visible,
-.field textarea:focus-visible {
-  outline: 3px solid var(--color-accent);
-  outline-offset: 1px;
+.field textarea:focus-visible,
+.form--inline input[type="text"]:focus-visible {
+  outline: 2px solid var(--color-grape);
+  outline-offset: 0;
+  border-color: var(--color-grape);
 }
 
 .field [aria-invalid="true"] {
@@ -448,7 +689,7 @@ code {
 .field-hint {
   margin: 0;
   font-size: 0.85rem;
-  color: var(--color-text-muted);
+  color: var(--color-ink-soft);
 }
 
 .field-error {
@@ -462,6 +703,27 @@ code {
   display: none;
 }
 
+.field input[type="file"] {
+  font: inherit;
+  font-size: 0.9rem;
+}
+
+.field input[type="file"]::file-selector-button {
+  font: inherit;
+  font-weight: 600;
+  margin-right: 0.75rem;
+  padding: 0.4rem 0.8rem;
+  border: 2px dashed var(--color-ink-soft);
+  border-radius: 0.6rem;
+  background-color: transparent;
+  color: var(--color-ink);
+  cursor: pointer;
+}
+
+.field input[type="file"]::file-selector-button:hover {
+  background-color: var(--color-grape-soft);
+}
+
 /* Budget estimator (proposal/amendment draft form) */
 
 .estimator {
@@ -469,12 +731,14 @@ code {
   flex-direction: column;
   gap: 1rem;
   padding: 1rem;
-  border: 1px solid var(--color-border);
-  border-radius: 0.5rem;
+  background-color: var(--color-quilt);
+  border: 2px dashed var(--color-line-strong);
+  border-radius: 0.75rem;
   margin: 0;
 }
 
 .estimator legend {
+  font-family: var(--font-display);
   font-weight: 700;
   padding: 0 0.35rem;
 }
@@ -494,42 +758,99 @@ code {
   margin: 0;
 }
 
-/* Status badges */
+/* Parts of the draft editor that live outside the main save form. */
+.edit-section {
+  padding-top: 1.25rem;
+  margin-top: 0.25rem;
+  border-top: 2px dashed var(--color-line);
+}
 
+.submit-bar p {
+  margin: 0 0 0.75rem;
+}
+
+.role-change {
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.role-change input[type="text"] {
+  padding: 0.3rem 0.5rem;
+  font-size: 0.85rem;
+  min-width: 10rem;
+}
+
+/* ── Status badges ── */
+
+/* Patch-colored pills: grape for drafts and anything in flight, sky while waiting on a reviewer, teal for
+   approved, orchid for sent back, plain quilt for withdrawn or superseded. */
 .badge {
   display: inline-block;
-  padding: 0.2rem 0.6rem;
+  padding: 0.15rem 0.65rem;
   border-radius: 999px;
+  font-family: var(--font-sans); /* /admin puts badges inside headings */
   font-size: 0.8rem;
-  font-weight: 700;
-  background-color: var(--color-lavender);
-  color: var(--color-ink);
+  font-weight: 600;
+  vertical-align: middle;
+  background-color: var(--color-grape-soft);
+  color: var(--on-grape-soft);
   white-space: nowrap;
+}
+
+.badge--pending_review,
+.badge--pending_completion_review,
+.badge--outcome-pending {
+  background-color: var(--color-sky-soft);
+  color: var(--on-sky-soft);
 }
 
 .badge--approved,
 .badge--completed,
 .badge--decision-approve,
 .badge--outcome-approved {
-  background-color: #cdeeda;
-  color: #1e4620;
+  background-color: var(--color-teal-soft);
+  color: var(--on-teal-soft);
 }
 
 .badge--changes_requested,
 .badge--completion_changes_requested,
 .badge--decision-reject,
 .badge--outcome-rejected {
-  background-color: #f6d9c8;
-  color: #7a3a10;
+  background-color: var(--color-orchid-soft);
+  color: var(--on-orchid-soft);
 }
 
 .badge--withdrawn,
 .badge--outcome-superseded {
-  background-color: #e3e1e8;
-  color: var(--color-text-muted);
+  background-color: var(--color-quilt);
+  color: var(--color-ink-soft);
+  box-shadow: inset 0 0 0 1px var(--color-line-strong);
 }
 
-/* Lists */
+.badge-stack {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.25rem 0 1rem;
+}
+
+.tag {
+  background-color: var(--color-violet-soft);
+  color: var(--on-grape-soft);
+  border: 1px dashed var(--color-violet);
+  border-radius: 999px;
+  padding: 0.1rem 0.6rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+/* ── Lists ── */
 
 .project-list,
 .link-list,
@@ -543,6 +864,21 @@ code {
   gap: 0.6rem;
 }
 
+.stub-user-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.stub-user-list li {
+  padding: 0.75rem;
+  border: 2px dashed var(--color-line);
+  border-radius: 0.6rem;
+}
+
 .project-list {
   gap: 0;
 }
@@ -554,7 +890,7 @@ code {
   justify-content: space-between;
   gap: 0.6rem;
   padding: 0.75rem 0;
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 2px dashed var(--color-line);
 }
 
 .project-list__item:first-child {
@@ -581,6 +917,7 @@ code {
   gap: 0.4rem;
 }
 
+/* Gallery: each project is a small patch of its own. */
 .gallery-list {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
@@ -591,8 +928,15 @@ code {
   display: flex;
   flex-direction: column;
   padding: 0.75rem;
-  border: 1px solid var(--color-border);
-  border-radius: 0.6rem;
+  background-color: var(--color-paper);
+  border: 2px dashed var(--color-line-strong);
+  border-radius: 0.75rem;
+  box-shadow: 3px 4px 0 var(--shadow-stitch);
+  transition: transform 0.15s ease;
+}
+
+.gallery-list__item:hover {
+  transform: translateY(-2px);
 }
 
 .gallery-list__item p {
@@ -610,8 +954,8 @@ code {
   aspect-ratio: 16 / 9;
   height: auto;
   object-fit: cover;
-  border: 1px solid var(--color-border);
-  border-radius: 0.4rem;
+  border: 1px solid var(--color-line);
+  border-radius: 0.5rem;
   background-color: var(--color-quilt);
   margin-bottom: 0.6rem;
 }
@@ -620,56 +964,14 @@ code {
   display: flex;
   align-items: center;
   justify-content: center;
+  font-family: var(--font-display);
   font-size: 2.5rem;
   font-weight: 700;
-  color: var(--color-lavender);
-  background: linear-gradient(135deg, var(--color-quilt), #ece6f6);
+  color: var(--color-violet);
+  background: linear-gradient(135deg, var(--color-grape-soft), var(--color-sky-soft));
 }
 
-.tag-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-  margin: 0.25rem 0 1rem;
-}
-
-/* Parts of the draft editor that live outside the main save form. */
-.edit-section {
-  padding-top: 1.25rem;
-  margin-top: 0.25rem;
-  border-top: 1px solid var(--color-border);
-}
-
-.submit-bar p {
-  margin: 0 0 0.75rem;
-}
-
-.field input[type="file"] {
-  font: inherit;
-  font-size: 0.9rem;
-}
-
-.field input[type="file"]::file-selector-button {
-  font: inherit;
-  font-weight: 600;
-  margin-right: 0.75rem;
-  padding: 0.4rem 0.8rem;
-  border: 1px solid var(--color-accent-strong);
-  border-radius: 0.4rem;
-  background-color: var(--color-white);
-  color: var(--color-accent-strong);
-  cursor: pointer;
-}
-
-.tag {
-  background-color: var(--color-quilt);
-  border: 1px solid var(--color-border);
-  border-radius: 999px;
-  padding: 0.1rem 0.6rem;
-  font-size: 0.8rem;
-}
-
-/* Budget summary */
+/* ── Budget summary and notes ── */
 
 .budget-summary {
   display: grid;
@@ -683,64 +985,54 @@ code {
   flex-direction: column;
   padding: 0.6rem 0.9rem;
   background-color: var(--color-quilt);
-  border: 1px solid var(--color-border);
-  border-radius: 0.5rem;
+  border: 2px dashed var(--color-line);
+  border-radius: 0.6rem;
 }
 
 .budget-summary dt {
   font-size: 0.8rem;
-  color: var(--color-text-muted);
+  color: var(--color-ink-soft);
 }
 
 .budget-summary dd {
   margin: 0;
   font-size: 1.25rem;
   font-weight: 700;
-  color: var(--color-accent-strong);
+  color: var(--color-grape);
   font-variant-numeric: tabular-nums;
 }
 
 .budget-summary--details dd {
   font-size: 1rem;
   font-weight: 600;
-  color: var(--color-text);
+  color: var(--color-ink);
   overflow-wrap: anywhere;
 }
 
-.visually-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
-.role-change {
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.role-change input[type="text"] {
-  padding: 0.3rem 0.5rem;
-  font-size: 0.85rem;
-  min-width: 10rem;
-}
-
-.form--inline input[type="text"]:focus-visible {
-  outline: 3px solid var(--color-accent);
-  outline-offset: 1px;
-}
-
-.policy-note {
+.policy-note,
+.skypilot-hint {
   padding: 0.6rem 0.9rem;
   background-color: var(--color-quilt);
-  border: 1px solid var(--color-border);
-  border-radius: 0.5rem;
+  border: 2px dashed var(--color-line-strong);
+  border-radius: 0.6rem;
   font-size: 0.9rem;
+}
+
+.skypilot-hint code {
+  background-color: var(--color-paper);
+  border: 1px solid var(--color-line);
+  border-radius: 0.3rem;
+  padding: 0.05rem 0.3rem;
+}
+
+.skypilot-banner {
+  padding: 0.6rem 0.9rem;
+  border: 2px dashed var(--color-danger);
+  background-color: var(--color-danger-soft);
+  color: var(--color-danger);
+  border-radius: 0.6rem;
+  font-size: 0.9rem;
+  font-weight: 600;
 }
 
 .write-up {
@@ -753,36 +1045,9 @@ code {
   overflow-wrap: anywhere;
 }
 
-/* SkyPilot workspace hint + budget banner */
-
-.skypilot-hint {
-  padding: 0.6rem 0.9rem;
-  background-color: var(--color-quilt);
-  border: 1px solid var(--color-border);
-  border-radius: 0.5rem;
-  font-size: 0.9rem;
-}
-
-.skypilot-hint code {
-  background-color: var(--color-white);
-  border: 1px solid var(--color-border);
-  border-radius: 0.25rem;
-  padding: 0.05rem 0.3rem;
-}
-
-.skypilot-banner {
-  padding: 0.6rem 0.9rem;
-  border: 1px solid var(--color-danger);
-  background-color: var(--color-danger-bg);
-  color: var(--color-danger);
-  border-radius: 0.5rem;
-  font-size: 0.9rem;
-  font-weight: 600;
-}
-
 .revision {
   padding: 1rem 0;
-  border-top: 1px solid var(--color-border);
+  border-top: 2px dashed var(--color-line);
 }
 
 .revision:first-child,
@@ -799,7 +1064,7 @@ h2 + .revision {
   margin-top: 0.6rem;
 }
 
-/* Screenshots (completion draft upload widget + gallery) */
+/* ── Screenshots (completion draft upload widget + gallery) ── */
 
 .screenshot-list {
   list-style: none;
@@ -822,8 +1087,8 @@ h2 + .revision {
   width: 100%;
   height: 6rem;
   object-fit: cover;
-  border: 1px solid var(--color-border);
-  border-radius: 0.4rem;
+  border: 1px solid var(--color-line);
+  border-radius: 0.5rem;
   background-color: var(--color-quilt);
 }
 
@@ -840,12 +1105,12 @@ h2 + .revision {
   width: 12rem;
   height: 8rem;
   object-fit: cover;
-  border: 1px solid var(--color-border);
-  border-radius: 0.5rem;
+  border: 2px dashed var(--color-line-strong);
+  border-radius: 0.6rem;
   background-color: var(--color-quilt);
 }
 
-/* Tables */
+/* ── Tables ── */
 
 .table {
   width: 100%;
@@ -858,18 +1123,19 @@ h2 + .revision {
 .table td {
   text-align: left;
   padding: 0.5rem 0.6rem;
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-line);
   vertical-align: top;
 }
 
 .table th {
   font-size: 0.8rem;
-  font-weight: 700;
-  color: var(--color-text-muted);
+  font-weight: 600;
+  color: var(--color-ink-soft);
   text-transform: uppercase;
   letter-spacing: 0.03em;
   white-space: nowrap;
   vertical-align: bottom;
+  border-bottom: 2px dashed var(--color-line-strong);
 }
 
 .table tbody tr:hover {
@@ -915,10 +1181,10 @@ h2 + .revision {
   width: 50%;
 }
 
-.badge-stack {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem;
+/* Wide tables (e.g. /pricing) scroll inside their card instead of overflowing it. */
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .section-heading {
@@ -928,18 +1194,34 @@ h2 + .revision {
 }
 
 .section-heading .count {
-  color: var(--color-text-muted);
+  color: var(--color-ink-soft);
+  font-family: var(--font-sans);
   font-size: 0.95rem;
   font-weight: 600;
 }
 
+/* ── Empty states ── */
+
 .empty-state {
   padding: 1.25rem;
   text-align: center;
-  color: var(--color-text-muted);
+  color: var(--color-ink-soft);
   background-color: var(--color-quilt);
-  border: 1px dashed var(--color-border);
-  border-radius: 0.5rem;
+  border: 2px dashed var(--color-line-strong);
+  border-radius: 0.75rem;
+}
+
+.empty-state::before {
+  content: "";
+  display: block;
+  width: 1.75rem;
+  height: 1.75rem;
+  margin: 0 auto 0.6rem;
+  background:
+    radial-gradient(circle at 50% 27%, var(--color-grape) 0 22%, transparent 23%),
+    radial-gradient(circle at 27% 63%, var(--color-violet) 0 22%, transparent 23%),
+    radial-gradient(circle at 73% 63%, var(--color-sky) 0 22%, transparent 23%),
+    radial-gradient(circle at 50% 50%, var(--color-teal) 0 20%, transparent 21%);
 }
 
 .empty-state p {
@@ -949,6 +1231,51 @@ h2 + .revision {
 .empty-state p:last-child {
   margin-bottom: 0;
 }
+
+/* ── Theme toggle ── */
+
+/* A little stitched patch pinned to the corner (Weave's `.theme-toggle`). theme.js sets data-theme on <html>
+   before first paint, so the icons can key off it directly. */
+.theme-toggle {
+  position: fixed;
+  bottom: 1rem;
+  right: 1rem;
+  z-index: 40;
+  width: 2.75rem;
+  height: 2.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 9999px;
+  background-color: var(--color-paper);
+  color: var(--color-ink-soft);
+  border: 2px dashed var(--color-ink-soft);
+  box-shadow: 2px 3px 0 var(--shadow-stitch);
+  cursor: pointer;
+  transition:
+    transform 0.15s ease,
+    color 0.15s ease;
+}
+
+.theme-toggle:hover {
+  color: var(--color-grape);
+  transform: translateY(-1px);
+}
+
+.theme-toggle__sun {
+  display: none;
+}
+
+[data-theme="dark"] .theme-toggle__sun {
+  display: block;
+}
+
+[data-theme="dark"] .theme-toggle__moon {
+  display: none;
+}
+
+/* ── Small screens ── */
 
 @media (max-width: 40rem) {
   .site-header__inner {
@@ -960,26 +1287,31 @@ h2 + .revision {
     padding-left: 0;
     border-left: none;
   }
+
+  .card--hero h1 {
+    font-size: 2rem;
+  }
 }
 
 @media (max-width: 30rem) {
   .content {
-    padding: 1.25rem var(--gutter);
+    padding: 1.25rem var(--gutter) 5rem;
   }
 
   .card {
     padding: 1rem;
-    border-radius: 0.5rem;
+  }
+
+  .card--hero {
+    padding-top: 0;
+  }
+
+  .card--hero > .quilt-binding {
+    margin: 0 -1rem 1.25rem;
   }
 
   .table {
     display: block;
     overflow-x: auto;
   }
-}
-
-/* Wide tables (e.g. /pricing) scroll inside their card instead of overflowing it. */
-.table-scroll {
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
 }
