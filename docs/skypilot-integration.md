@@ -51,20 +51,25 @@ Checked against the SkyPilot docs (docs.skypilot.ai) and `skypilot-org/skypilot`
 - **Who may sign in:** anyone with a Weave account. The proxy asks for standard OIDC scopes only and doesn't read
   Krater's roles from Weave, so it doesn't filter on the `member` role. That's acceptable because signing in grants nothing by itself: every project workspace is private (below), and Krater's
   launch gate rejects any launch outside an approved project's workspace.
-- **Isolation:** each approved project gets its own **private** workspace. `allowed_users` is set to the project team's
-  emails (the same `email` claim oauth2-proxy passes on). A member on two projects can use both workspaces and picks one
-  per launch. Everyone else can't see the workspace at all.
+- **Isolation:** each approved project gets its own **private** workspace. `allowed_users` is set to the emails of
+  the team members whom Weave lists as active with the `member` role (the same `email` claim oauth2-proxy passes on).
+  A member on two projects can use both workspaces and picks one per launch. Everyone else can't see the workspace at
+  all.
 - **Roles:** confirmed by spike (`docs/dev/skypilot-spike.md`, Surprise #5) that SkyPilot's *out-of-the-box* default
   role for new users is **`admin`**, not `user` -- every new SSO login otherwise gets full visibility into every
   workspace. Krater's SkyPilot server config (`docker-compose.yml`'s `skypilot` service) explicitly sets
   `rbac.default_role: user`, which the spike confirmed takes effect on the next new-user login with no server
   restart needed. Only Krater's service account (and SkyPilot operators) get `admin`.
 - **Offboarding:** when a project is completed or withdrawn, Krater removes the team from `allowed_users` before tearing
-  the workspace down. Weave's lockout fix (patchworklabsorg/weave#119)
-  stops a locked user from signing in again, and removing someone's Krater roles in Weave removes their access to
-  Krater. The reconciler does not yet remove a user who lost the `member` role from their projects' `allowed_users`;
-  until it does, remove them from the project or withdraw it. Existing SkyPilot sessions last until they expire,
-  so keep the oauth2-proxy cookie lifetime short (e.g. 8h).
+  the workspace down. Weave's lockout fix (patchworklabsorg/weave#119) stops a locked user from signing in again.
+  Removing someone's `member` role in Weave, or locking them, removes their access to Krater within 60 seconds. The next
+  reconcile (at most 5 minutes later) also removes them from every project workspace's `allowed_users`, and writes
+  one `skypilot_access_removed` audit event per removal. Existing SkyPilot sessions last until they expire, so keep
+  the oauth2-proxy cookie lifetime short (e.g. 8h).
+- **If Weave is down:** the reconciler asks Weave's directory once per run for everyone with the `member` role. If
+  Weave can't answer, the reconciler changes no workspace's `allowed_users` in that run, creates no new workspace, and
+  logs a warning. Removing everyone during a Weave outage would cut off every team. Spend snapshots, warnings and
+  teardowns don't need Weave, so they still run.
 
 oauth2-proxy settings (sketch):
 
@@ -105,8 +110,10 @@ When a project's proposal is approved, a worker job:
 1. Creates a private workspace named `ganymede-<project_id>` with `allowed_users` set to the project team. Other
    clouds are disabled in that workspace, so it can only use Vast.
 2. Saves the workspace name on `Project.skypilot_workspace`.
-3. Keeps `allowed_users` in step with the team: the submitter plus credited builders, by their Weave email. Members
-   sign in with Weave (see section 0); no per-project tokens are handed out.
+3. Keeps `allowed_users` in step with the team: the submitter plus credited builders, by their Weave email, but only
+   those whom Weave lists as active with the `member` role. Krater stores the list it last sent on
+   `Project.skypilot_allowed_users`, so it can tell who it removed. Members sign in with Weave (see section 0); no
+   per-project tokens are handed out.
 
    **How, concretely** (spike, `docs/dev/skypilot-spike.md` Surprise #4): always resend the **full, current**
    `allowed_users` list via `workspaces/update` (the same shape as `workspaces/create`), not an incremental

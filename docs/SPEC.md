@@ -109,7 +109,8 @@ Postgres. All money is stored as **integer cents** (`*_cents`). Names are sugges
 
 **Project**
 - `id`, `title`, `submitter_id`, `status`, `current_revision_id`, `approved_revision_id`, `repo_url`,
-  `slack_channel_id`, `skypilot_workspace`, `created_at`, `updated_at`
+  `slack_channel_id`, `skypilot_workspace`, `skypilot_allowed_users` (the list the reconciler last sent),
+  `created_at`, `updated_at`
 - `status` values:
   - `draft`
   - `pending_review`

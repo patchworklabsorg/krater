@@ -130,7 +130,8 @@ The gate prefers Weave's `slack_member` from the fresh directory record. When We
 ### Disabling someone
 
 Do it in Weave: remove their Krater roles or their access to the Krater app, and revoke their tokens. The next action
-they take in Krater is refused, at most 60 seconds later (the directory cache).
+they take in Krater is refused, at most 60 seconds later (the directory cache). The next SkyPilot reconcile removes
+them from every project workspace (see [skypilot-integration.md](skypilot-integration.md), "Offboarding").
 
 ## Stub mode
 

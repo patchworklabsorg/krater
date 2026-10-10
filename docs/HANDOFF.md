@@ -107,7 +107,8 @@ sign in.
     Weave's directory API on every action;
   - the proposal → review → approval workflow, amendments, and completion review;
   - the configurable approval policy and the append-only budget ledger;
-  - SkyPilot: the launch gate and the reconcile job (workspaces, spend, 80% warning, 100% teardown);
+  - SkyPilot: the launch gate and the reconcile job (workspaces, spend, 80% warning, 100% teardown). Workspace
+    access follows Weave: someone who loses `member` leaves every project workspace on the next reconcile;
   - Slack review channels;
   - screenshot uploads and the gallery;
   - the `/pricing` page and the budget estimator;
