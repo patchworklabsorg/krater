@@ -78,6 +78,15 @@ class SpendSource(enum.StrEnum):
     SKYPILOT_COST_REPORT = "skypilot_cost_report"
 
 
+class QuiltOutboxState(enum.StrEnum):
+    """Where a `QuiltOutbox` row is in its delivery to Quilt. See `docs/quilt-integration.md`."""
+
+    PENDING = "pending"  # not sent yet, or waiting for a retry
+    SENT = "sent"  # Quilt answered 201 applied or 200 duplicate
+    FAILED = "failed"  # Quilt refused it for good; an admin must look (blocks later events of the subject)
+    SKIPPED = "skipped"  # never sent: nothing to tell Quilt, or an admin dismissed it
+
+
 class ApprovalStage(enum.StrEnum):
     PROPOSAL = "proposal"
     COMPLETION = "completion"

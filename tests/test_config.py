@@ -130,3 +130,13 @@ def test_weave_role_keys_read_from_the_environment(monkeypatch) -> None:
 
 def test_bootstrap_admins_setting_is_gone() -> None:
     assert "bootstrap_admins" not in Settings.model_fields
+
+
+def test_production_accepts_a_blank_or_https_quilt_url() -> None:
+    Settings(**_PRODUCTION_READY, quilt_url="")
+    Settings(**_PRODUCTION_READY, quilt_url="https://quilt.patchworklabs.example")
+
+
+def test_production_rejects_a_plain_http_quilt_url() -> None:
+    with pytest.raises(ValueError, match="KRATER_QUILT_URL"):
+        Settings(**_PRODUCTION_READY, quilt_url="http://quilt.patchworklabs.example")

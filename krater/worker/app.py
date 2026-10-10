@@ -13,6 +13,7 @@ import procrastinate
 from krater.config import get_settings
 from krater.db import get_sessionmaker
 from krater.models import Project, ProjectRevision
+from krater.quilt import sender as quilt_sender
 from krater.services import slack_notify, slack_reviews
 from krater.services.pricing import refresh_prices
 from krater.services.skypilot_sync import reconcile
@@ -213,6 +214,7 @@ def slack_process_approve(revision_id: str, slack_user_id: str, response_url: st
             slack_user_id=slack_user_id,
             response_url=response_url,
         )
+        kick_quilt_delivery()
     except SlackError:
         logger.exception("krater.slack_process_approve failed")
         session.rollback()
@@ -234,6 +236,7 @@ def slack_process_reject(revision_id: str, slack_user_id: str, reason: str, resp
             reason=reason,
             response_url=response_url,
         )
+        kick_quilt_delivery()
     except SlackError:
         logger.exception("krater.slack_process_reject failed")
         session.rollback()
@@ -262,3 +265,58 @@ def slack_reconcile(timestamp: int) -> None:
         logger.exception("krater.slack_reconcile task failed")
     finally:
         session.close()
+
+
+# --------------------------------------------------------------------------------------------------
+# Quilt: send the `quilt_outbox` rows the services wrote. A periodic run every minute, plus a kick
+# deferred right after a web action commits, so events usually reach Quilt within seconds. See
+# `krater.quilt.sender` and docs/quilt-integration.md.
+# --------------------------------------------------------------------------------------------------
+
+#: Only one kick waits in the queue at a time; more kicks while one waits add nothing.
+QUILT_KICK_LOCK = "quilt_deliver_now"
+
+
+def _quilt_deliver() -> None:
+    session = get_sessionmaker()()
+    try:
+        result = quilt_sender.run(session, get_weave_client(), get_settings())
+        if result is not None and (result.sent or result.retried or result.failed):
+            logger.info(
+                "krater quilt_deliver: sent %d, retry %d, failed %d",
+                result.sent,
+                result.retried,
+                result.failed,
+            )
+    except Exception:
+        logger.exception("krater.quilt_deliver failed")
+        session.rollback()
+    finally:
+        session.close()
+
+
+@app.periodic(cron="* * * * *")
+@app.task(name="quilt_deliver")
+def quilt_deliver(timestamp: int) -> None:
+    """Send due outbox rows to Quilt. A no-op while `KRATER_QUILT_URL` is blank."""
+    del timestamp
+    _quilt_deliver()
+
+
+@app.task(name="quilt_deliver_now", queueing_lock=QUILT_KICK_LOCK)
+def quilt_deliver_now() -> None:
+    """The same as `quilt_deliver`, deferred after a web action commits."""
+    _quilt_deliver()
+
+
+def kick_quilt_delivery() -> None:
+    """Defer `quilt_deliver_now`, if Quilt is configured. Never fails the caller: the periodic run is
+    the safety net."""
+    if not get_settings().quilt_url:
+        return
+    try:
+        quilt_deliver_now.defer()
+    except procrastinate.exceptions.AlreadyEnqueued:
+        pass
+    except Exception:
+        logger.warning("krater: could not defer quilt_deliver_now; the periodic run sends the events", exc_info=True)

@@ -5,8 +5,10 @@ that JWKS with `joserfc` (signature, `iss`, `aud`, `exp`, `nonce`); PKCE is S256
 
 The directory API is called with an access token from Krater's own OAuth app (the client_credentials
 grant, scope `directory`). The token is cached until shortly before it expires, and refetched once if
-Weave answers 401. `get_user` answers are cached for a short TTL to absorb bursts of lookups (a page
-of actions, Slack button clicks). See `docs/weave-integration.md` for the full contract.
+Weave answers 401. A second client_credentials token, scope `quilt`, is what Krater shows Quilt (see
+`quilt_token`); each scope has its own cache entry. `get_user` answers are cached for a short TTL to
+absorb bursts of lookups (a page of actions, Slack button clicks). See `docs/weave-integration.md` for
+the full contract.
 """
 
 from __future__ import annotations
@@ -36,6 +38,9 @@ SCOPES = "openid profile email groups roles slack"
 #: The scope Krater asks for on its client_credentials token for the directory API.
 DIRECTORY_SCOPE = "directory"
 
+#: The scope Krater asks for on its client_credentials token for Quilt's patch API.
+QUILT_SCOPE = "quilt"
+
 #: How long a `get_user` answer is trusted before re-fetching.
 DIRECTORY_CACHE_TTL_SECONDS = 60.0
 
@@ -61,8 +66,8 @@ class LiveWeaveClient:
         self._roles = RoleMapping.from_settings(settings)
         self._discovery_doc: dict | None = None
         self._jwk_set: KeySet | None = None
-        self._access_token: str | None = None
-        self._access_token_expires_at = 0.0
+        # client_credentials tokens by scope: (token, monotonic time to refetch at).
+        self._service_tokens: dict[str, tuple[str, float]] = {}
         self._directory_cache: TTLCache[str, WeaveUser | None] = TTLCache(DIRECTORY_CACHE_TTL_SECONDS)
 
     # -- OIDC ------------------------------------------------------------------------------------
@@ -192,7 +197,7 @@ class LiveWeaveClient:
         response = self._authorized_get(url, params)
         if response.status_code == 401:
             # The token may have been revoked or rotated early: fetch a new one and try once more.
-            self._access_token = None
+            self._service_tokens.pop(DIRECTORY_SCOPE, None)
             response = self._authorized_get(url, params)
         if response.status_code == 403:
             # Not a token problem, so no refetch: the token lacks the `directory` scope, or Weave doesn't
@@ -207,28 +212,47 @@ class LiveWeaveClient:
         return response
 
     def _authorized_get(self, url: str, params: dict[str, str] | None) -> httpx.Response:
-        headers = {"Authorization": f"Bearer {self._directory_token()}"}
+        headers = {"Authorization": f"Bearer {self._service_token(DIRECTORY_SCOPE)}"}
         try:
             return self._http.get(url, params=params, headers=headers)
         except httpx.HTTPError as exc:
             raise WeaveUnavailableError(f"could not reach Weave's directory at {url}") from exc
 
-    def _directory_token(self) -> str:
-        """Krater's client_credentials access token, cached until shortly before it expires."""
-        if self._access_token is not None and time.monotonic() < self._access_token_expires_at:
-            return self._access_token
+    # -- client_credentials tokens ---------------------------------------------------------------
+
+    def quilt_token(self) -> str:
+        """Krater's client_credentials access token for Quilt's patch API (scope `quilt`)."""
+        return self._service_token(QUILT_SCOPE)
+
+    def invalidate_quilt_token(self) -> None:
+        """Forget the cached Quilt token, so the next `quilt_token` call fetches a new one."""
+        self._service_tokens.pop(QUILT_SCOPE, None)
+
+    def _service_token(self, scope: str) -> str:
+        """Krater's client_credentials access token for `scope`, cached until shortly before it expires."""
+        cached = self._service_tokens.get(scope)
+        if cached is not None and time.monotonic() < cached[1]:
+            return cached[0]
 
         token_url = f"{self._settings.weave_issuer.rstrip('/')}/oauth/token"
         try:
             response = self._http.post(
                 token_url,
-                data={"grant_type": "client_credentials", "scope": DIRECTORY_SCOPE},
+                data={"grant_type": "client_credentials", "scope": scope},
                 auth=(self._settings.weave_client_id, self._settings.weave_client_secret),
             )
         except httpx.HTTPError as exc:
             raise WeaveUnavailableError("could not reach Weave's token endpoint") from exc
         if response.status_code != 200:
-            raise WeaveUnavailableError(f"Weave refused Krater's directory token: {response.status_code}")
+            if response.status_code in (400, 401, 403):
+                # Usually `invalid_scope`: an admin hasn't allowed this scope on the Krater app in Weave.
+                logger.error(
+                    "Weave refused Krater a client_credentials token for scope %r (%s): allow the scope on "
+                    "the Krater app in Weave and check KRATER_WEAVE_CLIENT_ID/SECRET",
+                    scope,
+                    response.status_code,
+                )
+            raise WeaveUnavailableError(f"Weave refused Krater's {scope} token: {response.status_code}")
 
         body = response.json()
         token = body.get("access_token") if isinstance(body, dict) else None
@@ -237,8 +261,7 @@ class LiveWeaveClient:
         expires_in = body.get("expires_in")
         lifetime = float(expires_in) if isinstance(expires_in, int | float) else DEFAULT_TOKEN_LIFETIME_SECONDS
 
-        self._access_token = token
-        self._access_token_expires_at = time.monotonic() + max(lifetime - TOKEN_EXPIRY_MARGIN_SECONDS, 0.0)
+        self._service_tokens[scope] = (token, time.monotonic() + max(lifetime - TOKEN_EXPIRY_MARGIN_SECONDS, 0.0))
         return token
 
     @staticmethod

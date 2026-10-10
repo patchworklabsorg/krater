@@ -471,3 +471,55 @@ def test_a_bare_list_response_is_rejected_as_malformed(live_client: LiveWeaveCli
 
     with pytest.raises(WeaveUnavailableError):
         client.list_users_with_role(GROUP_REVIEWER)
+
+
+# --------------------------------------------------------------------------------------------------
+# The Quilt token (scope `quilt`)
+# --------------------------------------------------------------------------------------------------
+
+
+def test_the_quilt_token_asks_for_the_quilt_scope_with_basic_auth_and_is_cached(
+    fake_weave: FakeWeave, live_client: LiveWeaveClient
+) -> None:
+    first = live_client.quilt_token()
+    second = live_client.quilt_token()
+
+    assert first == second == "cc-1"
+    [request] = _token_requests(fake_weave)
+    assert parse_qs(request.content.decode()) == {"grant_type": ["client_credentials"], "scope": ["quilt"]}
+    expected_basic = base64.b64encode(f"{CLIENT_ID}:{CLIENT_SECRET}".encode()).decode()
+    assert request.headers["authorization"] == f"Basic {expected_basic}"
+
+
+def test_the_quilt_and_directory_tokens_are_cached_separately(
+    fake_weave: FakeWeave, live_client: LiveWeaveClient
+) -> None:
+    quilt = live_client.quilt_token()
+    live_client.get_user("PWLNOBODY")
+
+    scopes = [parse_qs(r.content.decode())["scope"] for r in _token_requests(fake_weave)]
+    assert scopes == [["quilt"], ["directory"]]
+    directory_requests = [r for r in fake_weave.requests if r.url.path.startswith("/api/v1/directory/")]
+    assert {r.headers["authorization"] for r in directory_requests} == {"Bearer cc-2"}
+    assert live_client.quilt_token() == quilt
+
+
+def test_invalidating_the_quilt_token_fetches_a_new_one(fake_weave: FakeWeave, live_client: LiveWeaveClient) -> None:
+    live_client.quilt_token()
+    live_client.invalidate_quilt_token()
+
+    assert live_client.quilt_token() == "cc-2"
+
+
+def test_a_refused_quilt_token_raises_weave_unavailable_and_logs_the_config_error(caplog, monkeypatch) -> None:
+    # Alembic's `fileConfig` (run by the `engine` fixture) disables loggers that already exist.
+    monkeypatch.setattr(live_module.logger, "disabled", False)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"error": "invalid_scope"})
+
+    client = LiveWeaveClient(_settings(), http_client=httpx.Client(transport=httpx.MockTransport(handler)))
+
+    with pytest.raises(WeaveUnavailableError):
+        client.quilt_token()
+    assert "scope 'quilt'" in caplog.text

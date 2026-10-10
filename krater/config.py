@@ -98,6 +98,14 @@ class Settings(BaseSettings):
     s3_access_key_id: str = ""
     s3_secret_access_key: str = ""
 
+    # Quilt (Patchwork Labs finance): Krater sends submission and budget events to Quilt's patch API. See
+    # docs/quilt-integration.md. Blank means "don't send": the services still write every event to the
+    # `quilt_outbox` table, so nothing is lost, and the sender sends the backlog once this is set.
+    quilt_url: str = ""
+    quilt_timeout_seconds: float = 10.0
+    # The most outbox rows one sender run sends. The periodic task runs every minute.
+    quilt_batch_size: int = 200
+
     @model_validator(mode="after")
     def _validate_production_safety(self) -> Settings:
         if self.env == "production":
@@ -121,6 +129,8 @@ class Settings(BaseSettings):
                     f"KRATER_SECRET_KEY must be set to a non-default value of at least "
                     f"{MIN_SECRET_KEY_LENGTH} characters when KRATER_ENV=production"
                 )
+            if self.quilt_url and not self.quilt_url.startswith("https://"):
+                raise ValueError("KRATER_QUILT_URL must be an https:// URL when KRATER_ENV=production")
             if not self.base_url.startswith("https://"):
                 raise ValueError("KRATER_BASE_URL must be an https:// URL when KRATER_ENV=production")
             # The live modes above are mandatory in production, so their secrets must actually be set --

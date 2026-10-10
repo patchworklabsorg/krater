@@ -45,6 +45,7 @@ from krater.web.forms import UnknownEmails, parse_credited_builder_emails, parse
 from krater.web.money import InvalidDollarAmount, cents_to_input, parse_dollars
 from krater.web.templates import templates
 from krater.worker.app import (
+    kick_quilt_delivery,
     slack_archive_channel,
     slack_notify_decision,
     slack_notify_revision_submitted,
@@ -120,6 +121,7 @@ def _success_redirect(
     db_session.commit()
     if after_commit is not None:
         after_commit()
+    kick_quilt_delivery()
     flash(request, message, "success")
     return _redirect_to_project(project_id)
 

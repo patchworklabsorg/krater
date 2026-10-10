@@ -21,7 +21,7 @@ idempotently create, in Weave's own database:
   confirmed emails and have accepted the Code of Conduct. Weave refuses every app to a user who has not
   (patchworklabsorg/weave#171).
 - a confidential OAuth application ("Krater (e2e)") with redirect URI
-  `http://localhost:8201/auth/callback`, scopes `openid profile email groups roles slack directory`, and
+  `http://localhost:8201/auth/callback`, scopes `openid profile email groups roles slack directory quilt`, and
   `access_policy` `everyone`. The open policy lets the non-member reach Krater, so the check proves that Krater
   itself refuses them. The script **recreates** the app every run, because Weave hashes its secret at rest and
   shows it only right after creation.

@@ -8,7 +8,7 @@ import pytest
 from krater.services.actor import GROUP_ADMIN, GROUP_MEMBER, GROUP_REVIEWER
 from krater.weave.errors import WeaveAuthError
 from krater.weave.roles import RoleMapping
-from krater.weave.stub import StubWeaveClient
+from krater.weave.stub import STUB_QUILT_TOKEN, StubWeaveClient
 
 
 @pytest.fixture
@@ -98,3 +98,11 @@ def test_a_minimal_fixture_entry_defaults_to_verified_and_active_with_no_roles(t
     assert record.slack_id is None
     assert record.slack_member is None
     assert record.roles == frozenset()
+
+
+def test_the_stub_quilt_token_is_a_fixed_fake_and_counts_calls() -> None:
+    stub = StubWeaveClient()
+
+    assert stub.quilt_token() == STUB_QUILT_TOKEN
+    stub.invalidate_quilt_token()
+    assert (stub.quilt_token_requests, stub.quilt_token_invalidations) == (1, 1)

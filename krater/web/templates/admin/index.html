@@ -1,7 +1,75 @@
 {% extends "base.html" %}
 {% import "_macros.html" as macros %}
 
-{% block title %}Admin{% endblock %}
+{% block title %}Admin<section class="card" id="quilt">
+  <h2>Delivery to Quilt</h2>
+  <p class="muted">
+    Krater sends submission and budget events to Quilt. {{ quilt.pending_count }} waiting to send.
+  </p>
+  {% if quilt.failed %}
+    <h3>Refused by Quilt</h3>
+    <p class="muted">
+      Quilt refused these events. Later events of the same project wait until you retry or dismiss the event.
+    </p>
+    <table class="table">
+      <thead>
+        <tr>
+          <th scope="col">Event</th>
+          <th scope="col">Project</th>
+          <th scope="col">Answer</th>
+          <th scope="col">Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in quilt.failed %}
+          <tr>
+            <td>{{ row.type }}<br><code>{{ row.id }}</code></td>
+            <td><a href="/projects/{{ row.external_id }}">{{ row.external_id }}</a></td>
+            <td>{{ row.last_status }} {{ row.last_error or "" }}</td>
+            <td>
+              <form method="post" action="/admin/quilt/{{ row.id }}/retry" class="form">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <label for="quilt-retry-{{ row.id }}">Reason (required)</label>
+                <input type="text" id="quilt-retry-{{ row.id }}" name="reason">
+                <button type="submit" class="button">Retry</button>
+              </form>
+              <form method="post" action="/admin/quilt/{{ row.id }}/dismiss" class="form">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <label for="quilt-dismiss-{{ row.id }}">Reason (required)</label>
+                <input type="text" id="quilt-dismiss-{{ row.id }}" name="reason">
+                <button type="submit" class="button">Dismiss</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+  {% if quilt.retrying %}
+    <h3>Waiting for a retry</h3>
+    <table class="table">
+      <thead>
+        <tr>
+          <th scope="col">Event</th>
+          <th scope="col">Project</th>
+          <th scope="col">Attempts</th>
+          <th scope="col">Last answer</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in quilt.retrying %}
+          <tr>
+            <td>{{ row.type }}<br><code>{{ row.id }}</code></td>
+            <td><a href="/projects/{{ row.external_id }}">{{ row.external_id }}</a></td>
+            <td>{{ row.attempts }}</td>
+            <td>{{ row.last_status or "no answer" }} {{ row.last_error or "" }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+</section>
+{% endblock %}
 
 {% block content %}
 <section class="card">
@@ -61,6 +129,74 @@
     <p class="muted">
       No custom policies configured. The default applies to every stage: 1 approval, from any reviewer.
     </p>
+  {% endif %}
+</section>
+<section class="card" id="quilt">
+  <h2>Delivery to Quilt</h2>
+  <p class="muted">
+    Krater sends submission and budget events to Quilt. {{ quilt.pending_count }} waiting to send.
+  </p>
+  {% if quilt.failed %}
+    <h3>Refused by Quilt</h3>
+    <p class="muted">
+      Quilt refused these events. Later events of the same project wait until you retry or dismiss the event.
+    </p>
+    <table class="table">
+      <thead>
+        <tr>
+          <th scope="col">Event</th>
+          <th scope="col">Project</th>
+          <th scope="col">Answer</th>
+          <th scope="col">Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in quilt.failed %}
+          <tr>
+            <td>{{ row.type }}<br><code>{{ row.id }}</code></td>
+            <td><a href="/projects/{{ row.external_id }}">{{ row.external_id }}</a></td>
+            <td>{{ row.last_status }} {{ row.last_error or "" }}</td>
+            <td>
+              <form method="post" action="/admin/quilt/{{ row.id }}/retry" class="form">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <label for="quilt-retry-{{ row.id }}">Reason (required)</label>
+                <input type="text" id="quilt-retry-{{ row.id }}" name="reason">
+                <button type="submit" class="button">Retry</button>
+              </form>
+              <form method="post" action="/admin/quilt/{{ row.id }}/dismiss" class="form">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <label for="quilt-dismiss-{{ row.id }}">Reason (required)</label>
+                <input type="text" id="quilt-dismiss-{{ row.id }}" name="reason">
+                <button type="submit" class="button">Dismiss</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+  {% if quilt.retrying %}
+    <h3>Waiting for a retry</h3>
+    <table class="table">
+      <thead>
+        <tr>
+          <th scope="col">Event</th>
+          <th scope="col">Project</th>
+          <th scope="col">Attempts</th>
+          <th scope="col">Last answer</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in quilt.retrying %}
+          <tr>
+            <td>{{ row.type }}<br><code>{{ row.id }}</code></td>
+            <td><a href="/projects/{{ row.external_id }}">{{ row.external_id }}</a></td>
+            <td>{{ row.attempts }}</td>
+            <td>{{ row.last_status or "no answer" }} {{ row.last_error or "" }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
   {% endif %}
 </section>
 {% endblock %}

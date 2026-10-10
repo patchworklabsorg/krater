@@ -3,8 +3,8 @@
 # Provisions a local Weave with everything the live Krater<->Weave e2e check
 # needs: three users (a member, an admin and a non-member), a confidential
 # OAuth application for Krater with the scopes Krater asks for plus
-# `directory` for its client_credentials token, and Krater's app roles on that
-# application. Idempotent (upsert-by-email), so it can be re-run against the
+# `directory` and `quilt` for its client_credentials tokens, and Krater's app
+# roles on that application. The `quilt` scope needs patchworklabsorg/weave#176. Idempotent (upsert-by-email), so it can be re-run against the
 # same dev database.
 #
 # Weave owns Krater's roles (patchworklabsorg/weave#165, #166). This script
@@ -65,7 +65,7 @@ app = Doorkeeper::Application.create!(
   name: app_name,
   redirect_uri: redirect_uri,
   confidential: true,
-  scopes: "openid profile email groups roles slack directory",
+  scopes: "openid profile email groups roles slack directory quilt",
   access_policy: "everyone",
   requires_code_of_conduct: true
 )

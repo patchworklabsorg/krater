@@ -26,7 +26,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from krater.models import AuditEvent, Project, ProjectStatus, SpendSnapshot, SpendSource, User
-from krater.services import audit, budget
+from krater.services import audit, budget, quilt_events
 from krater.services.actor import GROUP_MEMBER
 from krater.skypilot.client import SkyPilotClient
 from krater.skypilot.errors import SkyPilotError, SkyPilotWorkspaceNotFoundError
@@ -223,6 +223,7 @@ def _tear_down_workspace(session: Session, client: SkyPilotClient, project: Proj
             )
         )
         session.flush()
+        quilt_events.sync_project(session, project)
 
     if not already_gone:
         client.delete_workspace(name)
@@ -266,6 +267,7 @@ def sync_spend(session: Session, client: SkyPilotClient) -> None:
             )
         )
         session.flush()
+        quilt_events.sync_project(session, project)
 
 
 def _latest_audit_event(session: Session, project: Project, action: str) -> AuditEvent | None:
