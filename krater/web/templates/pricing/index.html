@@ -10,7 +10,7 @@
 
   <p class="policy-note">
     These are <strong>estimates from SkyPilot's Vast catalog</strong>, not live quotes -- the actual
-    machine SkyPilot rents at launch time can differ. Rows above Ganymede's per-machine cap
+    machine SkyPilot rents at launch time can differ. Rows above Ganymede's default per-machine cap
     (${{ "%.2f"|format(cap_cents / 100) }}/hr) are marked below. See the
     <a href="https://github.com/patchworklabsorg/krater/blob/main/docs/guides/run-when-cheap.md">run-when-cheap guide</a>
     for spot/interruptible machines, which can cost less if you're willing to be interrupted
@@ -78,7 +78,7 @@
             {% if row.on_demand_min_cents > cap_cents %}
               <tr>
                 <td colspan="{{ 7 if has_spot else 6 }}" class="field-hint table__note">
-                  Over Ganymede's per-machine cap (${{ "%.2f"|format(cap_cents / 100) }}/hr) -- a launch
+                  Over Ganymede's default per-machine cap (${{ "%.2f"|format(cap_cents / 100) }}/hr) -- a launch
                   targeting this GPU will have its price capped, which may rule out every offer above.
                 </td>
               </tr>

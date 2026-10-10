@@ -51,7 +51,8 @@ interruption only costs you a few minutes.
 
 ## What Krater adds on top
 
-- **Price cap:** Krater caps every launch's hourly price at the Ganymede limit (currently $5/hour per machine). A lower
+- **Price cap:** Krater caps every launch's hourly price at your project's limit (by default $5/hour per machine;
+  an admin can set a different one per project, and the project page shows yours). A lower
   `max_hourly_cost` of yours is kept.
 - **Autodown:** Krater forces autodown after 30 idle minutes.
 - **Budget:** when your project's spend reaches its ceiling, launches are rejected and running machines are shut down.

@@ -55,7 +55,7 @@ def test_pricing_page_marks_rows_over_the_per_machine_cap(client: TestClient, db
     response = client.get("/pricing")
 
     assert response.status_code == 200
-    assert "Over Ganymede's per-machine cap" in response.text
+    assert "Over Ganymede's default per-machine cap" in response.text
 
 
 def test_pricing_page_filters_by_gpu(client: TestClient, db_session: Session) -> None:
