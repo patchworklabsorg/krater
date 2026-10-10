@@ -175,7 +175,10 @@ selected." See `krater/services/launch_policy.py`'s `ENFORCED_REQUEST_NAMES` doc
 - the cluster autodowns after idling (`skypilot_autodown_idle_minutes`, `down: true`) unless the user's own
   `autostop` is already at least as strict;
 - every resource candidate's `max_hourly_cost` is capped at `min(the user's value, skypilot_max_hourly_cost_cents /
-  100)`. The simple version is a global default; later it could be something like 5% of the remaining budget.
+  100 / num_nodes)`. SkyPilot applies the cap to each node, so it's split across the task's `num_nodes` to keep the
+  whole launch under it (Vast is single-node anyway; this covers any other cloud a workspace might allow). Vast bids
+  are clamped to the same per-node figure. The simple version is a global default; later it could be something like
+  5% of the remaining budget.
 
 Labelling the cluster with the project ID (for Vast attribution) wasn't verified in the spike (resource labels on
 Vast specifically weren't tested) and isn't implemented yet -- the workspace alone attributes spend for now.

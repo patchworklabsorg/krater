@@ -573,3 +573,35 @@ def test_deciding_does_not_mutate_the_original_request(db_session: Session, memb
     launch_policy.decide(request, db_session, SETTINGS)
 
     assert request.skypilot_config["vast"]["create_instance_kwargs"]["price"] == 99.0
+
+
+# --------------------------------------------------------------------------------------------------
+# The hourly cap covers the whole launch: SkyPilot applies `max_hourly_cost` (and Vast a bid) per node.
+# --------------------------------------------------------------------------------------------------
+
+
+def test_the_cap_is_split_across_num_nodes(db_session: Session, member: Actor) -> None:
+    _approved_project(db_session, member)
+    task = {"num_nodes": 4, "resources": {"infra": "vast", "max_hourly_cost": 999.0}}
+    config = {"vast": {"create_instance_kwargs": {"price": 99.0}}}
+
+    decision = launch_policy.decide(_request(task=task, skypilot_config=config), db_session, SETTINGS)
+
+    assert isinstance(decision, launch_policy.Allow)
+    assert decision.task["resources"]["max_hourly_cost"] == 1.25  # $5.00 / 4 nodes
+    assert decision.skypilot_config["vast"]["create_instance_kwargs"]["price"] == 1.25
+
+
+@pytest.mark.parametrize("num_nodes", [None, 1, 0, -3, "20", True, 2.5])
+def test_a_missing_or_malformed_num_nodes_gets_the_whole_cap(
+    db_session: Session, member: Actor, num_nodes: object
+) -> None:
+    _approved_project(db_session, member)
+    task: dict = {"resources": {"infra": "vast"}}
+    if num_nodes is not None:
+        task["num_nodes"] = num_nodes
+
+    decision = launch_policy.decide(_request(task=task), db_session, SETTINGS)
+
+    assert isinstance(decision, launch_policy.Allow)
+    assert decision.task["resources"]["max_hourly_cost"] == 5.0

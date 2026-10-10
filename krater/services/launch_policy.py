@@ -153,10 +153,29 @@ def _clamp_vast_bid(vast_config: Any, cap_dollars: float) -> None:
             kwargs[key] = min(value, cap_dollars)
 
 
+def _num_nodes(task: dict[str, Any]) -> int:
+    """How many machines `task` asks for (`num_nodes`, default 1). Anything that isn't a positive int counts
+    as 1: SkyPilot itself rejects such a task, so it never reaches a real launch."""
+    value = task.get("num_nodes")
+    if isinstance(value, int) and not isinstance(value, bool) and value > 1:
+        return value
+    return 1
+
+
+def per_node_cap_dollars(task: dict[str, Any], settings: Settings) -> float:
+    """The hourly cap for each machine in `task`: the configured cap split evenly across its `num_nodes`.
+
+    SkyPilot applies `max_hourly_cost` (and Vast applies a bid) to each node, so capping every node at the
+    full amount let a 20-node launch cost 20 times the cap. Splitting it keeps the whole launch under the
+    cap; a launch with more nodes than the cap can pay for finds no offers, which is the point.
+    """
+    return settings.skypilot_max_hourly_cost_cents / 100 / _num_nodes(task)
+
+
 def _apply_mutations(task: dict[str, Any], settings: Settings) -> dict[str, Any]:
     """Force autodown and cap `max_hourly_cost` (and any Vast bid override) on every resource candidate
     in `task`, in place."""
-    cap_dollars = settings.skypilot_max_hourly_cost_cents / 100
+    cap_dollars = per_node_cap_dollars(task, settings)
     resources = task.setdefault("resources", {})
     for resource in _resource_items(resources):
         existing_cost = resource.get("max_hourly_cost")
@@ -212,7 +231,8 @@ def decide(request: PolicyRequest, session: Session, settings: Settings) -> Poli
     Every request (enforced or not) that isn't rejected gets `task` mutated the same way: autodown
     forced after `settings.skypilot_autodown_idle_minutes` (unless the user's own `autostop` is already
     stricter), every resource's `max_hourly_cost` capped at
-    `min(user's value, settings.skypilot_max_hourly_cost_cents / 100)`, and any Vast `create_instance_kwargs`
+    `min(user's value, settings.skypilot_max_hourly_cost_cents / 100 / num_nodes)` (see
+    `per_node_cap_dollars`), and any Vast `create_instance_kwargs`
     bid (`price`/`bid_price`, task-level or in `skypilot_config`) clamped to the same cap (see
     `_clamp_vast_bid`) -- `max_hourly_cost` alone doesn't stop a member from bidding above it directly.
 
@@ -251,8 +271,7 @@ def decide(request: PolicyRequest, session: Session, settings: Settings) -> Poli
 
     task = _apply_mutations(copy.deepcopy(request.task), settings)
     skypilot_config = copy.deepcopy(request.skypilot_config)
-    cap_dollars = settings.skypilot_max_hourly_cost_cents / 100
-    _clamp_vast_bid(skypilot_config.get("vast"), cap_dollars)
+    _clamp_vast_bid(skypilot_config.get("vast"), per_node_cap_dollars(task, settings))
     return Allow(task=task, skypilot_config=skypilot_config)
 
 
