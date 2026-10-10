@@ -25,9 +25,12 @@ class WeaveClient(Protocol):
         """
         ...
 
-    def get_user(self, sub: str) -> WeaveUser | None:
-        """What Weave says about `sub` (Weave's `p_id`) right now. `None` if Weave doesn't know the
-        user or won't let them use Krater. Raises `WeaveUnavailableError` if Weave can't be reached."""
+    def get_user(self, sub: str, *, fresh: bool = False) -> WeaveUser | None:
+        """What Weave says about `sub` (Weave's `p_id`). `None` if Weave doesn't know the user or won't
+        let them use Krater. Raises `WeaveUnavailableError` if Weave can't be reached.
+
+        An answer may come from a short cache unless `fresh` is set; anything that authorizes a
+        state-changing action must set it, so a role removed in Weave takes effect on the very next action."""
         ...
 
     def list_users_with_role(self, role: str) -> list[WeaveUser]:

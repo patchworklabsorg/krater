@@ -134,8 +134,27 @@ def test_authorize_refuses_an_inactive_user(db_session: Session, weave: StubWeav
 
 def test_authorize_fails_closed_when_weave_is_down(db_session: Session, signed_in) -> None:
     class _DownWeave:
-        def get_user(self, sub: str) -> WeaveUser | None:
+        def get_user(self, sub: str, *, fresh: bool = False) -> WeaveUser | None:
             raise WeaveUnavailableError("down")
 
     with pytest.raises(WeaveUnavailableError):
         authorize(db_session, _DownWeave(), signed_in)  # type: ignore[arg-type]
+
+
+def test_authorize_asks_weave_uncached_unless_told_otherwise(
+    db_session: Session, weave: StubWeaveClient, signed_in
+) -> None:
+    # The Slack click path relies on the default: a decision must never ride on a cached directory answer.
+    seen: list[bool] = []
+    real_get_user = weave.get_user
+
+    def _recording(sub: str, *, fresh: bool = False) -> WeaveUser | None:
+        seen.append(fresh)
+        return real_get_user(sub, fresh=fresh)
+
+    weave.get_user = _recording  # type: ignore[method-assign]
+
+    authorize(db_session, weave, signed_in)
+    authorize(db_session, weave, signed_in, fresh=False)
+
+    assert seen == [True, False]

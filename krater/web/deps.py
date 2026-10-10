@@ -9,8 +9,9 @@
   action: it can be stale.
 - `fresh_actor`: an `Actor` built from a live Weave directory lookup (`krater.services.users.authorize`).
   Refuses (403) if Weave no longer lists the user as an active Ganymede member, and fails closed (503)
-  if Weave can't be reached. **Every state-changing action must use this, or one of the two below,
-  instead of `session_actor`.**
+  if Weave can't be reached. Anything but a GET/HEAD skips the directory client's short cache, so a role
+  removed in Weave stops the very next action; page views may reuse an answer for up to a minute.
+  **Every state-changing action must use this, or one of the two below, instead of `session_actor`.**
 - `require_reviewer` / `require_admin`: `fresh_actor`, plus a 403 unless the actor is a reviewer/admin.
 """
 
@@ -64,7 +65,12 @@ def session_actor(user: Annotated[User, Depends(require_user)]) -> Actor:
     return user_service.cached_actor(user)
 
 
+#: Read-only methods: the only requests `fresh_actor` lets reuse a cached directory answer.
+_CACHEABLE_METHODS = frozenset({"GET", "HEAD"})
+
+
 def fresh_actor(
+    request: Request,
     user: Annotated[User, Depends(require_user)],
     db_session: Annotated[Session, Depends(get_session)],
     weave_client: Annotated[WeaveClient, Depends(get_weave_client)],
@@ -73,7 +79,8 @@ def fresh_actor(
     active Ganymede member, and answers 503 if Weave can't be reached. Use this (or
     `require_reviewer`/`require_admin`) for state-changing actions."""
     try:
-        return user_service.authorize(db_session, weave_client, user)
+        fresh = request.method not in _CACHEABLE_METHODS
+        return user_service.authorize(db_session, weave_client, user, fresh=fresh)
     except NotAMember as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except WeaveUnavailableError as exc:

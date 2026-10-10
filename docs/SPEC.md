@@ -76,7 +76,8 @@ changes don't spread through the app. The contract is in [weave-integration.md](
 - Every state-changing action re-checks Weave: web actions through `fresh_actor`, Slack Approve/Reject clicks through
   the same `users.authorize`. Krater asks Weave's directory API for the user by `sub`, with an access token of its own
   OAuth app (client_credentials). A 404, an inactive account or a missing `member` role refuses the action. If Weave
-  can't be reached, the action fails rather than guessing. Directory answers are cached for 60 seconds.
+  can't be reached, the action fails rather than guessing. These lookups are never cached; only page views may reuse
+  a directory answer, for up to 60 seconds.
 - Krater keeps `users.roles_cached` (what Weave said last) for display and navigation only.
 - To shut someone out of Krater, an admin removes their role or the app access in Weave, and revokes their tokens there.
   Krater has no disable switch of its own.

@@ -131,8 +131,8 @@ Step 1's `bin/rails runner` and the tests' magic-link minting both need a runnab
 
 ### What "authorization uses fresh data" means here
 
-Every action re-checks the user with Weave's directory by `sub`. A role change in Weave takes effect on the user's
-next action, after at most the 60-second directory cache. `users.roles_cached` only shows what Weave said last.
+Every action re-checks the user with Weave's directory by `sub`, uncached. A role change in Weave takes effect on the
+user's next action; page views may lag by up to the 60-second directory cache. `users.roles_cached` only shows what Weave said last.
 
 ## What this doesn't cover
 

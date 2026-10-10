@@ -5,8 +5,9 @@ that JWKS with `joserfc` (signature, `iss`, `aud`, `exp`, `nonce`); PKCE is S256
 
 The directory API is called with an access token from Krater's own OAuth app (the client_credentials
 grant, scope `directory`). The token is cached until shortly before it expires, and refetched once if
-Weave answers 401. `get_user` answers are cached for a short TTL to absorb bursts of lookups (a page
-of actions, Slack button clicks). See `docs/weave-integration.md` for the full contract.
+Weave answers 401. `get_user` answers are cached for a short TTL to absorb bursts of lookups from page
+views; `get_user(fresh=True)`, which every state-changing action uses, skips that cache. See
+`docs/weave-integration.md` for the full contract.
 """
 
 from __future__ import annotations
@@ -36,7 +37,7 @@ SCOPES = "openid profile email groups roles slack"
 #: The scope Krater asks for on its client_credentials token for the directory API.
 DIRECTORY_SCOPE = "directory"
 
-#: How long a `get_user` answer is trusted before re-fetching.
+#: How long a `get_user` answer is trusted before re-fetching. Page views only: `fresh=True` lookups ignore it.
 DIRECTORY_CACHE_TTL_SECONDS = 60.0
 
 #: Refetch the client_credentials token this long before Weave says it expires.
@@ -159,10 +160,11 @@ class LiveWeaveClient:
 
     # -- Directory -------------------------------------------------------------------------------
 
-    def get_user(self, sub: str) -> WeaveUser | None:
-        cached = self._directory_cache.get(sub)
-        if cached is not MISSING:
-            return cached
+    def get_user(self, sub: str, *, fresh: bool = False) -> WeaveUser | None:
+        if not fresh:
+            cached = self._directory_cache.get(sub)
+            if cached is not MISSING:
+                return cached
 
         response = self._directory_get(f"/api/v1/directory/users/{quote(sub, safe='')}")
         if response.status_code == 404:

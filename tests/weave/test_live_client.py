@@ -427,6 +427,22 @@ def test_get_user_answers_are_cached_briefly(fake_weave: FakeWeave, live_client:
     assert len(lookups) == 1
 
 
+def test_a_fresh_lookup_skips_the_cache_and_refreshes_it(fake_weave: FakeWeave, live_client: LiveWeaveClient) -> None:
+    fake_weave.directory_users["PWLDIR0001"] = DIRECTORY_USER
+    live_client.get_user("PWLDIR0001")
+
+    # Weave drops the reviewer role inside the cache window: a fresh lookup must see it straight away...
+    fake_weave.directory_users["PWLDIR0001"] = {**DIRECTORY_USER, "roles": ["member"]}
+    fresh = live_client.get_user("PWLDIR0001", fresh=True)
+    # ...and the cache now holds the newer answer for page views.
+    cached = live_client.get_user("PWLDIR0001")
+
+    assert fresh is not None and fresh.roles == frozenset({GROUP_MEMBER})
+    assert cached == fresh
+    lookups = [r for r in fake_weave.requests if r.url.path == "/api/v1/directory/users/PWLDIR0001"]
+    assert len(lookups) == 2
+
+
 def test_list_users_with_role_sends_the_weave_role_key(fake_weave: FakeWeave, live_client: LiveWeaveClient) -> None:
     fake_weave.directory_users["PWLDIR0001"] = DIRECTORY_USER
     fake_weave.directory_users["PWLDIR0002"] = {**DIRECTORY_USER, "sub": "PWLDIR0002", "roles": ["member"]}

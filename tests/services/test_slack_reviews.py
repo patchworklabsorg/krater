@@ -215,7 +215,7 @@ def test_a_click_while_weave_is_down_is_refused(
     reviewer.user.slack_user_id = "U_REVIEWER"
     _project, revision = _submitted_revision(db_session, member)
 
-    def _down(sub: str):
+    def _down(sub: str, *, fresh: bool = False):
         raise WeaveUnavailableError("down")
 
     monkeypatch.setattr(weave, "get_user", _down)

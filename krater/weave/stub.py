@@ -91,7 +91,7 @@ class StubWeaveClient:
             roles=record.roles,
         )
 
-    def get_user(self, sub: str) -> WeaveUser | None:
+    def get_user(self, sub: str, *, fresh: bool = False) -> WeaveUser | None:
         user = self._users_by_sub.get(sub)
         return None if user is None else self._record(user)
 

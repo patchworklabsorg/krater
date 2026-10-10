@@ -85,7 +85,8 @@ Endpoints:
   `{"users": [...]}`, sorted by `sub`. Send exactly one parameter. A role or group that isn't linked to Krater answers
   404: Krater treats it as an empty list and logs a warning.
 
-`get_user` answers are cached for 60 seconds. Any other failure (no answer, a 5xx, malformed JSON) raises
+`get_user` answers are cached for 60 seconds for page views only: every state-changing action (`fresh_actor` on
+anything but a GET/HEAD, and Slack clicks) asks with `fresh=True`, which skips the cache. Any other failure (no answer, a 5xx, malformed JSON) raises
 `WeaveUnavailableError`, and the caller fails closed.
 
 ## Krater-side contract
@@ -130,7 +131,8 @@ The gate prefers Weave's `slack_member` from the fresh directory record. When We
 ### Disabling someone
 
 Do it in Weave: remove their Krater roles or their access to the Krater app, and revoke their tokens. The next action
-they take in Krater is refused, at most 60 seconds later (the directory cache).
+they take in Krater is refused straight away: actions never use the directory cache. Pages they already have open
+can keep showing what they could see for up to 60 seconds.
 
 ## Stub mode
 

@@ -7,7 +7,7 @@ from __future__ import annotations
 from typing import Annotated
 
 import pytest
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -26,6 +26,10 @@ from krater.web.deps import (
 )
 
 SUB = "PWLDEPSTEST"
+
+
+#: What `fresh_actor` reads off the request: only the method, which decides whether a cached directory answer will do.
+_POST = Request({"type": "http", "method": "POST", "headers": []})
 
 
 def _make_request(session_data: dict) -> object:
@@ -74,10 +78,10 @@ def test_current_user_ignores_a_corrupt_session_value(db_session: Session) -> No
 def test_fresh_actor_sees_a_role_weave_removed_after_sign_in(db_session: Session) -> None:
     user = _make_user(db_session)
     weave = _weave(["member", "reviewer"])
-    assert fresh_actor(user, db_session, weave).is_reviewer
+    assert fresh_actor(_POST, user, db_session, weave).is_reviewer
 
     weave.set_roles(SUB, ["member"])
-    actor = fresh_actor(user, db_session, weave)
+    actor = fresh_actor(_POST, user, db_session, weave)
 
     assert isinstance(actor, Actor)
     assert actor.is_member
@@ -93,7 +97,7 @@ def test_fresh_actor_refuses_once_weave_revokes_the_member_role(db_session: Sess
     weave.set_roles(SUB, ["admin"])
 
     with pytest.raises(HTTPException) as exc_info:
-        fresh_actor(user, db_session, weave)
+        fresh_actor(_POST, user, db_session, weave)
     assert exc_info.value.status_code == 403
 
 
@@ -103,7 +107,7 @@ def test_fresh_actor_refuses_a_user_the_directory_answers_404_for(db_session: Se
     weave.remove_user(SUB)
 
     with pytest.raises(HTTPException) as exc_info:
-        fresh_actor(user, db_session, weave)
+        fresh_actor(_POST, user, db_session, weave)
     assert exc_info.value.status_code == 403
 
 
@@ -113,7 +117,7 @@ def test_fresh_actor_refuses_a_user_weave_locked(db_session: Session) -> None:
     weave.set_active(SUB, False)
 
     with pytest.raises(HTTPException) as exc_info:
-        fresh_actor(user, db_session, weave)
+        fresh_actor(_POST, user, db_session, weave)
     assert exc_info.value.status_code == 403
 
 
@@ -121,12 +125,34 @@ def test_fresh_actor_fails_closed_with_503_when_weave_is_unreachable(db_session:
     user = _make_user(db_session)
 
     class _DownWeave(StubWeaveClient):
-        def get_user(self, sub: str):
+        def get_user(self, sub: str, *, fresh: bool = False):
             raise WeaveUnavailableError("down")
 
     with pytest.raises(HTTPException) as exc_info:
-        fresh_actor(user, db_session, _DownWeave())
+        fresh_actor(_POST, user, db_session, _DownWeave())
     assert exc_info.value.status_code == 503
+
+
+@pytest.mark.parametrize(
+    ("method", "expect_fresh"), [("POST", True), ("DELETE", True), ("GET", False), ("HEAD", False)]
+)
+def test_fresh_actor_skips_the_directory_cache_for_anything_but_a_page_view(
+    db_session: Session, method: str, expect_fresh: bool
+) -> None:
+    user = _make_user(db_session)
+    seen: list[bool] = []
+
+    class _RecordingWeave(StubWeaveClient):
+        def get_user(self, sub: str, *, fresh: bool = False):
+            seen.append(fresh)
+            return super().get_user(sub, fresh=fresh)
+
+    weave = _RecordingWeave()
+    weave.put_user(SUB, name="Dep Test", email="dep@example.com", roles=["member"])
+
+    fresh_actor(Request({"type": "http", "method": method, "headers": []}), user, db_session, weave)
+
+    assert seen == [expect_fresh]
 
 
 def test_session_actor_reports_cached_roles_without_asking_weave(db_session: Session) -> None:
@@ -142,11 +168,11 @@ def test_require_admin_needs_the_admin_role(db_session: Session) -> None:
     weave = _weave(["member", "reviewer"])
 
     with pytest.raises(HTTPException) as exc_info:
-        require_admin(fresh_actor(user, db_session, weave))
+        require_admin(fresh_actor(_POST, user, db_session, weave))
     assert exc_info.value.status_code == 403
 
     weave.set_roles(SUB, ["member", "admin"])
-    admin_actor = fresh_actor(user, db_session, weave)
+    admin_actor = fresh_actor(_POST, user, db_session, weave)
     assert require_admin(admin_actor) is admin_actor
     assert user.roles_cached == ["ganymede:admin", GROUP_MEMBER]
 

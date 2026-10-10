@@ -108,14 +108,17 @@ def sign_in(session: Session, identity: WeaveIdentity) -> SignInResult:
     return SignInResult(user=user, status="ok")
 
 
-def authorize(session: Session, weave_client: WeaveClient, user: User) -> Actor:
-    """An `Actor` for `user` from a fresh Weave directory lookup by `weave_sub`.
+def authorize(session: Session, weave_client: WeaveClient, user: User, *, fresh: bool = True) -> Actor:
+    """An `Actor` for `user` from a Weave directory lookup by `weave_sub`.
+
+    `fresh` (the default) skips the directory client's short cache, so a role removed in Weave stops the very
+    next action. Only a read-only page view may pass `fresh=False`.
 
     Raises `NotAMember` if Weave doesn't know the user (or won't let them use Krater), lists them as
     inactive, or no longer gives them `ganymede:member`. `WeaveUnavailableError` propagates: callers
     fail closed. Refreshes the user's cached fields from the record (flushed, not committed).
     """
-    record = weave_client.get_user(user.weave_sub)
+    record = weave_client.get_user(user.weave_sub, fresh=fresh)
     if record is None or not record.active:
         raise NotAMember("Weave no longer lists you as an active Ganymede member")
     refresh_user_from_weave(session, user, record)
