@@ -9,10 +9,7 @@ from krater.config import Settings
 from krater.models import (
     BudgetEntryKind,
     Project,
-    ProjectRevision,
     ProjectStatus,
-    RevisionKind,
-    RevisionOutcome,
     SpendSnapshot,
     SpendSource,
 )
@@ -91,12 +88,10 @@ def test_rejects_when_workspace_is_not_a_krater_project(db_session: Session) -> 
 def test_rejects_when_project_is_not_active(db_session: Session, member: Actor) -> None:
     _make_project(db_session, member, status=ProjectStatus.COMPLETED)
 
-    # On the project's own team (the submitter): sees the specific reason (see the "leaks details"
-    # section below for the generic message an off-team requester gets instead).
     decision = launch_policy.decide(_request(user=_user(member.user.email)), db_session, SETTINGS)
 
     assert isinstance(decision, launch_policy.Reject)
-    assert "completed" in decision.message.lower()
+    assert "isn't open for compute launches" in decision.message
 
 
 def test_rejects_when_project_is_still_in_review(db_session: Session, member: Actor) -> None:
@@ -120,7 +115,7 @@ def test_rejects_when_budget_is_exhausted(db_session: Session, member: Actor) ->
     decision = launch_policy.decide(_request(user=_user(member.user.email)), db_session, SETTINGS)
 
     assert isinstance(decision, launch_policy.Reject)
-    assert "$10.00" in decision.message
+    assert "no compute budget left" in decision.message
 
 
 # --------------------------------------------------------------------------------------------------
@@ -317,101 +312,53 @@ def test_nested_any_of_inside_a_candidate_is_capped(db_session: Session, member:
 
 
 # --------------------------------------------------------------------------------------------------
-# Reject messages must not leak another project's details to someone off its team.
+# Reject messages never carry a project's details. The request's `user` block is whatever the caller wrote
+# (anyone with the shared token can claim any email), so not even the submitter's email unlocks them.
 # --------------------------------------------------------------------------------------------------
 
 
-def test_inactive_project_message_is_generic_for_a_non_team_requester(db_session: Session, member: Actor) -> None:
-    project = _make_project(db_session, member, status=ProjectStatus.COMPLETED)
+def _spent_project(db_session: Session, member: Actor) -> Project:
+    project = _make_project(db_session, member, status=ProjectStatus.APPROVED)
+    budget.add_entry(
+        db_session, project=project, kind=BudgetEntryKind.INITIAL_APPROVAL, amount_cents=1_000, actor=member
+    )
+    db_session.add(
+        SpendSnapshot(project_id=project.id, estimated_spend_cents=1_000, source=SpendSource.SKYPILOT_COST_REPORT)
+    )
+    db_session.flush()
+    return project
 
-    decision = launch_policy.decide(_request(user=_user("stranger@example.com")), db_session, SETTINGS)
+
+@pytest.mark.parametrize("claimed_email", [None, "stranger@example.com", "submitter"])
+def test_inactive_project_message_names_nothing_whoever_asks(
+    db_session: Session, member: Actor, claimed_email: str | None
+) -> None:
+    project = _make_project(db_session, member, status=ProjectStatus.COMPLETED)
+    user = (
+        None if claimed_email is None else _user(member.user.email if claimed_email == "submitter" else claimed_email)
+    )
+
+    decision = launch_policy.decide(_request(user=user), db_session, SETTINGS)
 
     assert isinstance(decision, launch_policy.Reject)
     assert project.title not in decision.message
     assert "completed" not in decision.message.lower()
 
 
-def test_inactive_project_message_is_generic_when_no_user_is_present(db_session: Session, member: Actor) -> None:
-    """The client-side policy call never carries a `user:` block at all (spike: empty client-side) --
-    that must fail toward the generic message too, not toward leaking details."""
-    project = _make_project(db_session, member, status=ProjectStatus.COMPLETED)
-
-    decision = launch_policy.decide(_request(user=None), db_session, SETTINGS)
-
-    assert isinstance(decision, launch_policy.Reject)
-    assert project.title not in decision.message
-
-
-def test_inactive_project_message_is_specific_for_the_submitter(db_session: Session, member: Actor) -> None:
-    project = _make_project(db_session, member, status=ProjectStatus.COMPLETED)
-
-    decision = launch_policy.decide(_request(user=_user(member.user.email)), db_session, SETTINGS)
-
-    assert isinstance(decision, launch_policy.Reject)
-    assert project.title in decision.message
-    assert "completed" in decision.message.lower()
-
-
-def test_inactive_project_message_is_specific_for_a_credited_builder(
-    db_session: Session, member: Actor, make_actor
+@pytest.mark.parametrize("claimed_email", [None, "stranger@example.com", "submitter"])
+def test_exhausted_budget_message_names_nothing_whoever_asks(
+    db_session: Session, member: Actor, claimed_email: str | None
 ) -> None:
-    builder = make_actor(groups=frozenset({"ganymede:member"}))
-    project = _make_project(db_session, member, status=ProjectStatus.COMPLETED)
-
-    # A draft revision crediting the builder, as the project's current revision.
-    revision = ProjectRevision(
-        project_id=project.id,
-        number=1,
-        kind=RevisionKind.PROPOSAL,
-        write_up="w",
-        budget_requested_cents=100,
-        credited_builder_ids=[builder.user.id],
-        submitted_at=None,
-        outcome=RevisionOutcome.PENDING,
+    project = _spent_project(db_session, member)
+    user = (
+        None if claimed_email is None else _user(member.user.email if claimed_email == "submitter" else claimed_email)
     )
-    db_session.add(revision)
-    db_session.flush()
-    project.current_revision = revision
-    db_session.flush()
 
-    decision = launch_policy.decide(_request(user=_user(builder.user.email)), db_session, SETTINGS)
-
-    assert isinstance(decision, launch_policy.Reject)
-    assert project.title in decision.message
-
-
-def test_exhausted_budget_message_is_generic_for_a_non_team_requester(db_session: Session, member: Actor) -> None:
-    project = _make_project(db_session, member, status=ProjectStatus.APPROVED)
-    budget.add_entry(
-        db_session, project=project, kind=BudgetEntryKind.INITIAL_APPROVAL, amount_cents=1_000, actor=member
-    )
-    db_session.add(
-        SpendSnapshot(project_id=project.id, estimated_spend_cents=1_000, source=SpendSource.SKYPILOT_COST_REPORT)
-    )
-    db_session.flush()
-
-    decision = launch_policy.decide(_request(user=_user("stranger@example.com")), db_session, SETTINGS)
+    decision = launch_policy.decide(_request(user=user), db_session, SETTINGS)
 
     assert isinstance(decision, launch_policy.Reject)
     assert project.title not in decision.message
     assert "$10.00" not in decision.message
-
-
-def test_exhausted_budget_message_is_specific_for_the_submitter(db_session: Session, member: Actor) -> None:
-    project = _make_project(db_session, member, status=ProjectStatus.APPROVED)
-    budget.add_entry(
-        db_session, project=project, kind=BudgetEntryKind.INITIAL_APPROVAL, amount_cents=1_000, actor=member
-    )
-    db_session.add(
-        SpendSnapshot(project_id=project.id, estimated_spend_cents=1_000, source=SpendSource.SKYPILOT_COST_REPORT)
-    )
-    db_session.flush()
-
-    decision = launch_policy.decide(_request(user=_user(member.user.email)), db_session, SETTINGS)
-
-    assert isinstance(decision, launch_policy.Reject)
-    assert project.title in decision.message
-    assert "$10.00" in decision.message
 
 
 # --------------------------------------------------------------------------------------------------
@@ -605,3 +552,15 @@ def test_a_missing_or_malformed_num_nodes_gets_the_whole_cap(
 
     assert isinstance(decision, launch_policy.Allow)
     assert decision.task["resources"]["max_hourly_cost"] == 5.0
+
+
+def test_a_project_with_no_budget_at_all_gets_the_budget_message(db_session: Session, member: Actor) -> None:
+    project = _approved_project(db_session, member, ceiling_cents=1_000)
+    budget.add_entry(db_session, project=project, kind=BudgetEntryKind.RECLAIM, amount_cents=-1_000, actor=member)
+    db_session.flush()
+
+    decision = launch_policy.decide(_request(user=_user(member.user.email)), db_session, SETTINGS)
+
+    assert isinstance(decision, launch_policy.Reject)
+    assert "no compute budget left" in decision.message
+    assert "$0.00" not in decision.message

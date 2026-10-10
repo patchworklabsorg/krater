@@ -17,9 +17,9 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from krater.config import Settings
-from krater.models import Project, ProjectStatus, User
+from krater.models import Project, ProjectStatus
 from krater.services import budget
-from krater.skypilot_policy.envelope import PolicyRequest, PolicyUser
+from krater.skypilot_policy.envelope import PolicyRequest
 
 #: `request_name` values that actually reserve/consume compute, and so are the only ones subject to
 #: rejection (missing/unknown workspace, inactive project, exhausted budget). Everything else still
@@ -74,13 +74,18 @@ _WORKSPACE_HELP = (
     "`~/.sky/config.yaml`."
 )
 
-#: Generic reject messages for someone *not* on the project's team (see `_is_on_team`): they carry none
-#: of the project's title, status or spend/ceiling figures. Any Krater project's workspace name can be
-#: put in a `sky launch -w <name>` by anyone who guesses or overhears it -- this endpoint has no auth of
-#: its own (see the module docstring's "no side effects" note) -- so a non-member shouldn't be able to
-#: learn anything about a project they're not on by probing workspace names against it.
-_GENERIC_NOT_ACTIVE_MESSAGE = "This Ganymede project isn't available for compute launches right now."
-_GENERIC_BUDGET_MESSAGE = "This Ganymede project's compute budget doesn't allow launches right now."
+#: Reject messages for a known project carry none of its title, status or spend/ceiling figures, whoever
+#: asks. Anyone holding the shared policy token (every member's SkyPilot client has it) can POST here with a
+#: workspace name and claim to be anyone: the request's `user` block is whatever the caller wrote, so it
+#: can't decide who sees details. The project's own team reads them on its Krater page instead.
+_NOT_ACTIVE_MESSAGE = (
+    "This Ganymede project isn't open for compute launches right now: launches are only allowed while a project "
+    "is approved or in its completion review. Its page on Krater shows its current status."
+)
+_BUDGET_MESSAGE = (
+    "This Ganymede project has no compute budget left, so launches are blocked. Its page on Krater shows the "
+    "budget; ask a Ganymede admin if it needs more."
+)
 
 
 @dataclass(frozen=True)
@@ -99,10 +104,6 @@ class Reject:
 
 
 PolicyDecision = Allow | Reject
-
-
-def _dollars(cents: int) -> str:
-    return f"${cents / 100:,.2f}"
 
 
 def _resource_items(resources: Any) -> list[dict[str, Any]]:
@@ -204,26 +205,6 @@ def _apply_mutations(task: dict[str, Any], settings: Settings) -> dict[str, Any]
     return task
 
 
-def _is_on_team(session: Session, project: Project, user: PolicyUser | None) -> bool:
-    """Whether the requester in `user` (SkyPilot's server-side `user:` block, empty client-side -- see
-    `docs/dev/skypilot-spike.md` "User identity") is on `project`'s team: its submitter or a credited
-    builder on its current revision. SkyPilot identifies users by email (`docs/skypilot-integration.md`
-    section 0), and the spike confirms `user.name` carries it -- the same field the route already logs
-    as `"user"` on a reject.
-
-    `user` is `None`/has no `name` on the client-side call (or a fake/local server we've never seen);
-    treated as "not on the team" -- fail toward the generic message, never toward leaking details.
-    """
-    if user is None or not user.name:
-        return False
-    emails = {project.submitter.email}
-    revision = project.current_revision
-    if revision is not None and revision.credited_builder_ids:
-        builders = session.scalars(sa.select(User).where(User.id.in_(revision.credited_builder_ids)))
-        emails.update(builder.email for builder in builders)
-    return user.name in emails
-
-
 def decide(request: PolicyRequest, session: Session, settings: Settings) -> PolicyDecision:
     """Decide whether to allow `request`'s launch.
 
@@ -250,24 +231,10 @@ def decide(request: PolicyRequest, session: Session, settings: Settings) -> Poli
             return Reject(f"Workspace '{workspace}' isn't a Ganymede project on Krater. {_WORKSPACE_HELP}")
 
         if project.status not in LAUNCHABLE_STATUSES:
-            if not _is_on_team(session, project, request.user):
-                return Reject(_GENERIC_NOT_ACTIVE_MESSAGE)
-            return Reject(
-                f"Project '{project.title}' isn't active on Krater right now (status: {project.status.value}). "
-                "Compute launches are only allowed while a project is approved or in its completion review."
-            )
+            return Reject(_NOT_ACTIVE_MESSAGE)
 
-        remaining = budget.remaining_cents(session, project)
-        if remaining <= 0:
-            if not _is_on_team(session, project, request.user):
-                return Reject(_GENERIC_BUDGET_MESSAGE)
-            ceiling = budget.ceiling_cents(session, project)
-            spend = budget.latest_spend_cents(session, project)
-            return Reject(
-                f"Project '{project.title}' has used its full compute budget "
-                f"({_dollars(spend)} of {_dollars(ceiling)}). Launches are blocked until the budget "
-                "changes -- ask a Ganymede admin to review it."
-            )
+        if budget.remaining_cents(session, project) <= 0:
+            return Reject(_BUDGET_MESSAGE)
 
     task = _apply_mutations(copy.deepcopy(request.task), settings)
     skypilot_config = copy.deepcopy(request.skypilot_config)

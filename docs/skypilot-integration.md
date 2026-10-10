@@ -168,8 +168,11 @@ selected." See `krater/services/launch_policy.py`'s `ENFORCED_REQUEST_NAMES` doc
 - the workspace doesn't match any `Project.skypilot_workspace`;
 - the project isn't in an active state (`approved`, `pending_completion_review`, `completion_changes_requested` --
   for example, it's completed, withdrawn or still in review);
-- the project's remaining budget (ceiling minus latest estimated spend) is at or below zero, with a message showing
-  both figures.
+- the project's remaining budget (ceiling minus latest estimated spend) is at or below zero.
+
+The last two messages are the same for everyone and name nothing about the project (no title, status or figures), and
+point at its Krater page instead. The request's `user` block can't tell them apart: anyone with the shared token can
+write any email there, so it doesn't decide who sees details.
 
 **Change** the request (return the encoded mutated request) on every non-rejected call, `validate` included, so that:
 - the cluster autodowns after idling (`skypilot_autodown_idle_minutes`, `down: true`) unless the user's own
