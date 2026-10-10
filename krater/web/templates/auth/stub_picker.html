@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+
+{% block title %}Stub sign-in{% endblock %}
+
+{% block content %}
+<section class="card">
+  <h1>Stub sign-in</h1>
+  <p class="muted">Development only ({{ "KRATER_WEAVE_MODE=stub" }}). Pick a fixture user to sign in as.</p>
+  <ul class="stub-user-list">
+    {% for user in users %}
+    <li>
+      <a href="/auth/callback?{{ {'code': user.sub, 'state': state} | urlencode }}">{{ user.name }}</a>
+      <div class="muted">
+        {{ user.sub }} &middot; roles: {{ user.roles | sort | join(', ') if user.roles else 'none' }}
+        {% if not user.active %} &middot; inactive{% endif %}
+        {% if not user.email_verified %} &middot; unverified email{% endif %}
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endblock %}

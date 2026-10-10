@@ -1,0 +1,85 @@
+{% macro status_badge(status) %}
+<span class="badge badge--{{ status.value }}">{{ status.value.replace('_', ' ') | capitalize }}</span>
+{%- endmacro %}
+
+{% macro decision_badge(decision) %}
+<span class="badge badge--decision-{{ decision.value }}">{{ decision.value | capitalize }}</span>
+{%- endmacro %}
+
+{#
+  Budget estimator fieldset for the proposal/amendment draft form (projects/new.html, projects/edit.html).
+  See docs/dev/pricing.md and krater/web/static/js/budget-estimator.js.
+
+  Works with JavaScript off: the "Estimate" button is a plain form submit (name="form_action"
+  value="estimate") that reloads the page with the budget field already filled in server-side (see
+  krater.web.routers.projects). With JavaScript, budget-estimator.js intercepts that same button, fetches
+  /pricing/estimate instead, and only fills the budget field once "Use this estimate" is clicked.
+#}
+{% macro budget_estimator(gpu_options, estimator_values, errors, estimate_summary, estimator_used, csrf_token) %}
+<fieldset class="estimator" id="budget-estimator" data-estimate-url="/pricing/estimate" data-csrf-token="{{ csrf_token }}">
+  <legend>Budget estimator</legend>
+  <p class="field-hint">
+    Estimate a budget from current GPU prices (see <a href="/pricing">/pricing</a>), then use it to fill
+    in the requested budget above.
+  </p>
+
+  {% if not gpu_options %}
+    <p class="muted">No pricing data yet -- check back after the next refresh, or enter a budget directly.</p>
+  {% else %}
+    <div class="estimator__grid">
+    <div class="field">
+      <label for="estimator_gpu">GPU type &times; count</label>
+      <select id="estimator_gpu" name="estimator_gpu">
+        <option value="">Choose one&hellip;</option>
+        {% for option in gpu_options %}
+          <option value="{{ option.key }}" {% if estimator_values.estimator_gpu == option.key %}selected{% endif %}>{{ option.label }}</option>
+        {% endfor %}
+      </select>
+      {% if errors.estimator_gpu %}<p class="field-error">{{ errors.estimator_gpu }}</p>{% endif %}
+    </div>
+
+    <div class="field">
+      <label for="estimator_hours">Hours</label>
+      <input type="number" id="estimator_hours" name="estimator_hours" min="0" step="0.5" value="{{ estimator_values.estimator_hours }}">
+      {% if errors.estimator_hours %}<p class="field-error">{{ errors.estimator_hours }}</p>{% endif %}
+    </div>
+
+    <div class="field">
+      <label for="estimator_basis">Pricing basis</label>
+      <select id="estimator_basis" name="estimator_basis">
+        <option value="on_demand" {% if estimator_values.estimator_basis == "on_demand" %}selected{% endif %}>Typical on-demand</option>
+        {# SkyPilot's Vast catalog currently carries no spot prices; only offer the basis when some exist. #}
+        {% if gpu_options | selectattr("has_spot") | list %}
+        <option value="spot" {% if estimator_values.estimator_basis == "spot" %}selected{% endif %}>Lowest spot (interruptible)</option>
+        {% endif %}
+      </select>
+      {% if errors.estimator_basis %}<p class="field-error">{{ errors.estimator_basis }}</p>{% endif %}
+    </div>
+
+    <div class="field">
+      <label for="estimator_margin_percent">Safety margin (%)</label>
+      <input type="number" id="estimator_margin_percent" name="estimator_margin_percent" min="0" step="1" value="{{ estimator_values.estimator_margin_percent }}">
+      {% if errors.estimator_margin_percent %}<p class="field-error">{{ errors.estimator_margin_percent }}</p>{% endif %}
+    </div>
+    </div>
+
+    <input type="hidden" name="estimator_used" value="{{ estimator_used or '' }}" data-role="estimator-used">
+
+    <div class="action-row">
+      <button type="submit" name="form_action" value="estimate" class="button" data-role="estimate-button">Estimate</button>
+      <button type="button" class="button button--primary" data-role="use-estimate-button" hidden>Use this estimate</button>
+    </div>
+
+    <p class="policy-note" data-role="estimate-result" {% if not estimate_summary %}hidden{% endif %}>
+      {% if estimate_summary %}Estimate: {{ estimate_summary }}{% endif %}
+    </p>
+
+    <noscript>
+      <p class="field-hint">
+        Click "Estimate" to compute a budget from the fields above and fill it into the requested-budget
+        field -- this works without JavaScript, reloading the page.
+      </p>
+    </noscript>
+  {% endif %}
+</fieldset>
+{%- endmacro %}

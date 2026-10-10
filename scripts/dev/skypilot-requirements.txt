@@ -1,0 +1,5 @@
+# The one place the SkyPilot version Krater's contract is checked against is pinned. Read by
+# scripts/dev/skypilot_contract.sh (version-mismatch warning) and .github/workflows/skypilot-contract.yml
+# (installs exactly this). Keep docker-compose.yml's berkeleyskypilot/skypilot image tag in step; the
+# workflow fails if they differ. Bumping it: docs/dev/skypilot-contract.md.
+skypilot[vast]==0.13.0

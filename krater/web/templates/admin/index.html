@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% import "_macros.html" as macros %}
+
+{% block title %}Admin{% endblock %}
+
+{% block content %}
+<section class="card">
+  <h1>All projects</h1>
+  {% for status in statuses %}
+    {% set group = by_status[status] %}
+    {% if group %}
+      <h2>{{ macros.status_badge(status) }} ({{ group | length }})</h2>
+      <table class="table">
+        <thead>
+          <tr>
+            <th scope="col">Project</th>
+            <th scope="col">Ceiling</th>
+            <th scope="col">Spend</th>
+            <th scope="col">Remaining</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for summary in group %}
+            <tr>
+              <td><a href="/projects/{{ summary.project.id }}">{{ summary.project.title or "Untitled proposal" }}</a></td>
+              <td>{{ summary.ceiling_cents | dollars }}</td>
+              <td>{{ summary.spend_cents | dollars }}</td>
+              <td>{{ summary.remaining_cents | dollars }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+  {% endfor %}
+</section>
+
+<section class="card">
+  <h2>Approval policy</h2>
+  {% if policies %}
+    <table class="table">
+      <thead>
+        <tr>
+          <th scope="col">Stage</th>
+          <th scope="col">Min budget</th>
+          <th scope="col">Min approvals</th>
+          <th scope="col">Required group</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for policy in policies %}
+          <tr>
+            <td>{{ policy.stage.value | capitalize }}</td>
+            <td>{{ policy.min_budget_cents | dollars if policy.min_budget_cents is not none else "Any" }}</td>
+            <td>{{ policy.min_approvals }}</td>
+            <td>{{ policy.required_group or "Any reviewer" }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">
+      No custom policies configured. The default applies to every stage: 1 approval, from any reviewer.
+    </p>
+  {% endif %}
+</section>
+{% endblock %}

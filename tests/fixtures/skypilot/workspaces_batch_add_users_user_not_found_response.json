@@ -1,0 +1,5 @@
+{
+  "note": "batch_add_users_to_workspaces requires the INTERNAL user_id (the DB hash id from GET /users), not an email/username. Passing an email that hasn't been resolved to an existing user record fails synchronously inside the async request with this per-workspace error shape.",
+  "request": {"workspace_names": ["ganymede-spike"], "user_ids": ["alice@example.com"]},
+  "response.return_value": {"succeeded": [], "failed": [{"workspace_name": "-", "error": "User alice@example.com does not exist"}]}
+}

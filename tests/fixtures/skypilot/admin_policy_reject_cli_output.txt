@@ -1,0 +1,3 @@
+YAML to run: task.yaml
+Applying client admin policy: RestfulAdminPolicy
+sky.exceptions.UserRequestRejectedByPolicy: [31mUser request is rejected by admin policy http://127.0.0.1:9911/policy?token=abc123token[39m: Rejected by Krater policy spike (seq=12): project budget exceeded (simulated).

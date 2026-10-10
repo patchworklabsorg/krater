@@ -1,0 +1,4 @@
+{
+  "request": {"workspace_names": ["ganymede-spike"], "user_ids": ["c160f8cc"]},
+  "response.return_value": {"succeeded": ["ganymede-spike"], "failed": []}
+}

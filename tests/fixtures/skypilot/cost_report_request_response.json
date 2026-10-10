@@ -1,0 +1,30 @@
+{
+  "_note": "POST /cost_report is async: this captures the request body we sent and the polled GET /api/get?request_id=... result. No clusters were ever launched (dryrun-only spike), so return_value is legitimately empty. Full request/response envelope fields (entrypoint, request_body) are omitted here since they're SkyPilot-internal pickled blobs, not useful as a fixture -- see docs/dev/skypilot-spike.md section 4 for the actual row shape, confirmed by reading sky.global_user_state.get_clusters_from_history.",
+  "request": {
+    "days": 30
+  },
+  "poll_result": {
+    "status": "SUCCEEDED",
+    "return_value": "[]",
+    "error": "null"
+  },
+  "row_shape_from_code": {
+    "name": "str: cluster name",
+    "launched_at": "int: last launch timestamp",
+    "duration": "int: total seconds up",
+    "num_nodes": "int",
+    "resources": "pickled sky.Resources",
+    "priority": "int | null",
+    "priority_class": "str | null",
+    "cluster_hash": "str",
+    "usage_intervals": "list[[int, int|null]]",
+    "status": "sky.status_lib.ClusterStatus | null",
+    "user_hash": "str (falls back to the CALLING user's hash if the row itself has none)",
+    "user_name": "str | null",
+    "workspace": "str (cluster_history.workspace, falling back to the live cluster.workspace)",
+    "last_event": "dict | null",
+    "node_names": "str",
+    "total_cost": "float, computed as resources.get_cost(duration) * num_nodes"
+  },
+  "source": "sky.core.cost_report (docstring is stale/incomplete -- omits workspace/user_name/etc, see Surprise #7) + sky.global_user_state.get_clusters_from_history (actual row builder)"
+}

@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+
+{% block title %}{{ project.title or "Untitled project" }}{% endblock %}
+
+{% block content %}
+<section class="card">
+  <h1>{{ project.title or "Untitled project" }}</h1>
+
+  {% if revision and revision.tags %}
+    <p class="tag-list">
+      {% for tag in revision.tags %}<span class="tag">{{ tag }}</span>{% endfor %}
+    </p>
+  {% endif %}
+
+  {% if screenshot_urls %}
+    <ul class="gallery-screenshots">
+      {% for url in screenshot_urls %}
+        <li><img src="{{ url }}" alt="{{ project.title or 'Project' }} screenshot" loading="lazy"></li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+
+  <div class="action-row">
+    {% if revision and revision.demo_url %}
+      <a class="button button--primary" href="{{ revision.demo_url }}">View demo</a>
+    {% endif %}
+    {% if project.repo_url %}
+      <a class="button" href="{{ project.repo_url }}">View repo</a>
+    {% endif %}
+  </div>
+
+  {% if revision %}
+    <h2>Write-up</h2>
+    <p class="write-up">{{ revision.write_up | nl2br }}</p>
+  {% endif %}
+
+  {% if builders %}
+    <h2>Credited builders</h2>
+    <ul class="link-list">
+      {% for builder in builders %}<li>{{ builder.display_name }}</li>{% endfor %}
+    </ul>
+  {% endif %}
+
+  <p class="muted">&asymp; {{ spend_cents | dollars }} estimated compute spend</p>
+</section>
+{% endblock %}

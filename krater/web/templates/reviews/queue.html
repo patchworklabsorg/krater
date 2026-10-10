@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+
+{% block title %}Review queue{% endblock %}
+
+{% block content %}
+<section class="card">
+  <h1>Review queue</h1>
+  {% if queue %}
+    <ul class="project-list">
+      {% for revision in queue %}
+        <li class="project-list__item">
+          <a href="/projects/{{ revision.project_id }}">{{ revision.project.title or "Untitled proposal" }}</a>
+          <span class="muted">{{ revision.kind.value | capitalize }}</span>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <div class="empty-state">
+      <p>Nothing waiting on your review.</p>
+    </div>
+  {% endif %}
+</section>
+{% endblock %}

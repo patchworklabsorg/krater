@@ -1,0 +1,15 @@
+{
+  "task": "resources:\n  infra: vast\n  accelerators:\n    A100: 1\n  disk_size: 256\n\nnum_nodes: 1\n\nrun: 'echo hello from krater spike\n\n  '\n\nfile_mounts: {}\n\nvolumes: {}\n\n_user_specified_yaml: \"resources:\\n  cloud: vast\\n  accelerators: A100:1\\n\\nrun: 'echo\\\n  \\ hello from krater spike\\n\\n  '\\n\"\n",
+  "skypilot_config": "admin_policy: http://127.0.0.1:9911/policy?token=abc123token\n\nworkspaces: {}\n\nrbac:\n  default_role: user\n",
+  "request_name": "validate",
+  "request_options": {
+    "cluster_name": "spike-fixture-echo",
+    "idle_minutes_to_autostop": null,
+    "down": false,
+    "dryrun": true
+  },
+  "at_client_side": false,
+  "user": "id: fcd1e5cf\n\nname: root\n\nuser_type: null\n\npreferred_workspace: null\n",
+  "client_api_version": 56,
+  "client_version": "0.13.0"
+}

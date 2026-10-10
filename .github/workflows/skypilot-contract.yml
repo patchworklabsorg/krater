@@ -1,0 +1,140 @@
+name: SkyPilot contract
+
+# Runs scripts/dev/skypilot_contract.sh against a real SkyPilot API server (docs/dev/skypilot-contract.md).
+# Kept out of ci.yml: skypilot[vast] is a ~450MB install that normal CI shouldn't pay for on every push.
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+  push:
+    paths:
+      - "krater/skypilot/**"
+      - "krater/skypilot_policy/**"
+      - "krater/services/launch_policy.py"
+      - "krater/services/skypilot_sync.py"
+      - "krater/web/routers/skypilot_policy.py"
+      - "scripts/dev/skypilot_contract.sh"
+      - "scripts/dev/_skypilot_contract_helper.py"
+      - "scripts/dev/skypilot-requirements.txt"
+      - "tests/live/test_skypilot_live.py"
+      - "tests/fixtures/skypilot/**"
+      - "docker-compose.yml"
+      - ".github/workflows/skypilot-contract.yml"
+  pull_request:
+    paths:
+      - "krater/skypilot/**"
+      - "krater/skypilot_policy/**"
+      - "krater/services/launch_policy.py"
+      - "krater/services/skypilot_sync.py"
+      - "krater/web/routers/skypilot_policy.py"
+      - "scripts/dev/skypilot_contract.sh"
+      - "scripts/dev/_skypilot_contract_helper.py"
+      - "scripts/dev/skypilot-requirements.txt"
+      - "tests/live/test_skypilot_live.py"
+      - "tests/fixtures/skypilot/**"
+      - "docker-compose.yml"
+      - ".github/workflows/skypilot-contract.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    # A same-repo PR's head commit already gets this check from its push run; only fork PRs need their own.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: root
+          POSTGRES_PASSWORD: root
+          POSTGRES_DB: krater_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U root"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      KRATER_DATABASE_URL: postgresql+psycopg://root:root@localhost:5432/krater_dev
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the SkyPilot pin matches docker-compose.yml
+        run: |
+          pin="$(grep -Ev '^[[:space:]]*(#|$)' scripts/dev/skypilot-requirements.txt | head -1 | sed -E 's/.*==//' | tr -d '[:space:]')"
+          image="$(sed -nE 's#^[[:space:]]*image:[[:space:]]*berkeleyskypilot/skypilot:([^[:space:]]+).*#\1#p' docker-compose.yml)"
+          echo "Pinned: skypilot==${pin}; docker-compose.yml image tag: ${image}"
+          if [[ -z "$pin" || "$pin" != "$image" ]]; then
+            echo "::error file=scripts/dev/skypilot-requirements.txt::SkyPilot pin (${pin}) and docker-compose.yml's berkeleyskypilot/skypilot image tag (${image}) differ; bump both together."
+            exit 1
+          fi
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.8.17"
+          enable-cache: true
+          cache-suffix: skypilot-contract
+
+      - name: Set up Python
+        run: uv python install
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Locate the SkyPilot venv
+        id: skyvenv
+        run: |
+          echo "SKYPILOT_VENV=$HOME/skypilot-venv" >> "$GITHUB_ENV"
+          echo "WORKDIR=$RUNNER_TEMP/skypilot-contract" >> "$GITHUB_ENV"
+          # The venv symlinks to this exact interpreter, so a patch bump must not restore a stale venv.
+          echo "python-version=$("$(uv python find 3.12)" -c 'import platform; print(platform.python_version())')" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the SkyPilot venv
+        id: skycache
+        uses: actions/cache@v4
+        with:
+          path: ~/skypilot-venv
+          key: skypilot-venv-${{ runner.os }}-py${{ steps.skyvenv.outputs.python-version }}-${{ hashFiles('scripts/dev/skypilot-requirements.txt') }}
+
+      - name: Install SkyPilot (pinned in scripts/dev/skypilot-requirements.txt)
+        if: steps.skycache.outputs.cache-hit != 'true'
+        run: |
+          uv venv "$SKYPILOT_VENV" --python 3.12
+          uv pip install --python "$SKYPILOT_VENV/bin/python" -r scripts/dev/skypilot-requirements.txt
+
+      - name: Run the SkyPilot contract check
+        env:
+          KEEP_WORKDIR: "1"
+          SKYPILOT_STRICT_VERSION: "1"
+        run: |
+          command -v rsync >/dev/null || { sudo apt-get update && sudo apt-get install -y rsync; }
+          scripts/dev/skypilot_contract.sh
+
+      - name: Upload server logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: skypilot-contract-logs
+          # include-hidden-files: the API server's per-request logs live under the hidden .sky dir.
+          path: |
+            ${{ runner.temp }}/skypilot-contract/*.log
+            ${{ runner.temp }}/skypilot-contract/admin_home/.sky/api_server/request_logs/*.log
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 14

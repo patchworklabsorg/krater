@@ -1,0 +1,163 @@
+{% extends "base.html" %}
+{% import "_macros.html" as macros %}
+
+{% block title %}Edit draft{% endblock %}
+
+{% block content %}
+<section class="card">
+  <div class="page-header">
+    <h1>Edit draft</h1>
+    <a class="back-link" href="/projects/{{ project.id }}">&larr; Back to project</a>
+  </div>
+  <p class="muted">
+    {% if draft.kind.value == "completion" %}
+      Completion write-up for &ldquo;{{ project.title }}&rdquo;.
+    {% elif draft.kind.value == "amendment" %}
+      Amendment to &ldquo;{{ project.title }}&rdquo;.
+    {% else %}
+      Proposal draft.
+    {% endif %}
+  </p>
+
+  <form method="post" action="/projects/{{ project.id }}/edit" class="form" novalidate>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+    <div class="field">
+      <label for="title">Title</label>
+      <input type="text" id="title" name="title" value="{{ values.title }}" maxlength="255">
+      {% if errors.title %}<p class="field-error">{{ errors.title }}</p>{% endif %}
+    </div>
+
+    <div class="field">
+      <label for="repo_url">Repo link</label>
+      <input type="url" id="repo_url" name="repo_url" value="{{ values.repo_url }}" placeholder="https://github.com/..."{% if errors.repo_url %} aria-invalid="true"{% endif %}>
+      {% if errors.repo_url %}<p class="field-error">{{ errors.repo_url }}</p>{% endif %}
+    </div>
+
+    <div class="field">
+      <label for="write_up">Write-up</label>
+      <textarea id="write_up" name="write_up" rows="8">{{ values.write_up }}</textarea>
+      {% if errors.write_up %}<p class="field-error">{{ errors.write_up }}</p>{% endif %}
+    </div>
+
+    <div class="field">
+      <label for="budget_requested">Requested budget (USD)</label>
+      <input
+        type="text"
+        id="budget_requested"
+        name="budget_requested"
+        value="{{ values.budget_requested }}"
+        inputmode="decimal"
+        placeholder="1,234.50"
+      >
+      {% if errors.budget_requested_cents %}<p class="field-error">{{ errors.budget_requested_cents }}</p>{% endif %}
+    </div>
+
+    {% if draft.kind.value != "completion" %}
+      {{ macros.budget_estimator(gpu_options, estimator_values, errors, estimate_summary, estimator_used, csrf_token()) }}
+    {% endif %}
+
+    {% if draft.kind.value == "completion" %}
+      <div class="field">
+        <label for="demo_url">Demo link</label>
+        <input type="url" id="demo_url" name="demo_url" value="{{ values.demo_url }}" placeholder="https://..."{% if errors.demo_url %} aria-invalid="true"{% endif %}>
+        {% if errors.demo_url %}<p class="field-error">{{ errors.demo_url }}</p>{% endif %}
+      </div>
+
+      <div class="field">
+        <label for="tags">Tags</label>
+        <input type="text" id="tags" name="tags" value="{{ values.tags }}" placeholder="robotics, ganymede">
+        <p class="field-hint">Comma-separated.</p>
+      </div>
+
+      <div class="field">
+        <label for="credited_builder_emails">Credited builders</label>
+        <input
+          type="text"
+          id="credited_builder_emails"
+          name="credited_builder_emails"
+          value="{{ values.credited_builder_emails }}"
+          placeholder="alice@example.com, bob@example.com"
+        >
+        <p class="field-hint">Comma-separated emails of existing Krater users.</p>
+        {% if errors.credited_builder_emails %}<p class="field-error">{{ errors.credited_builder_emails }}</p>{% endif %}
+      </div>
+    {% endif %}
+
+    <button type="submit" name="form_action" value="save" class="button button--primary">Save draft</button>
+  </form>
+
+  {% if draft.kind.value == "completion" %}
+    {% set current_screenshots = screenshots|default([]) %}
+    {% set max_shots = max_screenshots|default(6) %}
+    <div class="field edit-section">
+      <label for="screenshot-input">Screenshots</label>
+
+      {% if current_screenshots %}
+        <ul class="screenshot-list">
+          {% for shot in current_screenshots %}
+            <li class="screenshot-list__item">
+              <img
+                class="screenshot-list__thumb"
+                src="{{ shot.url }}"
+                alt="{{ project.title or 'Project' }} screenshot"
+                loading="lazy"
+              >
+              <form method="post" action="/projects/{{ project.id }}/screenshots/{{ shot.key }}/delete">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="button button--danger">Remove</button>
+              </form>
+            </li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+
+      <noscript>
+        <p class="field-hint">
+          Uploading screenshots needs JavaScript enabled. You can still remove existing ones above.
+        </p>
+      </noscript>
+
+      <div
+        id="screenshot-widget"
+        data-presign-url="/projects/{{ project.id }}/screenshots/presign"
+        data-confirm-url="/projects/{{ project.id }}/screenshots/confirm"
+        data-csrf-token="{{ csrf_token() }}"
+        data-max-screenshots="{{ max_shots }}"
+        data-max-bytes="{{ max_screenshot_bytes|default(5242880) }}"
+        data-remaining="{{ max_shots - current_screenshots|length }}"
+      >
+        {% if current_screenshots|length < max_shots %}
+          <input type="file" id="screenshot-input" accept="image/png,image/jpeg,image/webp" multiple data-role="file-input">
+          <p class="field-hint">PNG, JPEG or WebP, up to 5 MB each. Up to {{ max_shots }} total.</p>
+        {% else %}
+          <p class="field-hint">Maximum of {{ max_shots }} screenshots reached. Remove one to add another.</p>
+        {% endif %}
+        <p class="field-error" data-role="status" role="status"></p>
+      </div>
+    </div>
+  {% endif %}
+
+  <div class="edit-section submit-bar">
+  <p class="muted">Saved changes stay a draft until you submit. Save first: submitting doesn't include unsaved edits.</p>
+  <form
+    method="post"
+    action="/projects/{{ project.id }}/{{ 'submit-completion' if draft.kind.value == 'completion' else 'submit' }}"
+    class="form form--inline"
+  >
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" class="button">
+      {{ "Submit completion for review" if draft.kind.value == "completion" else "Submit for review" }}
+    </button>
+  </form>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+  {% if draft.kind.value == "completion" %}
+    <script src="/static/js/screenshot-upload.js" defer></script>
+  {% else %}
+    <script src="/static/js/budget-estimator.js" defer></script>
+  {% endif %}
+{% endblock %}

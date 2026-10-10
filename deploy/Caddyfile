@@ -1,0 +1,30 @@
+# Caddy in front of Krater: TLS (certificates from Let's Encrypt, renewed automatically) and one public
+# hostname per service. Used by docker-compose.yml's `proxy` service (`--profile proxy`); see
+# docs/dev/production.md. Skip it when the host already runs its own reverse proxy, and point that
+# proxy at the same three upstreams instead.
+
+{
+	# The *.localhost defaults (docker-compose.yml) get certificates from Caddy's own local CA;
+	# there's no system trust store worth writing it into inside the container.
+	skip_install_trust
+}
+
+# The portal: UI, sign-in, Slack's interactivity endpoint, and the SkyPilot launch gate. The gate
+# (/internal/skypilot/policy) has to stay reachable here: members' own `sky` CLIs call it before
+# every launch, not only the SkyPilot server (docs/skypilot-integration.md).
+{$KRATER_DOMAIN} {
+	encode gzip
+	reverse_proxy portal:8000
+}
+
+# Gallery screenshots. Browsers upload straight to the bucket and load thumbnails from it with
+# presigned URLs, so KRATER_S3_PUBLIC_ENDPOINT_URL must be https://<this host> (docs/dev/storage.md).
+{$KRATER_S3_DOMAIN} {
+	reverse_proxy storage:8333
+}
+
+# The SkyPilot API server members log in to (`sky api login -e https://<this host>`). It hands
+# /oauth2/* to auth-proxy itself, so only the API server is exposed. Only up with --profile skypilot.
+{$KRATER_SKYPILOT_DOMAIN} {
+	reverse_proxy skypilot:46580
+}

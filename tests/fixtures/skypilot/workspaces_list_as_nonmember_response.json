@@ -1,0 +1,7 @@
+{
+  "_note": "GET /workspaces as grace@ganymede.example (id eea72432), who is NOT in allowed_users of either private workspace. Same request as workspaces_list_as_member_response.json, different simulated identity. She simply doesn't see the private workspaces at all -- no error, they're absent from the listing.",
+  "poll_result_status": "SUCCEEDED",
+  "return_value": {
+    "default": {}
+  }
+}

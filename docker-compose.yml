@@ -1,0 +1,303 @@
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-krater}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-krater}
+      POSTGRES_DB: ${POSTGRES_DB:-krater}
+    volumes:
+      - krater_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-krater} -d ${POSTGRES_DB:-krater}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # One-shot deploy setup: database migrations, then the screenshot bucket and its CORS rule (skipped
+  # when KRATER_S3_MODE=fake). Both steps are safe to re-run; see docs/dev/storage.md.
+  migrate:
+    build: .
+    env_file: ${KRATER_ENV_FILE:-.env}
+    command: ["/bin/sh", "-c", "alembic upgrade head && python -m krater.storage.ensure_bucket"]
+    depends_on:
+      db:
+        condition: service_healthy
+      storage:
+        condition: service_started
+
+  portal:
+    build: .
+    restart: unless-stopped
+    env_file: ${KRATER_ENV_FILE:-.env}
+    # KRATER_BIND_ADDRESS=127.0.0.1 in production keeps the published ports off the network, so the
+    # only way in is through the TLS proxy (docs/dev/production.md). Applies to every port below.
+    ports:
+      - "${KRATER_BIND_ADDRESS:-0.0.0.0}:${PORT:-8000}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    build: .
+    restart: unless-stopped
+    env_file: ${KRATER_ENV_FILE:-.env}
+    command: ["procrastinate", "--app=krater.worker.app.app", "worker"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  # Temporary self-hosted S3-compatible storage (gallery screenshots) until a real provider is chosen; see
+  # docs/SPEC.md "Open questions". SeaweedFS rather than MinIO: MinIO stopped publishing community images in 2025.
+  storage:
+    # 4.47 is what staging ran (2026-10-10). Bump deliberately, after a staging run on the new version.
+    image: chrislusf/seaweedfs:${SEAWEEDFS_VERSION:-4.47}
+    restart: unless-stopped
+    environment:
+      S3_ACCESS_KEY: ${KRATER_S3_ACCESS_KEY_ID:-krater}
+      S3_SECRET_KEY: ${KRATER_S3_SECRET_ACCESS_KEY:-krater-dev-secret}
+    # The S3 gateway reads its credentials from a JSON file; write it from the env so no secret lives in the repo.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        printf '{"identities":[{"name":"krater","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Admin","Read","List","Tagging","Write"]}]}'
+        "$$S3_ACCESS_KEY" "$$S3_SECRET_KEY" > /tmp/s3.json &&
+        exec weed server -dir=/data -master.volumeSizeLimitMB=1024 -s3 -s3.port=8333 -s3.config=/tmp/s3.json
+    ports:
+      - "${KRATER_BIND_ADDRESS:-0.0.0.0}:${S3_PORT:-8333}:8333"
+    volumes:
+      - krater_storage_data:/data
+
+  # -- SkyPilot compute (see docs/skypilot-integration.md, docs/dev/skypilot-spike.md) --------------
+  # Both behind the `skypilot` profile: `docker compose up` (no --profile) stays UI-only, no Weave or
+  # Vast credentials required. `docker compose --profile skypilot up` brings these two up too.
+
+  # The SkyPilot API server. Image/version pinned to what docs/dev/skypilot-spike.md was actually run
+  # against -- bump both together and re-check the spike's findings before changing it.
+  #
+  # The server config (~/.sky/config.yaml) is generated from env at container start, the same way
+  # `storage`'s identities file is, so nothing secret (the policy token) is committed. The start command
+  # (`sky api start --deploy --foreground`) matches SkyPilot's official Helm chart. Verified starting under
+  # Docker Desktop, with Krater's reconcile and a `sky launch --dryrun` through the launch gate against it.
+  skypilot:
+    image: berkeleyskypilot/skypilot:0.13.0
+    profiles: ["skypilot"]
+    restart: unless-stopped
+    # No env_file here (nor on auth-proxy): it would hand every Krater secret (session key, DB and S3
+    # credentials) to a server members submit work to. Only what's listed below is passed in.
+    environment:
+      KRATER_PUBLIC_URL: ${KRATER_PUBLIC_URL:-http://host.docker.internal:8000}
+      KRATER_SKYPILOT_POLICY_TOKEN: ${KRATER_SKYPILOT_POLICY_TOKEN}
+      # Member SSO: the API server delegates auth decisions to `auth-proxy` over the internal network.
+      # See docs/dev/skypilot-spike.md section 3 for the GET {base_url}/oauth2/auth contract this uses.
+      SKYPILOT_AUTH_OAUTH2_PROXY_ENABLED: "true"
+      SKYPILOT_AUTH_OAUTH2_PROXY_BASE_URL: "http://auth-proxy:4180"
+      # Krater's admin REST calls use a service-account bearer token instead (see
+      # KRATER_SKYPILOT_SERVICE_TOKEN); both flags are required to mint and accept one (spike Surprise
+      # and section 3). Basic auth is only for the one-time bootstrap that mints that token
+      # (docs/dev/staging.md); set KRATER_SKYPILOT_ENABLE_BASIC_AUTH=false afterwards. While it's on,
+      # SkyPilot checks it before asking auth-proxy, so every member request without basic credentials
+      # gets a 401 and member sign-in can't work.
+      ENABLE_BASIC_AUTH: ${KRATER_SKYPILOT_ENABLE_BASIC_AUTH:-true}
+      ENABLE_SERVICE_ACCOUNTS: "true"
+      # SkyPilot only reads SKYPILOT_INITIAL_BASIC_AUTH (`user:<bcrypt hash>`, the admin it creates on
+      # its first start with an empty volume); the command below builds it from these two. No default
+      # password on purpose: with basic auth on, the command refuses to start without one.
+      SKYPILOT_BASIC_AUTH_USER: ${KRATER_SKYPILOT_BASIC_AUTH_USER:-admin}
+      SKYPILOT_BASIC_AUTH_PASSWORD: ${KRATER_SKYPILOT_BASIC_AUTH_PASSWORD:-}
+    entrypoint: ["/bin/sh", "-c"]
+    # A one-item list, not a bare string: Compose splits a string `command` into words, so `sh -c` would
+    # only run `set` (dumping the whole environment, secrets included, to the log) and exit.
+    # `$$` defers expansion to the container's shell, so the defaults under `environment:` apply.
+    command:
+      - |
+        set -eu
+        if [ "$$ENABLE_BASIC_AUTH" = "true" ]; then
+          : "$${SKYPILOT_BASIC_AUTH_PASSWORD:?set KRATER_SKYPILOT_BASIC_AUTH_PASSWORD}"
+          SKYPILOT_INITIAL_BASIC_AUTH="$$SKYPILOT_BASIC_AUTH_USER:$$(python -c 'import bcrypt, os; print(bcrypt.hashpw(os.environ["SKYPILOT_BASIC_AUTH_PASSWORD"].encode(), bcrypt.gensalt()).decode())')"
+          export SKYPILOT_INITIAL_BASIC_AUTH
+        fi
+        unset SKYPILOT_BASIC_AUTH_PASSWORD
+        mkdir -p /root/.sky /root/.config/vastai
+        cat > /tmp/krater-sky-config.yaml <<CFG
+        # Generated at container start by docker-compose.yml's "skypilot" service -- do not edit by hand.
+
+        # docs/dev/skypilot-spike.md Surprise #1: this URL is called both from members' own machines
+        # (client-side) and from this container (server-side), so it must be reachable from both: not an
+        # internal Docker hostname like http://portal:8000, and not localhost (this container's own).
+        admin_policy: $${KRATER_PUBLIC_URL}/internal/skypilot/policy?token=$${KRATER_SKYPILOT_POLICY_TOKEN}
+
+        # Spike Surprise #5: without this, every new SSO login defaults to SkyPilot role admin.
+        rbac:
+          default_role: user
+
+        # The "default" workspace isn't tied to any Ganymede project -- disable every cloud in it so
+        # nothing can be launched outside a project's own (per-project) workspace. There is no
+        # workspace-level cloud allowlist (spike section 2): each cloud has to be deny-listed individually.
+        # Every compute cloud in SkyPilot's registry; keep in sync with krater/skypilot/live.py's list.
+        workspaces:
+          default:
+            aws: {disabled: true}
+            azure: {disabled: true}
+            cudo: {disabled: true}
+            do: {disabled: true}
+            fluidstack: {disabled: true}
+            gcp: {disabled: true}
+            hyperbolic: {disabled: true}
+            ibm: {disabled: true}
+            kubernetes: {disabled: true}
+            lambda: {disabled: true}
+            mithril: {disabled: true}
+            nebius: {disabled: true}
+            oci: {disabled: true}
+            paperspace: {disabled: true}
+            primeintellect: {disabled: true}
+            runpod: {disabled: true}
+            scp: {disabled: true}
+            seeweb: {disabled: true}
+            shadeform: {disabled: true}
+            slurm: {disabled: true}
+            ssh: {disabled: true}
+            vast: {disabled: true}
+            verda: {disabled: true}
+            vsphere: {disabled: true}
+            yotta: {disabled: true}
+        CFG
+        # SkyPilot saves the workspaces Krater creates into this same file, so keep those rather than
+        # overwriting it; everything else is regenerated from env on every start.
+        python - <<'PY'
+        import os, yaml
+        path = "/root/.sky/config.yaml"
+        with open("/tmp/krater-sky-config.yaml") as f:
+            config = yaml.safe_load(f)
+        current = {}
+        if os.path.exists(path):
+            with open(path) as f:
+                current = yaml.safe_load(f) or {}
+        workspaces = current.get("workspaces") or {}
+        workspaces.update(config["workspaces"])
+        config["workspaces"] = workspaces
+        with open(path, "w") as f:
+            yaml.safe_dump(config, f, sort_keys=False)
+        PY
+        exec sky api start --deploy --foreground
+    ports:
+      - "${KRATER_BIND_ADDRESS:-0.0.0.0}:${SKYPILOT_PORT:-46580}:46580"
+    volumes:
+      - krater_skypilot_data:/root/.sky
+      # A local file holding the Vast API key, never committed. Falls back to /dev/null (an empty,
+      # always-present file) so plain `docker compose up` (this service isn't in its default profile)
+      # never fails to parse just because this isn't set.
+      - ${KRATER_SKYPILOT_VAST_KEY_FILE:-/dev/null}:/root/.config/vastai/vast_api_key:ro
+    extra_hosts:
+      # Lets the default KRATER_PUBLIC_URL resolve on a plain Linux Docker engine too, not only Docker Desktop.
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - auth-proxy
+
+  # oauth2-proxy in front of `skypilot`, authenticating members against Weave. See
+  # docs/skypilot-integration.md section 0 for the settings this follows.
+  auth-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.6.0
+    profiles: ["skypilot"]
+    restart: unless-stopped
+    environment:
+      OAUTH2_PROXY_HTTP_ADDRESS: "0.0.0.0:4180"
+      OAUTH2_PROXY_UPSTREAMS: "http://skypilot:46580"
+      OAUTH2_PROXY_PROVIDER: "oidc"
+      OAUTH2_PROXY_OIDC_ISSUER_URL: ${KRATER_WEAVE_ISSUER}
+      # A separate, confidential Weave OAuth app -- not Krater's own KRATER_WEAVE_CLIENT_ID/SECRET.
+      OAUTH2_PROXY_CLIENT_ID: ${KRATER_SKYPILOT_AUTH_CLIENT_ID}
+      OAUTH2_PROXY_CLIENT_SECRET: ${KRATER_SKYPILOT_AUTH_CLIENT_SECRET}
+      OAUTH2_PROXY_COOKIE_SECRET: ${KRATER_SKYPILOT_AUTH_COOKIE_SECRET}
+      OAUTH2_PROXY_REDIRECT_URL: "${KRATER_SKYPILOT_PUBLIC_URL:-http://localhost:46580}/oauth2/callback"
+      # Standard scopes only: this proxy doesn't read Krater's roles from Weave, so any Weave user can
+      # sign in here. They still see nothing: every project workspace
+      # is private to its team, and Krater's launch gate rejects anything outside one. See
+      # docs/skypilot-integration.md section 0.
+      OAUTH2_PROXY_SCOPE: "openid email profile"
+      OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      OAUTH2_PROXY_CODE_CHALLENGE_METHOD: "S256"
+      OAUTH2_PROXY_COOKIE_EXPIRE: "8h"
+      OAUTH2_PROXY_COOKIE_SECURE: ${KRATER_SKYPILOT_AUTH_COOKIE_SECURE:-true}
+    ports:
+      - "${KRATER_BIND_ADDRESS:-0.0.0.0}:${SKYPILOT_AUTH_PROXY_PORT:-8080}:4180"
+
+  # -- Production extras (docs/dev/production.md) --------------------------------------------------
+  # Opt-in, so dev and staging stay as they are: `--profile backup` and `--profile proxy`.
+
+  # Nightly `pg_dump` of Krater's database: the budget ledger and audit log live only there. Dumps land
+  # in KRATER_BACKUP_DIR on the host, which is what to copy off the machine; files older than
+  # KRATER_BACKUP_KEEP_DAYS are deleted. Restoring one is in docs/dev/production.md.
+  db-backup:
+    image: postgres:16
+    profiles: ["backup"]
+    restart: unless-stopped
+    environment:
+      PGHOST: db
+      PGUSER: ${POSTGRES_USER:-krater}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-krater}
+      PGDATABASE: ${POSTGRES_DB:-krater}
+      BACKUP_INTERVAL_SECONDS: ${KRATER_BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_KEEP_DAYS: ${KRATER_BACKUP_KEEP_DAYS:-14}
+    entrypoint: ["/bin/sh", "-c"]
+    # A one-item list for the same reason as `skypilot`'s command. Each dump is written under a temporary
+    # name and renamed when complete, so a half-written file is never mistaken for a good backup.
+    command:
+      - |
+        set -eu
+        while true; do
+          name="krater-$$(date -u +%Y%m%dT%H%M%SZ).dump"
+          if pg_dump --format=custom --file="/backups/$$name.partial"; then
+            mv "/backups/$$name.partial" "/backups/$$name"
+            echo "backup written: $$name"
+          else
+            rm -f "/backups/$$name.partial"
+            echo "backup FAILED at $$(date -u +%FT%TZ)" >&2
+          fi
+          find /backups -name 'krater-*.dump' -mtime +"$$BACKUP_KEEP_DAYS" -delete
+          sleep "$$BACKUP_INTERVAL_SECONDS"
+        done
+    volumes:
+      - ${KRATER_BACKUP_DIR:-./backups}:/backups
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # TLS in front of the portal, the screenshot bucket and the SkyPilot API server, with certificates
+  # from Let's Encrypt. Routes are in deploy/Caddyfile. Leave this profile off when the host already
+  # runs a reverse proxy, and point that one at the same services instead.
+  proxy:
+    image: caddy:${CADDY_VERSION:-2.10.2}
+    profiles: ["proxy"]
+    restart: unless-stopped
+    environment:
+      KRATER_DOMAIN: ${KRATER_DOMAIN:-}
+      # *.localhost names keep a site unserved (Caddy's local CA, never Let's Encrypt): screenshots kept
+      # with a hosted provider, or no SkyPilot profile.
+      KRATER_S3_DOMAIN: ${KRATER_S3_DOMAIN:-storage.localhost}
+      KRATER_SKYPILOT_DOMAIN: ${KRATER_SKYPILOT_DOMAIN:-skypilot.localhost}
+    # Checked here rather than with Compose's `${KRATER_DOMAIN:?}`, which would fail every
+    # `docker compose` command, with or without this profile.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        : "$${KRATER_DOMAIN:?set KRATER_DOMAIN to the portal's public hostname}" &&
+        exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - krater_caddy_data:/data
+      - krater_caddy_config:/config
+    depends_on:
+      - portal
+
+volumes:
+  krater_db_data:
+  krater_storage_data:
+  krater_skypilot_data:
+  krater_caddy_data:
+  krater_caddy_config:

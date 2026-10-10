@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+
+{% block title %}GPU pricing{% endblock %}
+
+{% block content %}
+<section class="card">
+  <div class="page-header">
+    <h1>GPU pricing</h1>
+  </div>
+
+  <p class="policy-note">
+    These are <strong>estimates from SkyPilot's Vast catalog</strong>, not live quotes -- the actual
+    machine SkyPilot rents at launch time can differ. Rows above Ganymede's default per-machine cap
+    (${{ "%.2f"|format(cap_cents / 100) }}/hr) are marked below. See the
+    <a href="https://github.com/patchworklabsorg/krater/blob/main/docs/guides/run-when-cheap.md">run-when-cheap guide</a>
+    for spot/interruptible machines, which can cost less if you're willing to be interrupted
+    (the catalog doesn't list spot prices for every GPU).
+  </p>
+
+  {% if refreshed_at %}
+    <p class="muted">Last updated {{ refreshed_at.strftime("%b") }} {{ refreshed_at.day }}, {{ refreshed_at.strftime("%Y %H:%M UTC") }}.</p>
+  {% else %}
+    <p class="muted">Prices haven't been refreshed yet.</p>
+  {% endif %}
+
+  {% if not rows and not refreshed_at %}
+    <p class="muted">No pricing data yet. Once the daily refresh runs (or a manual one is triggered), GPU types and prices will show up here.</p>
+  {% else %}
+    <form method="get" action="/pricing" class="form form--inline filter-bar" data-role="pricing-filter-form">
+      <div class="field">
+        <label for="gpu">GPU type</label>
+        <select id="gpu" name="gpu" data-role="auto-submit">
+          <option value="" {% if not selected_gpu %}selected{% endif %}>All</option>
+          {% for name in accelerator_names %}
+            <option value="{{ name }}" {% if selected_gpu == name %}selected{% endif %}>{{ name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label for="sort">Sort by</label>
+        <select id="sort" name="sort" data-role="auto-submit">
+          {% for key, label in sort_labels.items() %}
+            <option value="{{ key }}" {% if sort == key %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <noscript><button type="submit" class="button">Apply</button></noscript>
+    </form>
+
+    {% if not rows %}
+      <p class="muted">No pricing matches this filter.</p>
+    {% else %}
+      {% set has_spot = rows | selectattr("spot_min_cents") | list %}
+      <div class="table-scroll">
+      <table class="table">
+        <thead>
+          <tr>
+            <th scope="col">GPU</th>
+            <th scope="col" class="num">Count</th>
+            <th scope="col" class="num">VRAM</th>
+            <th scope="col" class="num">Typical on-demand</th>
+            <th scope="col" class="num">Lowest on-demand</th>
+            {% if has_spot %}<th scope="col" class="num">Lowest spot</th>{% endif %}
+            <th scope="col" class="num">Offers</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+            <tr>
+              <td>{{ row.accelerator_name }}</td>
+              <td class="num">{{ row.accelerator_count }}</td>
+              <td class="num">{{ (row.vram_gib ~ " GiB") if row.vram_gib is not none else "–" }}</td>
+              <td class="num">{{ row.on_demand_median_cents|dollars }}/hr</td>
+              <td class="num">{{ row.on_demand_min_cents|dollars }}/hr</td>
+              {% if has_spot %}<td class="num">{{ (row.spot_min_cents|dollars ~ "/hr") if row.spot_min_cents is not none else "–" }}</td>{% endif %}
+              <td class="num">{{ row.offer_count }}</td>
+            </tr>
+            {% if row.on_demand_min_cents > cap_cents %}
+              <tr>
+                <td colspan="{{ 7 if has_spot else 6 }}" class="field-hint table__note">
+                  Over Ganymede's default per-machine cap (${{ "%.2f"|format(cap_cents / 100) }}/hr) -- a launch
+                  targeting this GPU will have its price capped, which may rule out every offer above.
+                </td>
+              </tr>
+            {% endif %}
+          {% endfor %}
+        </tbody>
+      </table>
+      </div>
+    {% endif %}
+  {% endif %}
+</section>
+{% endblock %}
+
+{% block scripts %}
+  <script src="/static/js/pricing-filters.js" defer></script>
+{% endblock %}

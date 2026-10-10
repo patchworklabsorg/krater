@@ -1,0 +1,9 @@
+{
+  "_note": "POST /workspaces/update as grace@ganymede.example (non-member) against the private workspace 'ganymede-priv-test', which only frank@ganymede.example (allowed_users) belongs to. This is rejected SYNCHRONOUSLY at the HTTP layer -- no x-skypilot-request-id is even issued, unlike a normal (authorized) call to this same endpoint.",
+  "request": {
+    "workspace_name": "ganymede-priv-test",
+    "config": {"private": true, "allowed_users": ["54400d50", "eea72432"]}
+  },
+  "http_status": 403,
+  "http_body": {"detail": "Forbidden"}
+}

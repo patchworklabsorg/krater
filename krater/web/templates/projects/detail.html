@@ -1,0 +1,298 @@
+{% extends "base.html" %}
+{% import "_macros.html" as macros %}
+
+{% block title %}{{ project.title or "Untitled proposal" }}{% endblock %}
+
+{% block content %}
+<section class="card">
+  <div class="page-header">
+    <h1>{{ project.title or "Untitled proposal" }}</h1>
+    {{ macros.status_badge(project.status) }}
+  </div>
+  {% if project.repo_url %}
+    <p class="project-link"><a href="{{ project.repo_url }}">{{ project.repo_url }}</a></p>
+  {% endif %}
+
+  <dl class="budget-summary">
+    <div><dt>Ceiling</dt><dd>{{ summary.ceiling_cents | dollars }}</dd></div>
+    <div><dt>Estimated spend</dt><dd>{{ summary.spend_cents | dollars }}</dd></div>
+    <div><dt>Remaining</dt><dd>{{ summary.remaining_cents | dollars }}</dd></div>
+  </dl>
+
+  {% if summary.policy_explanation %}
+    <p class="policy-note">{{ summary.policy_explanation }}</p>
+  {% endif %}
+
+  {% if skypilot_budget_flag == "teardown" %}
+    <p class="skypilot-banner">
+      Budget reached: this project's SkyPilot clusters and managed jobs have been torn down. New
+      launches are blocked until the ceiling is raised.
+    </p>
+  {% elif skypilot_budget_flag == "warning" %}
+    <p class="skypilot-banner">
+      Warning: this project is approaching its compute budget ceiling.
+    </p>
+  {% endif %}
+
+  {% if can_launch %}
+    <p class="skypilot-hint">
+      SkyPilot workspace: <code>{{ project.skypilot_workspace }}</code>.
+      Sign in with <code>sky api login</code> and launch with
+      <code>sky launch -w {{ project.skypilot_workspace }} ...</code>.
+      Each launch is capped at {{ hourly_cap_cents | dollars }}/hour, shared across its machines
+      ({{ "Ganymede's default" if hourly_cap_is_default else "this project's own cap" }}).
+    </p>
+  {% endif %}
+
+  {% if summary.current_revision %}
+    <h2>{{ "Draft" if not summary.current_revision.submitted_at else "Write-up" }}</h2>
+    <p class="write-up">{{ summary.current_revision.write_up | nl2br }}</p>
+  {% endif %}
+
+  {% if screenshots %}
+    <h2>Screenshots</h2>
+    <ul class="gallery-screenshots">
+      {% for shot in screenshots %}
+        <li><img src="{{ shot.url }}" alt="{{ project.title or 'Project' }} screenshot" loading="lazy"></li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+</section>
+
+{% if is_submitter and (can_edit_draft or can_submit or can_submit_completion or can_start_amendment or can_start_completion or can_withdraw) %}
+<section class="card">
+  <h2>Your actions</h2>
+  <div class="action-row">
+    {% if can_edit_draft %}
+      <a class="button" href="/projects/{{ project.id }}/edit">Edit draft</a>
+    {% endif %}
+    {% if can_submit %}
+      <form method="post" action="/projects/{{ project.id }}/submit" class="form--inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="button button--primary">Submit for review</button>
+      </form>
+    {% endif %}
+    {% if can_submit_completion %}
+      <form method="post" action="/projects/{{ project.id }}/submit-completion" class="form--inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="button button--primary">Submit completion for review</button>
+      </form>
+    {% endif %}
+    {% if can_start_amendment %}
+      <form method="post" action="/projects/{{ project.id }}/amend" class="form--inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="button">Start amendment</button>
+      </form>
+    {% endif %}
+    {% if can_start_completion %}
+      <form method="post" action="/projects/{{ project.id }}/complete" class="form--inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="button">Start completion</button>
+      </form>
+    {% endif %}
+  </div>
+  {% if can_withdraw %}
+    <form method="post" action="/projects/{{ project.id }}/withdraw" class="form--inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="button button--danger">Withdraw project</button>
+    </form>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if can_review %}
+<section class="card">
+  <h2>Review this proposal</h2>
+  <div class="action-row">
+    <form method="post" action="/projects/{{ project.id }}/review" class="form--inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="decision" value="approve">
+      <button type="submit" class="button button--primary">Approve</button>
+    </form>
+  </div>
+  <form method="post" action="/projects/{{ project.id }}/review" class="form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="decision" value="reject">
+    <div class="field">
+      <label for="review-reason">Reason for rejecting</label>
+      <textarea id="review-reason" name="reason" rows="3">{{ posted.reason if error_form == "review" else "" }}</textarea>
+      {% if error_form == "review" and errors.reason %}<p class="field-error">{{ errors.reason }}</p>{% endif %}
+    </div>
+    <button type="submit" class="button button--danger">Reject</button>
+  </form>
+</section>
+{% endif %}
+
+{% if is_admin %}
+<section class="card">
+  <div class="page-header">
+    <h2>Admin</h2>
+    <a class="back-link" href="/admin">Admin overview</a>
+  </div>
+  {% if admin_own_project %}
+    <p class="policy-note">You submitted this project or are credited on it, so another admin has to decide it, add
+      to its budget or raise its hourly cap. You can still cut or reclaim its budget, lower its cap, or withdraw it.</p>
+  {% endif %}
+  {% if can_admin_decide %}
+    <div class="admin-action">
+    <h3>Decide without waiting for reviewers</h3>
+    <form method="post" action="/projects/{{ project.id }}/admin-decide" class="form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="field">
+        <label for="admin-decide-reason">Reason (required)</label>
+        <textarea id="admin-decide-reason" name="reason" rows="2">{{ posted.reason if error_form == "admin_decide" else "" }}</textarea>
+        {% if error_form == "admin_decide" and errors.reason %}<p class="field-error">{{ errors.reason }}</p>{% endif %}
+      </div>
+      <div class="action-row">
+        <button type="submit" name="decision" value="approve" class="button button--primary">Admin approve</button>
+        <button type="submit" name="decision" value="reject" class="button button--danger">Admin reject</button>
+      </div>
+    </form>
+    </div>
+  {% endif %}
+
+  {% if can_admin_adjust_budget %}
+    <div class="admin-action">
+    <h3>Adjust budget</h3>
+    <form method="post" action="/projects/{{ project.id }}/admin-budget" class="form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="field">
+        <label for="admin-budget-amount">Adjust budget by (USD, signed)</label>
+        <input
+          type="text"
+          id="admin-budget-amount"
+          name="amount"
+          inputmode="decimal"
+          placeholder="500.00 or -500.00"
+          value="{{ posted.amount if error_form == 'admin_budget' else '' }}"
+        >
+        {% if error_form == "admin_budget" and errors.amount_cents %}<p class="field-error">{{ errors.amount_cents }}</p>{% endif %}
+      </div>
+      <div class="field">
+        <label for="admin-budget-reason">Reason (required)</label>
+        <textarea id="admin-budget-reason" name="reason" rows="2">{{ posted.reason if error_form == "admin_budget" else "" }}</textarea>
+        {% if error_form == "admin_budget" and errors.reason %}<p class="field-error">{{ errors.reason }}</p>{% endif %}
+      </div>
+      <button type="submit" class="button">Adjust budget</button>
+    </form>
+    </div>
+  {% endif %}
+
+  {% if can_admin_reclaim %}
+    <div class="admin-action">
+    <h3>Reclaim unspent budget</h3>
+    <form method="post" action="/projects/{{ project.id }}/admin-reclaim" class="form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="field">
+        <label for="admin-reclaim-amount">Reclaim (USD, positive)</label>
+        <input
+          type="text"
+          id="admin-reclaim-amount"
+          name="amount"
+          inputmode="decimal"
+          placeholder="500.00"
+          value="{{ posted.amount if error_form == 'admin_reclaim' else '' }}"
+        >
+        {% if error_form == "admin_reclaim" and errors.amount_cents %}<p class="field-error">{{ errors.amount_cents }}</p>{% endif %}
+      </div>
+      <div class="field">
+        <label for="admin-reclaim-reason">Reason (required)</label>
+        <textarea id="admin-reclaim-reason" name="reason" rows="2">{{ posted.reason if error_form == "admin_reclaim" else "" }}</textarea>
+        {% if error_form == "admin_reclaim" and errors.reason %}<p class="field-error">{{ errors.reason }}</p>{% endif %}
+      </div>
+      <button type="submit" class="button">Reclaim budget</button>
+    </form>
+    </div>
+  {% endif %}
+
+  {% if can_admin_set_hourly_cap %}
+    <div class="admin-action">
+    <h3>Hourly cap per launch</h3>
+    <p class="muted">
+      Now {{ hourly_cap_cents | dollars }}/hour
+      ({{ "the default" if hourly_cap_is_default else "this project's own cap; the default is " ~ (default_hourly_cap_cents | dollars) }}).
+      SkyPilot only rents machines under this rate, split across a launch's machines. It doesn't limit total
+      spend; the budget does.
+    </p>
+    <form method="post" action="/projects/{{ project.id }}/admin-hourly-cap" class="form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="field">
+        <label for="admin-hourly-cap-amount">New cap (USD per hour)</label>
+        <input
+          type="text"
+          id="admin-hourly-cap-amount"
+          name="amount"
+          inputmode="decimal"
+          placeholder="Blank for the default ({{ default_hourly_cap_cents | dollars }})"
+          value="{{ posted.amount if error_form == 'admin_hourly_cap' else hourly_cap_input }}"
+        >
+        {% if error_form == "admin_hourly_cap" and errors.cap_cents %}<p class="field-error">{{ errors.cap_cents }}</p>{% endif %}
+      </div>
+      <div class="field">
+        <label for="admin-hourly-cap-reason">Reason (required)</label>
+        <textarea id="admin-hourly-cap-reason" name="reason" rows="2">{{ posted.reason if error_form == "admin_hourly_cap" else "" }}</textarea>
+        {% if error_form == "admin_hourly_cap" and errors.reason %}<p class="field-error">{{ errors.reason }}</p>{% endif %}
+      </div>
+      <button type="submit" class="button">Set hourly cap</button>
+    </form>
+    </div>
+  {% endif %}
+
+  {% if can_admin_withdraw %}
+    <div class="admin-action">
+    <h3>Withdraw project</h3>
+    <form method="post" action="/projects/{{ project.id }}/withdraw" class="form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="field">
+        <label for="admin-withdraw-reason">Reason (required)</label>
+        <textarea id="admin-withdraw-reason" name="reason" rows="2">{{ posted.reason if error_form == "withdraw" else "" }}</textarea>
+        {% if error_form == "withdraw" and errors.reason %}<p class="field-error">{{ errors.reason }}</p>{% endif %}
+      </div>
+      <button type="submit" class="button button--danger">Withdraw project (admin)</button>
+    </form>
+    </div>
+  {% endif %}
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>Revision history</h2>
+  {% for revision in revisions %}
+    <article class="revision">
+      <div class="page-header">
+        <h3>Revision {{ revision.number }} &middot; {{ revision.kind.value | capitalize }}</h3>
+        {% if revision.submitted_at %}
+          <span class="badge badge--outcome-{{ revision.outcome.value }}">{{ revision.outcome.value | capitalize }}</span>
+        {% else %}
+          <span class="badge">Draft</span>
+        {% endif %}
+      </div>
+      <p class="muted">
+        {% if revision.submitted_at %}Submitted {{ revision.submitted_at.strftime("%Y-%m-%d %H:%M UTC") }}{% else %}Draft, not yet submitted{% endif %}
+        &middot; Budget requested: {{ revision.budget_requested_cents | dollars }}
+      </p>
+      {% if revision.budget_estimate %}
+        <p class="muted">
+          Estimate: {{ revision.budget_estimate | estimate_summary }}
+          {%- if estimate_mismatch_by_revision.get(revision.id) %}
+            &mdash; <strong class="field-error">requested budget differs a lot from this estimate</strong>
+          {%- endif %}
+        </p>
+      {% endif %}
+      {% if revision.reviews %}
+        <ul class="review-list">
+          {% for review in revision.reviews %}
+            <li>
+              <strong>{{ users_by_id[review.reviewer_id].display_name if review.reviewer_id in users_by_id else "Unknown reviewer" }}</strong>
+              {{ macros.decision_badge(review.decision) }}
+              {% if review.reason %}<span class="muted"> &mdash; {{ review.reason }}</span>{% endif %}
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="muted">No reviews yet.</p>
+      {% endif %}
+    </article>
+  {% endfor %}
+</section>
+{% endblock %}

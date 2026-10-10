@@ -1,0 +1,16 @@
+{
+  "workspace_name": "ganymede-spike",
+  "config": {
+    "private": true,
+    "allowed_users": ["alice@example.com", "bob@example.com"],
+    "aws": {"disabled": true}, "azure": {"disabled": true}, "cudo": {"disabled": true},
+    "do": {"disabled": true}, "fluidstack": {"disabled": true}, "gcp": {"disabled": true},
+    "hyperbolic": {"disabled": true}, "ibm": {"disabled": true}, "kubernetes": {"disabled": true},
+    "lambda": {"disabled": true}, "mithril": {"disabled": true}, "nebius": {"disabled": true},
+    "oci": {"disabled": true}, "paperspace": {"disabled": true}, "primeintellect": {"disabled": true},
+    "runpod": {"disabled": true}, "scp": {"disabled": true}, "seeweb": {"disabled": true},
+    "shadeform": {"disabled": true}, "ssh": {"disabled": true}, "vsphere": {"disabled": true},
+    "yotta": {"disabled": true}
+  },
+  "note": "There is no per-workspace allowlist (e.g. 'allowed_clouds') -- attempting that key fails schema validation with \"did you mean 'allowed_users'?\". You must deny-list every other cloud individually via <cloud>.disabled=true. Confirmed effective via `sky check --workspace <name>`."
+}

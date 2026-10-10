@@ -1,0 +1,9 @@
+{
+  "_note": "GET /workspaces as frank@ganymede.example (id 54400d50), who IS in allowed_users of both private workspaces below. Simulated via a stub oauth2-proxy (see docs/dev/skypilot-spike.md section 3) with a non-loopback X-Forwarded-For header. Async: GET returned x-skypilot-request-id, polled via GET /api/get?request_id=...",
+  "poll_result_status": "SUCCEEDED",
+  "return_value": {
+    "ganymede-priv-test": {"private": true, "allowed_users": ["54400d50"]},
+    "ganymede-priv-test2": {"private": true, "allowed_users": ["54400d50"]},
+    "default": {}
+  }
+}

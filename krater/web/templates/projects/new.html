@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% import "_macros.html" as macros %}
+
+{% block title %}New proposal{% endblock %}
+
+{% block content %}
+<section class="card">
+  <h1>New proposal</h1>
+  <form method="post" action="/projects/new" class="form" novalidate>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+    <div class="field">
+      <label for="title">Title</label>
+      <input type="text" id="title" name="title" value="{{ values.title }}" maxlength="255">
+    </div>
+
+    <div class="field">
+      <label for="repo_url">Repo link (optional)</label>
+      <input type="url" id="repo_url" name="repo_url" value="{{ values.repo_url }}" placeholder="https://github.com/..."{% if errors.repo_url %} aria-invalid="true"{% endif %}>
+      {% if errors.repo_url %}<p class="field-error">{{ errors.repo_url }}</p>{% endif %}
+    </div>
+
+    <div class="field">
+      <label for="write_up">Write-up</label>
+      <textarea id="write_up" name="write_up" rows="8">{{ values.write_up }}</textarea>
+    </div>
+
+    <div class="field">
+      <label for="budget_requested">Requested budget (USD)</label>
+      <input
+        type="text"
+        id="budget_requested"
+        name="budget_requested"
+        value="{{ values.budget_requested }}"
+        inputmode="decimal"
+        placeholder="1,234.50"
+        aria-describedby="budget_requested_hint"
+        {% if errors.budget_requested_cents %}aria-invalid="true" aria-describedby="budget_requested_error"{% endif %}
+      >
+      <p id="budget_requested_hint" class="field-hint">Dollars, e.g. 1,234.50.</p>
+      {% if errors.budget_requested_cents %}
+        <p id="budget_requested_error" class="field-error">{{ errors.budget_requested_cents }}</p>
+      {% endif %}
+    </div>
+
+    {{ macros.budget_estimator(gpu_options, estimator_values, errors, estimate_summary, estimator_used, csrf_token()) }}
+
+    <p class="muted">You can keep editing this as a draft before you submit it for review.</p>
+
+    <button type="submit" name="form_action" value="save" class="button button--primary">Save draft</button>
+  </form>
+</section>
+{% endblock %}
+
+{% block scripts %}
+  <script src="/static/js/budget-estimator.js" defer></script>
+{% endblock %}

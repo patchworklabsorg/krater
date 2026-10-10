@@ -1,0 +1,6 @@
+# Shell scripts must keep LF endings even in a Windows checkout (core.autocrlf=true): WSL and Linux
+# bash reject CRLF, and staging runs the `sky` CLI and the SkyPilot contract script in WSL2.
+*.sh text eol=lf
+
+# Self-hosted fonts are binary; never let autocrlf touch them.
+*.woff2 binary
