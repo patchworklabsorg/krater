@@ -26,7 +26,11 @@ sudo systemctl start krater-build     # the running site keeps serving meanwhile
 sudo systemctl restart krater-web     # migrates, then starts; krater-worker follows
 ```
 
-Settings live in `hosts/alastor/krater.nix` (hostnames, Weave client ids, the fallback commit). Secrets are one agenix
+Settings live in `hosts/alastor/krater.nix` (hostnames, Weave client ids, the fallback commit). The proposed hostnames
+are `krater`, `krater-storage` and `krater-sky` under `patchworklabs.org`, added by a PR to
+[patchworklabsorg/dns](https://github.com/patchworklabsorg/dns). They're proxied through Cloudflare like Weave's,
+whose edge certificate covers only one subdomain level. Behind Cloudflare and Traefik, `KRATER_TRUSTED_PROXY_COUNT`
+probably needs to be 2 (see the host file). Secrets are one agenix
 file, `secrets/krater-env.age`, with the keys listed at the top of `modules/krater/default.nix`, plus
 `secrets/krater-vast-key.age`. The module splits them so each container gets only its own. Getting a module change
 onto alastor takes a merge in `patchworklabsorg/infra`, then `nix flake update patchwork-infra` and a deploy from
