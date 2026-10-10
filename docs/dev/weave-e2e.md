@@ -17,17 +17,18 @@ uv run python scripts/dev/weave_e2e_setup.py --weave-dir ../weave
 This runs `scripts/dev/weave_e2e_provision.rb` inside the Weave checkout (via `bin/rails runner`) to
 idempotently create, in Weave's own database:
 
-- three users: `e2e-member@ganymede.test`, `e2e-admin@ganymede.test` and `e2e-nonmember@ganymede.test`, all with
-  confirmed emails;
+- three users: `e2e-member@ganymede.test`, `e2e-admin@ganymede.test` and `e2e-nonmember@ganymede.test`. All have
+  confirmed emails and have accepted the Code of Conduct. Weave refuses every app to a user who has not
+  (patchworklabsorg/weave#171).
 - a confidential OAuth application ("Krater (e2e)") with redirect URI
-  `http://localhost:8201/auth/callback` and scopes `openid profile email groups roles slack directory`
-  (**recreated** every run, since its secret is hashed at rest and only readable right after creation).
+  `http://localhost:8201/auth/callback`, scopes `openid profile email groups roles slack directory`, and
+  `access_policy` `everyone`. The open policy lets the non-member reach Krater, so the check proves that Krater
+  itself refuses them. The script **recreates** the app every run, because Weave hashes its secret at rest and
+  shows it only right after creation.
+- Krater's app roles `member`, `reviewer` and `admin` on that app. The member gets `member`. The admin gets `member`
+  and `admin`. The non-member gets no role.
 
-The script doesn't yet create Krater's app roles (`member`, `reviewer`, `admin`) or give them to the fixture users:
-that needs the Weave app-role models from patchworklabsorg/weave#165. Until it does, the fixture has no
-`roles_provisioned` key, and the tests that need roles skip with a clear reason. To run them now, create the roles
-on the Krater (e2e) app page as a Weave superadmin, give the member `member` and the admin `member` and `admin`, and
-add `"roles_provisioned": true` to `.weave_e2e_fixture.json`.
+The fixture then says `"roles_provisioned": true`, and the role tests in `tests/live/test_weave_live.py` run.
 
 It then writes two **gitignored** files in this repo's root:
 
@@ -40,6 +41,10 @@ database. It's idempotent for the users; the OAuth app is always rotated.
 
 Options: `--weave-dir` (default `../weave`), `--krater-base-url` (default `http://localhost:8201`),
 `--ruby-shims` (default `/opt/rbenv/shims`, prepended to `PATH` so `bundle`/`rails` resolve).
+
+The script and the sign-in tests set `DATABASE_URL=postgres://root:root@localhost` for `bin/rails runner` unless
+you set it. If your Weave dev database uses other credentials, export `DATABASE_URL` first, for example
+`DATABASE_URL=postgres://localhost` for a local Postgres that trusts your OS user.
 
 ## 2. Run Weave
 
@@ -98,6 +103,13 @@ skips entirely.
 
 Magic-link tokens are single-use and expire in 15 minutes, so re-run step 1 before re-running the sign-in
 tests if you've already consumed that run's tokens.
+
+Step 1 rotates the OAuth app's client id and secret. Restart Krater with the new `.env.weave-e2e` before the next
+run.
+
+Weave allows 20 requests to `/oauth/` per IP per minute (`config/initializers/rack_attack.rb`). One run fits. A
+second run inside the same minute gets `429 Too Many Requests` from the JWKS endpoint, and Krater's callback answers
+503. Wait a minute between runs.
 
 ### Running it on Windows, where there is no Ruby
 

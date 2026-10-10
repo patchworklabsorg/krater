@@ -180,8 +180,9 @@ sign in.
    Slack's `force` flag: without it, Slack invited nobody whenever any one invitee failed, including people already
    in the channel. (Found from Slack's documented behavior; not yet seen against real Slack.)
 3. ~~**A CI job for the SkyPilot contract test**~~ Done (section 4).
-4. When patchworklabsorg/weave#165 lands, teach `scripts/dev/weave_e2e_provision.rb` to give the fixture users
-   Krater's app roles, so the live role tests in `tests/live/test_weave_live.py` run (`docs/dev/weave-e2e.md`).
+4. ~~**Live Weave role tests.**~~ Done: `scripts/dev/weave_e2e_provision.rb` creates Krater's app roles in Weave
+   and gives them to the fixture users. All 8 tests in `tests/live/test_weave_live.py` pass against Weave `main`
+   (`docs/dev/weave-e2e.md`).
 5. The remaining items in `docs/FUTURE.md`.
 
 ## 7. Gotchas learned the hard way
