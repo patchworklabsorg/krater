@@ -54,7 +54,8 @@ Three roles:
 - **Reviewer:** can approve or reject proposals and completion requests. Can't review a project they submitted or are a
   credited builder on.
 - **Admin:** a *Ganymede* admin. Can override the normal flow at any point: approve or reject at either stage, and adjust
-  or reclaim budget. This is **not** Weave's existing `admin` flag, which means Weave operations admin.
+  or reclaim budget. Not on a project they submitted or are a credited builder on, though: there they can't decide it or
+  add budget (cutting or reclaiming budget and withdrawing are still fine). This is **not** Weave's existing `admin` flag, which means Weave operations admin.
 
 A "logged in but can't submit" tier and a public/anonymous tier are still deferred. The gallery itself is public.
 
@@ -245,6 +246,10 @@ At any point an admin can:
 - approve or reject at either review stage, bypassing `ApprovalPolicy`;
 - adjust an approved project's budget up or down, or reclaim unspent funds;
 - withdraw a project.
+
+The exception is the admin's own project (they submitted it, or are a credited builder on its current revision): they
+can't decide it or add to its budget, so an admin can never fund their own work without someone else signing off. Another
+admin, or the normal review, has to do it. Cutting or reclaiming its budget and withdrawing it are still allowed.
 
 Every override writes an `AuditEvent` with who, what, when and a required reason. Budget changes also write a
 `BudgetEntry`. Overrides are posted in the project's channel so reviewers can see them.

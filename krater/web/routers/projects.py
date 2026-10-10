@@ -346,7 +346,10 @@ def _build_detail_context(
         "can_start_completion": is_submitter and project.status is ProjectStatus.APPROVED and not has_draft,
         "can_withdraw": is_submitter and project.status not in _TERMINAL_STATUSES,
         "can_review": can_review,
-        "can_admin_decide": actor.is_admin and current_is_pending,
+        # Admin overrides on your own project: deciding it is off entirely, and adding budget is refused by the
+        # service (cutting it is still allowed), so the page explains why instead of offering the form.
+        "admin_own_project": actor.is_admin and (is_submitter or is_credited_builder),
+        "can_admin_decide": actor.is_admin and current_is_pending and not is_submitter and not is_credited_builder,
         "can_admin_adjust_budget": actor.is_admin
         and project.status in (ProjectStatus.APPROVED, ProjectStatus.PENDING_COMPLETION_REVIEW),
         "can_admin_reclaim": actor.is_admin and summary.ceiling_cents > 0,
@@ -839,13 +842,17 @@ def admin_adjust_budget(
         project_service.admin_adjust_budget(
             db_session, actor, project=project, amount_cents=amount_cents, reason=reason
         )
-    except ValidationFailed as exc:
+    except (ValidationFailed, NotAllowed) as exc:
+        # An admin's NotAllowed here is the own-project rule, worth showing next to the amount; anyone else's
+        # is plain lack of permission.
+        if isinstance(exc, NotAllowed) and not actor.is_admin:
+            raise
         db_session.rollback()
         context = _build_detail_context(
             db_session,
             project,
             actor,
-            errors=exc.errors,
+            errors=exc.errors if isinstance(exc, ValidationFailed) else {"amount_cents": str(exc)},
             error_form="admin_budget",
             posted={"amount": amount, "reason": reason},
         )

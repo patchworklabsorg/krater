@@ -203,8 +203,10 @@ The `/pricing` page stays empty until the worker's daily refresh (07:00 UTC). To
 
 1. **Create a project.** Sign in to Krater at `http://localhost:8000` with your Weave account, submit a small
    proposal.
-2. **Approve it** (as an admin -- via `/admin` or the review flow). This should provision a private SkyPilot
-   workspace named `ganymede-<project id>` and save it on the project.
+2. **Approve it** with a *second* Weave account that has `admin` or `reviewer` (via `/admin` or the review flow).
+   Nobody can approve their own project, admins included, so a one-person test needs that second account. This should
+   provision a private SkyPilot workspace named `ganymede-<first 12 hex digits of the project id>` and save it on the
+   project.
 3. **Confirm the workspace appears** (the reconciler runs every `KRATER_SKYPILOT_RECONCILE_INTERVAL_MINUTES`; run
    it now with `docker compose exec worker python -m krater.skypilot.reconcile_once`):
    ```bash

@@ -494,3 +494,44 @@ def test_create_project_rejects_a_budget_past_the_maximum(client: TestClient, lo
 
     assert response.status_code == 422
     assert "Enter an amount up to $1,000,000.00." in response.text
+
+
+# --------------------------------------------------------------------------------------------------
+# Admins can't decide or add budget to their own project
+# --------------------------------------------------------------------------------------------------
+
+
+def test_an_admin_gets_no_decide_form_on_their_own_project(client: TestClient, login_as, submitted_project) -> None:
+    admin = login_as(ADMIN_SUB)
+    project = submitted_project(admin)
+
+    page = client.get(f"/projects/{project.id}")
+
+    assert "Admin approve" not in page.text
+    assert "another admin has to decide it" in page.text
+
+    response = client.post(
+        f"/projects/{project.id}/admin-decide",
+        data={"csrf_token": get_csrf_token(page.text), "decision": "approve", "reason": "Mine."},
+    )
+    assert response.status_code == 403
+
+
+def test_an_admin_cannot_add_budget_to_their_own_project(
+    client: TestClient, login_as, approved_project, db_session: Session
+) -> None:
+    admin = login_as(ADMIN_SUB)
+    reviewer = login_as(REVIEWER_SUB)
+    project = approved_project(admin, reviewer)
+    login_as(ADMIN_SUB)
+
+    csrf = get_csrf_token(client.get(f"/projects/{project.id}").text)
+    response = client.post(
+        f"/projects/{project.id}/admin-budget", data={"csrf_token": csrf, "amount": "50.00", "reason": "More."}
+    )
+
+    assert response.status_code == 422
+    assert "Ask another admin." in response.text
+    from krater.services import budget as budget_service
+
+    assert budget_service.ceiling_cents(db_session, project) == 10_000

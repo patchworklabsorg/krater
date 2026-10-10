@@ -646,6 +646,19 @@ def _open_next_draft(session: Session, rejected: ProjectRevision) -> ProjectRevi
 # --------------------------------------------------------------------------------------------------
 
 
+_OWN_PROJECT_MESSAGE = (
+    "Admins can't decide, or add budget to, a project they submitted or are credited on. Ask another admin."
+)
+
+
+def _is_own_project(actor: Actor, project: Project) -> bool:
+    """Whether `actor` submitted `project` or is a credited builder on its current revision."""
+    current = project.current_revision
+    return actor.user.id == project.submitter_id or (
+        current is not None and actor.user.id in current.credited_builder_ids
+    )
+
+
 def admin_decide(
     session: Session,
     actor: Actor,
@@ -654,18 +667,22 @@ def admin_decide(
     decision: ReviewDecision,
     reason: str,
 ) -> ProjectRevision:
-    """Admin override: decide `revision` directly, bypassing `ApprovalPolicy` and self-review rules.
+    """Admin override: decide `revision` directly, bypassing `ApprovalPolicy`.
 
-    Admin only. `reason` is required regardless of `decision`. Applies the same approve/reject effect
+    Admin only, and never on the admin's own project (`NotAllowed` if they submitted it or are a credited
+    builder on `revision`): otherwise an admin could approve and fund their own proposal with no other
+    sign-off. `reason` is required regardless of `decision`. Applies the same approve/reject effect
     as a policy-satisfying reviewer decision would (see `record_review`), and writes an `AuditEvent`.
     Still requires `revision` to be the project's current, submitted, still-`pending` revision.
     """
     if not actor.is_admin:
         raise NotAllowed("Only an admin may override a review decision.")
+    project = revision.project
+    if actor.user.id == project.submitter_id or actor.user.id in revision.credited_builder_ids:
+        raise NotAllowed(_OWN_PROJECT_MESSAGE)
     if not (reason and reason.strip()):
         raise ValidationFailed({"reason": "A reason is required."})
 
-    project = revision.project
     _lock_project(session, project)
     session.refresh(revision)
 
@@ -706,10 +723,13 @@ def admin_adjust_budget(
     """Admin override: adjust a project's budget ceiling by a signed amount. Admin only.
 
     Only on an `approved` or `pending_completion_review` project. `reason` is required. Raises
-    `ValidationFailed` if `amount_cents` would take the ceiling below zero. Writes an `AuditEvent`.
+    `ValidationFailed` if `amount_cents` would take the ceiling below zero, and `NotAllowed` for
+    an increase on the admin's own project (see `admin_decide`; a cut is fine). Writes an `AuditEvent`.
     """
     if not actor.is_admin:
         raise NotAllowed("Only an admin may adjust a project's budget.")
+    if amount_cents > 0 and _is_own_project(actor, project):
+        raise NotAllowed(_OWN_PROJECT_MESSAGE)
     if not (reason and reason.strip()):
         raise ValidationFailed({"reason": "A reason is required."})
 

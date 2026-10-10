@@ -127,6 +127,10 @@
     <h2>Admin</h2>
     <a class="back-link" href="/admin">Admin overview</a>
   </div>
+  {% if admin_own_project %}
+    <p class="policy-note">You submitted this project or are credited on it, so another admin has to decide it or add
+      to its budget. You can still cut or reclaim its budget, or withdraw it.</p>
+  {% endif %}
   {% if can_admin_decide %}
     <div class="admin-action">
     <h3>Decide without waiting for reviewers</h3>

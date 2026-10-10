@@ -60,19 +60,29 @@ def test_admin_decide_bypasses_policy_and_approves_directly(db_session: Session,
     assert event.actor_id == admin.user.id
 
 
-def test_admin_decide_bypasses_self_review(db_session: Session, member: Actor) -> None:
-    """An admin who is also the submitter can still admin_decide their own project."""
+@pytest.mark.parametrize("decision", [ReviewDecision.APPROVE, ReviewDecision.REJECT])
+def test_an_admin_cannot_decide_their_own_project(db_session: Session, member: Actor, decision: ReviewDecision) -> None:
+    """Otherwise an admin could approve, and so fund, their own proposal with nobody else signing off."""
     submitter_admin = Actor(user=member.user, groups=frozenset({GROUP_MEMBER, GROUP_ADMIN}))
     project = _submitted_project(db_session, submitter_admin)
 
-    revision = projects.admin_decide(
-        db_session,
-        submitter_admin,
-        revision=project.current_revision,
-        decision=ReviewDecision.APPROVE,
-        reason="Self-approved by admin.",
-    )
-    assert revision.outcome is RevisionOutcome.APPROVED
+    with pytest.raises(NotAllowed, match="another admin"):
+        projects.admin_decide(
+            db_session, submitter_admin, revision=project.current_revision, decision=decision, reason="Mine."
+        )
+
+    assert project.current_revision.outcome is RevisionOutcome.PENDING
+
+
+def test_an_admin_cannot_decide_a_project_that_credits_them(db_session: Session, member: Actor, admin: Actor) -> None:
+    project = _submitted_project(db_session, member)
+    project.current_revision.credited_builder_ids = [admin.user.id]
+    db_session.flush()
+
+    with pytest.raises(NotAllowed):
+        projects.admin_decide(
+            db_session, admin, revision=project.current_revision, decision=ReviewDecision.APPROVE, reason="x"
+        )
 
 
 def test_admin_decide_reject_opens_next_draft_and_audits(db_session: Session, member: Actor, admin: Actor) -> None:
@@ -151,6 +161,19 @@ def test_admin_adjust_budget_requires_admin(db_session: Session, member: Actor, 
 
     with pytest.raises(NotAllowed):
         projects.admin_adjust_budget(db_session, reviewer, project=project, amount_cents=100, reason="x")
+
+
+def test_an_admin_cannot_add_budget_to_their_own_project_but_can_cut_it(
+    db_session: Session, member: Actor, admin: Actor
+) -> None:
+    submitter_admin = Actor(user=member.user, groups=frozenset({GROUP_MEMBER, GROUP_ADMIN}))
+    project = _approved_project(db_session, submitter_admin, admin, budget_requested_cents=10_000)
+
+    with pytest.raises(NotAllowed):
+        projects.admin_adjust_budget(db_session, submitter_admin, project=project, amount_cents=5_000, reason="More.")
+    projects.admin_adjust_budget(db_session, submitter_admin, project=project, amount_cents=-2_000, reason="Less.")
+
+    assert budget.ceiling_cents(db_session, project) == 8_000
 
 
 def test_reclaim_budget_reduces_ceiling(db_session: Session, member: Actor, admin: Actor) -> None:
