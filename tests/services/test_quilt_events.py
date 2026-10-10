@@ -388,6 +388,19 @@ def test_a_skipped_release_is_never_sent_later(
     assert len(_rows(db_session, project)) == count
 
 
+def test_a_new_commitment_covers_earlier_overspend_before_the_release_cap(
+    db_session: Session, member: Actor, reviewer: Actor, admin: Actor
+) -> None:
+    project = _approved(db_session, member, reviewer, budget_cents=10_000)
+    _spend(db_session, project, 12_000)  # 2_000 over the commitment
+    projects.admin_adjust_budget(db_session, admin, project=project, amount_cents=5_000, reason="More.")
+    # Quilt uses 2_000 of the new 5_000 to cover the overspend, so 3_000 stays committed.
+    projects.admin_adjust_budget(db_session, admin, project=project, amount_cents=-4_000, reason="Cut.")
+
+    last = _rows(db_session, project)[-1]
+    assert (last.type, last.payload["amount_cents"], last.state) == (BUDGET_RELEASED, 3_000, QuiltOutboxState.PENDING)
+
+
 # --------------------------------------------------------------------------------------------------
 # Transactions, idempotence and the backfill
 # --------------------------------------------------------------------------------------------------

@@ -77,7 +77,9 @@ Rules of the mapping:
 Quilt refuses a release above its remaining commitment (committed, minus released, minus the part that spend used).
 That can be less than Krater's "ceiling minus spend", for example when spend went past the ceiling, or when an admin
 cut the budget below the spend. So Krater replays the outbox rows of the submission to find Quilt's remaining
-commitment, and sends `min(release, remaining)`. When nothing remains, the row is stored as `skipped` with
+commitment, and sends `min(release, remaining)`. The replay follows Quilt's overspend rule: spend above the
+commitment is overspend, and a later commitment covers that overspend first, so only the rest adds to the remaining
+commitment. When nothing remains, the row is stored as `skipped` with
 `last_error` "Nothing left to release in Quilt.", and it is never sent. A skipped row is never sent later, so the
 order stays correct.
 

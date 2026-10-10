@@ -85,6 +85,7 @@ class _Replay:
     remaining_cents: int = 0  # Quilt's remaining commitment: committed - released - spend drawdown
     spend_total_cents: int | None = None  # the last total sent
     spend_high_cents: int = 0  # Quilt keeps the highest total it has seen
+    overspend_cents: int = 0  # spend above the commitment; Quilt's next commitment covers it first
     reported_ids: frozenset[uuid.UUID] = frozenset()
 
 
@@ -114,14 +115,18 @@ def _replay(session: Session, external_id: str) -> _Replay:
         elif row.type == SUBMISSION_UPDATED:
             replay.fields.update({field: data[field] for field in _SUBMISSION_FIELDS if field in data})
         elif row.type == BUDGET_COMMITTED:
-            replay.remaining_cents += data["amount_cents"]
+            covered = min(data["amount_cents"], replay.overspend_cents)
+            replay.remaining_cents += data["amount_cents"] - covered
+            replay.overspend_cents -= covered
         elif row.type == BUDGET_RELEASED:
             replay.remaining_cents -= data["amount_cents"]
         elif row.type == SPEND_RECORDED:
             total = data["spent_cents_total"]
             increase = total - replay.spend_high_cents
             if increase > 0:
-                replay.remaining_cents -= min(increase, replay.remaining_cents)
+                drawdown = min(increase, replay.remaining_cents)
+                replay.remaining_cents -= drawdown
+                replay.overspend_cents += increase - drawdown
                 replay.spend_high_cents = total
             replay.spend_total_cents = total
     replay.reported_ids = frozenset(reported)
