@@ -7,6 +7,10 @@ that setup). Read `docs/SPEC.md` "Slack integration" first; this doc is just the
 
 ## 1. Create the app
 
+**Quickest:** [api.slack.com/apps](https://api.slack.com/apps) -> **Create New App** -> **From an app manifest**, pick
+the workspace, and paste [slack-app-manifest.yaml](slack-app-manifest.yaml) with `<public>` filled in. That sets the
+name, the bot scopes and interactivity (steps 1, 2 and 5 below). Then do steps 3, 4 and 6.
+
 1. [api.slack.com/apps](https://api.slack.com/apps) -> **Create New App** -> **From scratch**, in the
    Patchwork Labs workspace. Name it something recognizable in a channel list, e.g. "Ganymede Review"
    (this is *not* Weave's Slack app -- Weave already uses the workspace's one interactivity URL for
@@ -57,6 +61,14 @@ running under Docker Desktop/WSL2) needs a tunnel. Either works; both are run fr
 WSL2 -- they need to reach `localhost:8000`, which Docker Desktop's WSL2 integration already exposes to
 Windows):
 
+**Tailscale Funnel** (if the machine is on a tailnet with Funnel allowed): a stable
+`https://<machine>.<tailnet>.ts.net` URL, so the Slack Request URL only has to be set once. Its public DNS can take
+a few minutes to appear the first time.
+
+```powershell
+tailscale funnel --bg 8000      # stop with: tailscale funnel --https=443 off
+```
+
 **Cloudflare Tunnel** (no account needed for a quick, temporary tunnel):
 
 ```powershell
@@ -72,12 +84,13 @@ ngrok config add-authtoken <your-authtoken>
 ngrok http 8000
 ```
 
-Either prints a `https://<random>.trycloudflare.com` or `https://<random>.ngrok-free.app` URL. Use it as:
+Cloudflare and ngrok print a `https://<random>.trycloudflare.com` or `https://<random>.ngrok-free.app` URL. Whichever
+tunnel you use, use its URL as:
 
 - `KRATER_BASE_URL` (so Weave's OAuth redirect and any absolute links Krater generates are correct), and
 - the Slack app's **Interactivity & Shortcuts** Request URL, `https://<that-url>/slack/interactions`.
 
-The tunnel's URL changes every time you restart it (free Cloudflare/ngrok tunnels aren't stable), so
+The Cloudflare and ngrok URLs change every time you restart them (free tunnels aren't stable), so
 update the Slack app's Request URL each time before testing interactions again. Slack's interactivity
 requests are otherwise ordinary HTTPS POSTs -- no special tunnel configuration is needed beyond exposing
 the port.
