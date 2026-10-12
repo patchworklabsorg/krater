@@ -15,7 +15,9 @@ from tests.conftest import MEMBER_SUB, REVIEWER_SUB
 from tests.web.conftest import PNG_SIGNATURE, actor_for
 
 
-def _completed_project(db_session: Session, approved_project, member, reviewer, *, with_screenshot: bool = False):
+def _completed_project(
+    db_session: Session, approved_project, member, reviewer, weave_stub, *, with_screenshot: bool = False
+):
     project = approved_project(member, reviewer, title="Gallery Project")
     project_service.start_completion(db_session, actor_for(member), project=project)
     project_service.update_draft(
@@ -41,6 +43,7 @@ def _completed_project(db_session: Session, approved_project, member, reviewer, 
         revision=project.current_revision,
         decision=ReviewDecision.APPROVE,
         source=ReviewSource.WEB,
+        weave_client=weave_stub,
     )
     db_session.refresh(project)
     return project
@@ -67,11 +70,11 @@ def test_gallery_index_shows_only_completed_projects(
 
 
 def test_gallery_detail_shows_a_completed_project(
-    client: TestClient, login_as, approved_project, db_session: Session
+    client: TestClient, login_as, approved_project, db_session: Session, weave_stub
 ) -> None:
     member = login_as(MEMBER_SUB)
     reviewer = login_as(REVIEWER_SUB)
-    project = _completed_project(db_session, approved_project, member, reviewer)
+    project = _completed_project(db_session, approved_project, member, reviewer, weave_stub=weave_stub)
 
     index_response = client.get("/gallery")
     assert "Gallery Project" in index_response.text
@@ -99,11 +102,13 @@ def test_gallery_detail_404s_for_an_unknown_project(client: TestClient) -> None:
 
 
 def test_gallery_shows_screenshots_as_presigned_urls(
-    client: TestClient, login_as, approved_project, db_session: Session
+    client: TestClient, login_as, approved_project, db_session: Session, weave_stub
 ) -> None:
     member = login_as(MEMBER_SUB)
     reviewer = login_as(REVIEWER_SUB)
-    project = _completed_project(db_session, approved_project, member, reviewer, with_screenshot=True)
+    project = _completed_project(
+        db_session, approved_project, member, reviewer, with_screenshot=True, weave_stub=weave_stub
+    )
     key = project.current_revision.screenshot_keys[0]
 
     index_response = client.get("/gallery")

@@ -33,7 +33,7 @@ def _submitted_project(db_session: Session, member: Actor, *, budget_requested_c
     return project
 
 
-def test_non_reviewer_cannot_record_a_review(db_session: Session, member: Actor, make_actor) -> None:
+def test_non_reviewer_cannot_record_a_review(db_session: Session, member: Actor, make_actor, weave) -> None:
     project = _submitted_project(db_session, member)
     plain_member = make_actor(groups=frozenset({"ganymede:member"}))
 
@@ -44,10 +44,11 @@ def test_non_reviewer_cannot_record_a_review(db_session: Session, member: Actor,
             revision=project.current_revision,
             decision=ReviewDecision.APPROVE,
             source=ReviewSource.WEB,
+            weave_client=weave,
         )
 
 
-def test_submitter_cannot_review_their_own_submission(db_session: Session, make_actor) -> None:
+def test_submitter_cannot_review_their_own_submission(db_session: Session, make_actor, weave) -> None:
     submitter_and_reviewer = make_actor(groups=frozenset({"ganymede:member", "ganymede:reviewer"}))
     project = _submitted_project(db_session, submitter_and_reviewer)
 
@@ -58,10 +59,11 @@ def test_submitter_cannot_review_their_own_submission(db_session: Session, make_
             revision=project.current_revision,
             decision=ReviewDecision.APPROVE,
             source=ReviewSource.WEB,
+            weave_client=weave,
         )
 
 
-def test_credited_builder_cannot_review(db_session: Session, member: Actor, make_actor) -> None:
+def test_credited_builder_cannot_review(db_session: Session, member: Actor, make_actor, weave) -> None:
     builder = make_actor(groups=frozenset({"ganymede:member", "ganymede:reviewer"}))
     project = _submitted_project(db_session, member)
     project.current_revision.credited_builder_ids = [builder.user.id]
@@ -74,10 +76,13 @@ def test_credited_builder_cannot_review(db_session: Session, member: Actor, make
             revision=project.current_revision,
             decision=ReviewDecision.APPROVE,
             source=ReviewSource.WEB,
+            weave_client=weave,
         )
 
 
-def test_double_review_by_the_same_reviewer_is_blocked(db_session: Session, member: Actor, reviewer: Actor) -> None:
+def test_double_review_by_the_same_reviewer_is_blocked(
+    db_session: Session, member: Actor, reviewer: Actor, weave
+) -> None:
     project = _submitted_project(db_session, member)
     # First approval alone would satisfy the default policy and close out the revision, so use a
     # multi-approval policy to keep it open for a second decision attempt.
@@ -90,6 +95,7 @@ def test_double_review_by_the_same_reviewer_is_blocked(db_session: Session, memb
         revision=project.current_revision,
         decision=ReviewDecision.APPROVE,
         source=ReviewSource.WEB,
+        weave_client=weave,
     )
 
     with pytest.raises(InvalidState):
@@ -99,11 +105,12 @@ def test_double_review_by_the_same_reviewer_is_blocked(db_session: Session, memb
             revision=project.current_revision,
             decision=ReviewDecision.APPROVE,
             source=ReviewSource.WEB,
+            weave_client=weave,
         )
 
 
 def test_concurrent_double_review_is_blocked_by_the_db_constraint(
-    db_session: Session, member: Actor, reviewer: Actor, monkeypatch: pytest.MonkeyPatch
+    db_session: Session, member: Actor, reviewer: Actor, monkeypatch: pytest.MonkeyPatch, weave
 ) -> None:
     """Simulates two concurrent requests that both pass the `_has_existing_review` pre-check before
     either has inserted its row (e.g. a double-click, or a retried Slack action): the `reviews` unique
@@ -127,6 +134,7 @@ def test_concurrent_double_review_is_blocked_by_the_db_constraint(
         revision=project.current_revision,
         decision=ReviewDecision.APPROVE,
         source=ReviewSource.WEB,
+        weave_client=weave,
     )
     db_session.commit()
 
@@ -138,6 +146,7 @@ def test_concurrent_double_review_is_blocked_by_the_db_constraint(
             revision=project.current_revision,
             decision=ReviewDecision.APPROVE,
             source=ReviewSource.WEB,
+            weave_client=weave,
         )
     db_session.rollback()
 
@@ -151,7 +160,7 @@ def test_concurrent_double_review_is_blocked_by_the_db_constraint(
     assert review_count == 1
 
 
-def test_reject_requires_a_reason(db_session: Session, member: Actor, reviewer: Actor) -> None:
+def test_reject_requires_a_reason(db_session: Session, member: Actor, reviewer: Actor, weave) -> None:
     project = _submitted_project(db_session, member)
 
     with pytest.raises(ValidationFailed):
@@ -161,11 +170,12 @@ def test_reject_requires_a_reason(db_session: Session, member: Actor, reviewer: 
             revision=project.current_revision,
             decision=ReviewDecision.REJECT,
             source=ReviewSource.WEB,
+            weave_client=weave,
         )
 
 
 def test_a_single_reject_rejects_the_revision_immediately_and_opens_the_next_draft(
-    db_session: Session, member: Actor, reviewer: Actor
+    db_session: Session, member: Actor, reviewer: Actor, weave
 ) -> None:
     project = _submitted_project(db_session, member, budget_requested_cents=10_000)
     rejected_revision = project.current_revision
@@ -177,6 +187,7 @@ def test_a_single_reject_rejects_the_revision_immediately_and_opens_the_next_dra
         decision=ReviewDecision.REJECT,
         reason="Needs more detail.",
         source=ReviewSource.WEB,
+        weave_client=weave,
     )
 
     db_session.refresh(project)
@@ -190,7 +201,9 @@ def test_a_single_reject_rejects_the_revision_immediately_and_opens_the_next_dra
     assert new_draft.budget_requested_cents == 10_000
 
 
-def test_resubmit_after_reject_does_not_count_old_reviews(db_session: Session, member: Actor, make_actor) -> None:
+def test_resubmit_after_reject_does_not_count_old_reviews(
+    db_session: Session, member: Actor, make_actor, weave
+) -> None:
     """A reviewer's rejection of an earlier revision must not carry over to (or block approval of) the
     resubmitted one -- only the current revision's own reviews count toward the policy."""
     reviewer_a = make_actor(groups=frozenset({"ganymede:member", "ganymede:reviewer"}))
@@ -206,6 +219,7 @@ def test_resubmit_after_reject_does_not_count_old_reviews(db_session: Session, m
         decision=ReviewDecision.REJECT,
         reason="Not ready.",
         source=ReviewSource.WEB,
+        weave_client=weave,
     )
     db_session.refresh(project)
     assert project.status is ProjectStatus.CHANGES_REQUESTED
@@ -218,14 +232,19 @@ def test_resubmit_after_reject_does_not_count_old_reviews(db_session: Session, m
     # The default policy (1 approval, any reviewer) is satisfied by reviewer_b's single approval, even
     # though reviewer_a already rejected the *first* revision.
     projects.record_review(
-        db_session, reviewer_b, revision=second_revision, decision=ReviewDecision.APPROVE, source=ReviewSource.WEB
+        db_session,
+        reviewer_b,
+        revision=second_revision,
+        decision=ReviewDecision.APPROVE,
+        source=ReviewSource.WEB,
+        weave_client=weave,
     )
     db_session.refresh(project)
     assert project.status is ProjectStatus.APPROVED
     assert project.approved_revision_id == second_revision.id
 
 
-def test_cannot_review_a_non_current_revision(db_session: Session, member: Actor, reviewer: Actor) -> None:
+def test_cannot_review_a_non_current_revision(db_session: Session, member: Actor, reviewer: Actor, weave) -> None:
     project = _submitted_project(db_session, member)
     old_revision = project.current_revision
 
@@ -236,6 +255,7 @@ def test_cannot_review_a_non_current_revision(db_session: Session, member: Actor
         decision=ReviewDecision.REJECT,
         reason="Needs work.",
         source=ReviewSource.WEB,
+        weave_client=weave,
     )
 
     with pytest.raises(InvalidState):
@@ -245,10 +265,11 @@ def test_cannot_review_a_non_current_revision(db_session: Session, member: Actor
             revision=old_revision,
             decision=ReviewDecision.APPROVE,
             source=ReviewSource.WEB,
+            weave_client=weave,
         )
 
 
-def test_cannot_review_a_draft_revision(db_session: Session, member: Actor, reviewer: Actor) -> None:
+def test_cannot_review_a_draft_revision(db_session: Session, member: Actor, reviewer: Actor, weave) -> None:
     project = projects.create_project(db_session, member, title="T", write_up="W", budget_requested_cents=1_000)
 
     with pytest.raises(InvalidState):
@@ -258,11 +279,12 @@ def test_cannot_review_a_draft_revision(db_session: Session, member: Actor, revi
             revision=project.current_revision,
             decision=ReviewDecision.APPROVE,
             source=ReviewSource.WEB,
+            weave_client=weave,
         )
 
 
 def test_withdraw_supersedes_the_pending_revision_and_a_review_cannot_bring_it_back(
-    db_session: Session, member: Actor, reviewer: Actor
+    db_session: Session, member: Actor, reviewer: Actor, weave
 ) -> None:
     """A withdrawn project's still-`pending` submitted revision must not be approvable back to life:
     `withdraw` has to mark it `superseded`, and `record_review` has to reject it regardless."""
@@ -282,6 +304,7 @@ def test_withdraw_supersedes_the_pending_revision_and_a_review_cannot_bring_it_b
             revision=pending_revision,
             decision=ReviewDecision.APPROVE,
             source=ReviewSource.WEB,
+            weave_client=weave,
         )
     db_session.refresh(project)
     assert project.status is ProjectStatus.WITHDRAWN
@@ -298,27 +321,39 @@ def test_withdrawn_project_does_not_appear_in_the_review_queue(
     assert project.current_revision not in queue
 
 
-def test_admin_decide_cannot_resurrect_a_withdrawn_project(db_session: Session, member: Actor, admin: Actor) -> None:
+def test_admin_decide_cannot_resurrect_a_withdrawn_project(
+    db_session: Session, member: Actor, admin: Actor, weave
+) -> None:
     project = _submitted_project(db_session, member)
     pending_revision = project.current_revision
     projects.withdraw(db_session, member, project=project)
 
     with pytest.raises(InvalidState):
         projects.admin_decide(
-            db_session, admin, revision=pending_revision, decision=ReviewDecision.APPROVE, reason="override"
+            db_session,
+            admin,
+            revision=pending_revision,
+            decision=ReviewDecision.APPROVE,
+            reason="override",
+            weave_client=weave,
         )
     db_session.refresh(project)
     assert project.status is ProjectStatus.WITHDRAWN
 
 
 def test_cannot_review_a_completion_revision_while_project_is_not_in_completion_review(
-    db_session: Session, member: Actor, admin: Actor, reviewer: Actor
+    db_session: Session, member: Actor, admin: Actor, reviewer: Actor, weave
 ) -> None:
     """A completion revision must only be decided while the project is `pending_completion_review` --
     e.g. not after an admin has withdrawn the project out from under an in-flight completion review."""
     project = _submitted_project(db_session, member)
     projects.admin_decide(
-        db_session, admin, revision=project.current_revision, decision=ReviewDecision.APPROVE, reason="ok"
+        db_session,
+        admin,
+        revision=project.current_revision,
+        decision=ReviewDecision.APPROVE,
+        reason="ok",
+        weave_client=weave,
     )
     db_session.refresh(project)
     projects.start_completion(db_session, member, project=project)
@@ -339,4 +374,5 @@ def test_cannot_review_a_completion_revision_while_project_is_not_in_completion_
             revision=completion_revision,
             decision=ReviewDecision.APPROVE,
             source=ReviewSource.WEB,
+            weave_client=weave,
         )

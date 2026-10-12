@@ -30,7 +30,12 @@ class WeaveIdentity:
 @dataclass(frozen=True)
 class WeaveUser:
     """A directory record. `roles` holds Krater role names. `slack_member` is `None` when Weave
-    didn't say. `active` is false for an account Weave has locked or deactivated."""
+    didn't say. `active` is false for an account Weave has locked or deactivated.
+
+    `minor` is true when Weave knows the member is under 18, false when Weave knows they are not, and
+    `None` when Weave didn't say. `guardian_verified` is true when a Weave admin recorded a signed
+    guardian form plus a call or video check, and `None` when Weave didn't say. Older Weave versions
+    leave both fields out. Krater's guardian gate (`krater.services.guardian`) reads them."""
 
     sub: str
     name: str
@@ -40,3 +45,5 @@ class WeaveUser:
     slack_member: bool | None
     roles: frozenset[str]
     active: bool
+    minor: bool | None = None
+    guardian_verified: bool | None = None

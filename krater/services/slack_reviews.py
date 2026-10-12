@@ -132,8 +132,16 @@ def _process_decision(
         return
 
     try:
+        # The guardian gate runs inside `record_review`, the same rule as the web path. Its refusal is an
+        # `InvalidState`, so the clicker sees which members need a verification.
         project_service.record_review(
-            session, actor, revision=revision, decision=decision, reason=reason, source=ReviewSource.SLACK
+            session,
+            actor,
+            revision=revision,
+            decision=decision,
+            reason=reason,
+            source=ReviewSource.SLACK,
+            weave_client=weave_client,
         )
     except DomainError as exc:
         session.rollback()

@@ -106,3 +106,24 @@ def test_the_stub_quilt_token_is_a_fixed_fake_and_counts_calls() -> None:
     assert stub.quilt_token() == STUB_QUILT_TOKEN
     stub.invalidate_quilt_token()
     assert (stub.quilt_token_requests, stub.quilt_token_invalidations) == (1, 1)
+
+
+def test_the_fixture_has_a_minor_with_and_without_a_verified_guardian(stub_client: StubWeaveClient) -> None:
+    unverified = stub_client.get_user("PWLMINORONE")
+    verified = stub_client.get_user("PWLMINORVERIFIED")
+    unknown = stub_client.get_user("PWLMEMBERTWO")
+
+    assert unverified is not None and unverified.minor is True and unverified.guardian_verified is False
+    assert verified is not None and verified.minor is True and verified.guardian_verified is True
+    assert unknown is not None and unknown.minor is None and unknown.guardian_verified is None
+
+
+def test_set_minor_and_set_guardian_verified_change_the_record(stub_client: StubWeaveClient) -> None:
+    stub_client.set_minor("PWLMEMBERONE", True)
+    stub_client.set_guardian_verified("PWLMEMBERONE", True)
+
+    record = stub_client.get_user("PWLMEMBERONE")
+
+    assert record is not None
+    assert record.minor is True
+    assert record.guardian_verified is True

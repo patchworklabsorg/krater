@@ -38,3 +38,31 @@ class ValidationFailed(DomainError):
 
 class NotFound(DomainError):
     """The requested record doesn't exist (or isn't visible to this actor)."""
+
+
+class GuardianVerificationRequired(InvalidState):
+    """Krater can't grant budget: a team member is under 18 without a verified guardian in Weave, or Weave's
+    directory doesn't return them.
+
+    `members` holds `(label, reason)` for each such member, so reviewers and admins see who blocks the grant and
+    why (docs/SPEC.md "Guardian verification")."""
+
+    def __init__(self, members: list[tuple[str, str]]) -> None:
+        self.members = members
+        listed = "; ".join(f"{label}: {reason}" for label, reason in members)
+        super().__init__(
+            "Krater can't grant budget to this project yet. These team members must be cleared in Weave first: "
+            + listed
+            + ". A Weave admin records a verified guardian (the signed form and the call) on the member's Weave "
+            "admin page."
+        )
+
+
+class GuardianCheckUnavailable(InvalidState):
+    """Krater couldn't ask Weave about the team members' ages, so it grants no budget (fail closed)."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Krater couldn't reach Weave to check the team members' ages, so it granted no budget. "
+            "Try again in a minute."
+        )

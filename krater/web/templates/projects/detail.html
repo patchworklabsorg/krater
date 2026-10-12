@@ -20,6 +20,24 @@
   <div class="stat{% if summary.remaining_cents < 0 %} stat--bad{% endif %}"><dt>Remaining</dt><dd>{{ summary.remaining_cents | dollars }}</dd></div>
 </dl>
 
+{% if guardian_pending %}
+  <div class="guardian-banner" role="status">
+    <p><strong>Krater can't grant budget to this project yet.</strong> These team members must be cleared in
+      Weave first:</p>
+    <ul>
+      {% for member in guardian_pending %}
+        <li>{{ member.label }}: {{ member.reason }}</li>
+      {% endfor %}
+    </ul>
+    <p>For a member under 18, a Weave admin records the signed guardian form and the call or video check on the
+      member's Weave admin page. A member who is not available in Weave needs their access to Krater back in Weave.
+      Then a reviewer or admin can approve again.</p>
+  </div>
+{% elif guardian_pending is none %}
+  <p class="guardian-banner">Krater couldn't reach Weave to check whether a team member needs a verified guardian.
+    Krater checks again before it grants budget.</p>
+{% endif %}
+
 <div class="layout-split">
 <div class="stack">
 <section class="card">

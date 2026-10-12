@@ -15,6 +15,9 @@ Krater depends on this Weave work. All of it is merged on Weave `main`:
 - app-defined roles: [patchworklabsorg/weave#165](https://github.com/patchworklabsorg/weave/pull/165);
 - the directory API: [patchworklabsorg/weave#166](https://github.com/patchworklabsorg/weave/pull/166).
 
+The guardian gate also reads the directory fields `minor` and `guardian_verified`. Weave adds them now. Krater works
+with a Weave that doesn't send them yet (see "Guardian verification" below).
+
 A Weave superadmin must create the roles `member`, `reviewer` and `admin` on the Krater app page. An admin must add `directory` to the Krater app's scopes.
 
 | Capability | Used for |
@@ -27,7 +30,7 @@ A Weave superadmin must create the roles `member`, `reviewer` and `admin` on the
 | Claim `groups` (scope `groups`) | Group slugs linked to the Krater app; the fallback when `roles` is absent |
 | Claims `slack_id`, `slack_member` (scope `slack`) | Mapping Slack clicks to users, and the Slack membership gate |
 | The client_credentials grant, scope `directory` | Krater's own token for the directory API |
-| `GET /api/v1/directory/users/{sub}` | The fresh role check before every action, and names and emails when a page needs them |
+| `GET /api/v1/directory/users/{sub}` | The fresh role check before every action, the guardian gate before every budget grant, and names and emails when a page needs them |
 | `GET /api/v1/directory/users?role=<key>` | "Everyone with role X", e.g. reviewers to invite to Slack channels, or finding a member by email |
 
 Krater asks for the sign-in scopes `openid profile email groups roles slack`.
@@ -98,8 +101,10 @@ Krater calls the directory with an access token of its own OAuth app:
 Endpoints:
 
 - `GET /api/v1/directory/users/{sub}` answers
-  `{sub, name, email, email_verified, slack_id, slack_member, groups, roles, active}`. A 404 means the user is unknown
-  or may not use Krater: Krater treats them as not a member. Only `active: true` counts as active.
+  `{sub, name, email, email_verified, slack_id, slack_member, groups, roles, active, minor, guardian_verified}`. A 404
+  means the user is unknown or may not use Krater: Krater treats them as not a member. Only `active: true` counts as
+  active. `minor` and `guardian_verified` are booleans that older Weave versions leave out. Krater reads a value
+  that isn't a boolean as missing.
 - `GET /api/v1/directory/users?role=<key>` (or `?group=<slug>`, which Krater doesn't use) answers
   `{"users": [...]}`, sorted by `sub`. Send exactly one parameter. A role or group that isn't linked to Krater answers
   404: Krater treats it as an empty list and logs a warning.
@@ -122,7 +127,7 @@ class WeaveClient(Protocol):
 
 `WeaveIdentity` (from the id_token) and `WeaveUser` (from the directory) carry `sub`, `name`, `email`,
 `email_verified`, `slack_id`, `slack_member` (`None` when Weave didn't say) and `roles` (Krater names). `WeaveUser` also
-carries `active`. `exchange_code` verifies the id_token against Weave's JWKS (signature, `iss`, `aud`, `exp`, `nonce`).
+carries `active`, `minor` and `guardian_verified` (each `None` when Weave didn't say). `exchange_code` verifies the id_token against Weave's JWKS (signature, `iss`, `aud`, `exp`, `nonce`).
 
 ### Sign-in (`krater.services.users.sign_in`)
 
@@ -148,6 +153,49 @@ navigation only.
 The gate prefers Weave's `slack_member` from the fresh directory record. When Weave doesn't say, Krater asks Slack
 (see [SPEC.md](SPEC.md#roles--authentication)).
 
+### Guardian verification
+
+Weave owns the guardian check for members under 18. A Weave admin records a signed guardian form plus a call or
+video check on the member's Weave admin page. Weave's directory then sends `guardian_verified: true`. Krater stores
+no copy.
+
+Before every budget grant, `krater.services.guardian.require_team_cleared` asks the directory by `sub`, with
+`fresh=True`, for each team member (the submitter and the credited builders):
+
+| Directory record | Krater's answer |
+| --- | --- |
+| `minor: true`, `guardian_verified: true` | Clear |
+| `minor: true`, `guardian_verified` false or missing | Blocks the grant, and the member is named in the error |
+| `minor: false` | Clear |
+| No record (404) | Blocks the grant, and the member is named as "not available in Weave (no access to Krater)" |
+| A record without `minor` | Not known to be a minor: clear, with a warning in the log |
+| Weave can't be reached | The grant fails ("try again") |
+
+A 404 blocks because Weave's directory hides anyone the Krater app may not serve, a minor whose guardian consent
+is missing or was revoked included. Krater treats a record without `minor` as "not known to be a minor" because
+Weave ships the field first. When every
+deployment's Weave sends it, the warning in the log should stop. If it doesn't, check the Weave version.
+
+```mermaid
+sequenceDiagram
+    participant R as Reviewer (web or Slack)
+    participant K as Krater (record_review)
+    participant W as Weave directory
+    R->>K: Approve
+    K->>W: GET /api/v1/directory/users/{sub} (fresh), for each team member
+    W-->>K: {minor, guardian_verified, ...}
+    alt a minor without guardian_verified: true, or a 404
+        K-->>R: Refused: these members must be cleared in Weave
+    else Weave can't be reached
+        K-->>R: Refused: try again
+    else every member clear
+        K-->>R: Approved, budget granted
+    end
+```
+
+The project page uses the same lookup (from the short cache) to show which members block a grant, and why. If
+Weave can't answer, the page says so and still loads.
+
 ### Disabling someone
 
 Do it in Weave: remove their Krater roles or their access to the Krater app, and revoke their tokens. The next action
@@ -158,8 +206,11 @@ can keep showing what they could see for up to 60 seconds.
 
 `KRATER_WEAVE_MODE=stub` (refused in production) replaces Weave with `krater/weave/stub_users.json`. Each fixture
 user has the fields a real Weave sends: `sub`, `name`, `email`, `email_verified`, `slack_id`, optional
-`slack_member`, `groups` (slugs) and `roles` (keys). One user (`PWLREVIEWERTWO`) has no `roles` field, to exercise the
-group fallback. The stub client answers the directory lookups from the same fixture with the same `RoleMapping`.
+`slack_member`, `groups` (slugs), `roles` (keys) and optional `minor` and `guardian_verified`. One user
+(`PWLREVIEWERTWO`) has no `roles` field, to exercise the group fallback. `PWLMINORONE` is a minor without a verified
+guardian, `PWLMINORVERIFIED` is a minor with one, and `PWLMEMBERTWO` has no `minor` field. The stub client answers the
+directory lookups from the same fixture with the same `RoleMapping`.
 
-Tests change what Weave says mid-test with `StubWeaveClient.set_roles`, `set_active`, `remove_user` and `put_user`. The
+Tests change what Weave says mid-test with `StubWeaveClient.set_roles`, `set_active`, `set_minor`,
+`set_guardian_verified`, `remove_user` and `put_user`. The
 `weave_stub` fixture in `tests/conftest.py` is the stub the test app uses.

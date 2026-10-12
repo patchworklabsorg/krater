@@ -163,8 +163,9 @@ Postgres. All money is stored as **integer cents** (`*_cents`). Names are sugges
    - rejects self-review (submitter or credited builder);
    - records the Review against the current revision;
    - asks `ApprovalPolicyService` whether the policy is now satisfied.
-4. **Approve.** When the policy is satisfied, the revision is approved, a `BudgetEntry(initial_approval)` is written, and the
-   project moves to `approved`.
+4. **Approve.** When the policy is satisfied, Krater runs the guardian gate (see "Guardian verification"). If the gate
+   passes, the revision is approved, a `BudgetEntry(initial_approval)` is written, and the project moves to
+   `approved`. If it fails, nothing is recorded and the reviewer sees which members need a verified guardian.
 5. **Reject.** A reason is required. The project moves to `changes_requested`, and the submitter edits and resubmits
    (step 2, same project, new revision).
 6. **Amend.** An `approved` project can have its scope or budget amended. This creates an `amendment` revision reviewed
@@ -237,6 +238,53 @@ Uploads use presigned URLs, and only objects from approved completion revisions 
   spend, through Quilt's patch API. The events go through an outbox table in the same transaction as the change.
   See [quilt-integration.md](quilt-integration.md).
 
+## Guardian verification
+
+Added Oct 12, 2026, as a safeguard for Project Ganymede. Weave asks a parent or guardian to consent by email for a
+member under 18. An email link proves control of an inbox, not parenthood. So a Weave admin also records a
+stronger check in Weave: a signed guardian form plus a short call or video check with the guardian. The check
+lives in Weave, so every Patchwork Labs app can use it. Krater stores none of it.
+
+**The rule.** Krater grants no budget to a project while a team member is a minor without a verified guardian,
+or while Weave's directory doesn't return a team member.
+
+- **The team** is the submitter plus the credited builders on the revision that is decided.
+- **The data** comes from Weave's directory record: `minor` (true when the member is under 18) and
+  `guardian_verified` (true when a Weave admin recorded the form and the call). A member blocks the grant when
+  `minor` is true and `guardian_verified` is not true.
+- **No directory record.** Weave's directory answers 404 for anyone the Krater app may not serve. That includes a
+  minor whose guardian consent is missing or was revoked. So a 404 blocks the grant, and the member is listed as
+  "not available in Weave (no access to Krater)".
+- **When.** Krater asks Weave's directory fresh at decision time, the same way it checks roles. It checks on
+  every grant: a proposal approval, an amendment approval that raises the ceiling, and an admin budget increase.
+  A rejection, a completion approval, a cut and a reclaim grant nothing, so they have no check.
+- **One rule for every path.** The gate is in `krater.services.projects` (through `krater.services.guardian`). The
+  web Approve button, the Slack Approve button and the admin overrides all reach it.
+- **No override.** This is a safety rule. An admin override can't bypass it, and Krater has no setting to turn it
+  off. A Weave admin verifies the guardian first, then a reviewer or admin approves again.
+- **Unknown age.** Older Weave versions send a record without `minor`. Weave ships the fields before Krater needs
+  them, so Krater treats that record as "not known to be a minor". It logs a warning with the member's Patchwork
+  ID, so an operator can see when Weave is behind.
+- **Weave down.** If Weave can't be reached, the grant fails with "try again". Krater never guesses.
+- **The project page** shows a notice to everyone who can see the project. The notice lists the members who need
+  to be cleared in Weave and the reason for each, and says that a Weave admin records a verified guardian on the
+  member's Weave admin page.
+
+```mermaid
+flowchart TD
+    A[Approval, amendment increase or admin budget increase] --> B[Ask Weave's directory, fresh, for each team member]
+    B -->|Weave can't be reached| X[Refuse: try again]
+    B -->|404, no record| N[Refuse the grant and list the member: not available in Weave]
+    B --> C{minor: true?}
+    C -->|missing| L[Log a warning, not known to be a minor] --> OK
+    C -->|false| OK[Member is clear]
+    C -->|true| D{guardian_verified: true?}
+    D -->|yes| OK
+    D -->|no or missing| R[Refuse the grant and list the member]
+    OK --> E{Every member clear?}
+    E -->|yes| G[Grant: write the BudgetEntry]
+```
+
 ## Admin overrides
 
 At any point an admin can:
@@ -249,6 +297,9 @@ The exception is the admin's own project (they submitted it, or are a credited b
 can't decide it, add to its budget or raise its hourly cap, so an admin can never fund their own work without someone
 else signing off. Another
 admin, or the normal review, has to do it. Cutting or reclaiming its budget and withdrawing it are still allowed.
+
+An override also can't bypass the guardian gate (see "Guardian verification"). An admin approval or budget increase
+fails the same way a reviewer approval does while a team member needs a verified guardian.
 
 Every override writes an `AuditEvent` with who, what, when and a required reason. Budget changes also write a
 `BudgetEntry`. Overrides are posted in the project's channel so reviewers can see them.

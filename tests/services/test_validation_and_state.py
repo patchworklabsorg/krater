@@ -54,12 +54,17 @@ def test_submit_fails_without_a_draft(db_session: Session, member: Actor, review
 
 
 def test_submit_on_a_completion_draft_directs_to_submit_completion(
-    db_session: Session, member: Actor, admin: Actor
+    db_session: Session, member: Actor, admin: Actor, weave
 ) -> None:
     project = projects.create_project(db_session, member, title="x", write_up="y", budget_requested_cents=100)
     project = projects.submit(db_session, member, project=project)
     projects.admin_decide(
-        db_session, admin, revision=project.current_revision, decision=ReviewDecision.APPROVE, reason="ok"
+        db_session,
+        admin,
+        revision=project.current_revision,
+        decision=ReviewDecision.APPROVE,
+        reason="ok",
+        weave_client=weave,
     )
     db_session.refresh(project)
     projects.start_completion(db_session, member, project=project)
@@ -83,12 +88,17 @@ def test_start_completion_requires_an_approved_project(db_session: Session, memb
 
 
 def test_start_amendment_fails_with_a_draft_already_in_progress(
-    db_session: Session, member: Actor, admin: Actor
+    db_session: Session, member: Actor, admin: Actor, weave
 ) -> None:
     project = projects.create_project(db_session, member, title="x", write_up="y", budget_requested_cents=100)
     project = projects.submit(db_session, member, project=project)
     projects.admin_decide(
-        db_session, admin, revision=project.current_revision, decision=ReviewDecision.APPROVE, reason="ok"
+        db_session,
+        admin,
+        revision=project.current_revision,
+        decision=ReviewDecision.APPROVE,
+        reason="ok",
+        weave_client=weave,
     )
     db_session.refresh(project)
     projects.start_amendment(db_session, member, project=project)
@@ -97,11 +107,16 @@ def test_start_amendment_fails_with_a_draft_already_in_progress(
         projects.start_amendment(db_session, member, project=project)
 
 
-def test_submit_completion_requires_a_completion_draft(db_session: Session, member: Actor, admin: Actor) -> None:
+def test_submit_completion_requires_a_completion_draft(db_session: Session, member: Actor, admin: Actor, weave) -> None:
     project = projects.create_project(db_session, member, title="x", write_up="y", budget_requested_cents=100)
     project = projects.submit(db_session, member, project=project)
     projects.admin_decide(
-        db_session, admin, revision=project.current_revision, decision=ReviewDecision.APPROVE, reason="ok"
+        db_session,
+        admin,
+        revision=project.current_revision,
+        decision=ReviewDecision.APPROVE,
+        reason="ok",
+        weave_client=weave,
     )
     db_session.refresh(project)
 
@@ -138,7 +153,7 @@ def test_review_queue_requires_reviewer(db_session: Session, member: Actor) -> N
 
 
 def test_review_queue_excludes_own_projects_credited_builders_and_already_reviewed(
-    db_session: Session, member: Actor, reviewer: Actor, make_actor
+    db_session: Session, member: Actor, reviewer: Actor, make_actor, weave
 ) -> None:
     other_member = make_actor(groups=frozenset({"ganymede:member"}))
 
@@ -173,13 +188,14 @@ def test_review_queue_excludes_own_projects_credited_builders_and_already_review
         decision=ReviewDecision.REJECT,
         reason="not ready",
         source=ReviewSource.WEB,
+        weave_client=weave,
     )
     queue_after = {r.id for r in projects.review_queue(db_session, reviewer)}
     assert visible.current_revision.id not in queue_after  # rejected -> no longer pending anyway
 
 
 def test_project_summary_reports_policy_explanation_while_pending(
-    db_session: Session, member: Actor, reviewer: Actor
+    db_session: Session, member: Actor, reviewer: Actor, weave
 ) -> None:
     project = projects.create_project(db_session, member, title="x", write_up="y", budget_requested_cents=1_000)
     project = projects.submit(db_session, member, project=project)
@@ -196,6 +212,7 @@ def test_project_summary_reports_policy_explanation_while_pending(
         revision=project.current_revision,
         decision=ReviewDecision.APPROVE,
         source=ReviewSource.WEB,
+        weave_client=weave,
     )
     db_session.refresh(project)
     summary = projects.project_summary(db_session, project=project)

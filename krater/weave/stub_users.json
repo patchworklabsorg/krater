@@ -5,6 +5,7 @@
     "email": "mia@example.com",
     "email_verified": true,
     "slack_id": "U0001MEMBER",
+    "minor": false,
     "groups": ["ganymede-members"],
     "roles": ["member"]
   },
@@ -23,6 +24,7 @@
     "email": "rae@example.com",
     "email_verified": true,
     "slack_id": "U0002REVIEW",
+    "minor": false,
     "groups": ["ganymede-members", "krater-reviewers"],
     "roles": ["member", "reviewer"]
   },
@@ -40,6 +42,7 @@
     "email": "ana@example.com",
     "email_verified": true,
     "slack_id": "U0004ADMIN",
+    "minor": false,
     "groups": ["ganymede-members", "krater-reviewers", "krater-admins"],
     "roles": ["member", "reviewer", "admin"]
   },
@@ -49,6 +52,7 @@
     "email": "nico@example.com",
     "email_verified": true,
     "slack_id": null,
+    "minor": false,
     "groups": ["ganymede-members"],
     "roles": []
   },
@@ -58,6 +62,7 @@
     "email": "uma@example.com",
     "email_verified": false,
     "slack_id": null,
+    "minor": false,
     "groups": [],
     "roles": ["member"]
   },
@@ -68,6 +73,31 @@
     "email_verified": true,
     "slack_id": "U0005GUEST",
     "slack_member": false,
+    "minor": false,
+    "groups": ["ganymede-members"],
+    "roles": ["member"]
+  },
+  {
+    "sub": "PWLMINORONE",
+    "name": "Milo Minor",
+    "email": "milo@example.com",
+    "email_verified": true,
+    "slack_id": "U0006MINOR",
+    "slack_member": true,
+    "minor": true,
+    "guardian_verified": false,
+    "groups": ["ganymede-members"],
+    "roles": ["member"]
+  },
+  {
+    "sub": "PWLMINORVERIFIED",
+    "name": "Vera Verified",
+    "email": "vera@example.com",
+    "email_verified": true,
+    "slack_id": "U0007MINOR",
+    "slack_member": true,
+    "minor": true,
+    "guardian_verified": true,
     "groups": ["ganymede-members"],
     "roles": ["member"]
   }

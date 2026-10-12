@@ -711,6 +711,7 @@ a.stat .stat__value {
 .policy-note,
 .compute-hint,
 .budget-banner,
+.guardian-banner,
 .notice {
   margin: 0 0 var(--space-4);
   padding: var(--space-3) var(--space-4);
@@ -745,6 +746,18 @@ a.stat .stat__value {
   border-color: var(--warn-soft);
   border-left-color: var(--warn);
   background: var(--warn-soft);
+}
+
+/* A team member under 18 needs a guardian verification before Krater grants budget. */
+.guardian-banner {
+  border-color: var(--warn-soft);
+  border-left-color: var(--warn);
+  background: var(--warn-soft);
+}
+
+.guardian-banner ul {
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-5);
 }
 
 /* ── Flash messages ── */

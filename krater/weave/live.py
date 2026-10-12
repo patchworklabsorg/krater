@@ -285,6 +285,9 @@ class LiveWeaveClient:
             roles=self._roles.krater_roles(roles=data.get("roles"), groups=data.get("groups")),
             # Fail closed: only an explicit `true` counts as active.
             active=data.get("active") is True,
+            # Only a real boolean counts; a missing or malformed value is "Weave didn't say".
+            minor=_optional_bool(data.get("minor")),
+            guardian_verified=_optional_bool(data.get("guardian_verified")),
         )
 
 

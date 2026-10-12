@@ -53,7 +53,9 @@ def submitted_project(db_session: Session, create_project: Callable[..., Project
 
 
 @pytest.fixture
-def approved_project(db_session: Session, submitted_project: Callable[..., Project]) -> Callable[..., Project]:
+def approved_project(
+    db_session: Session, submitted_project: Callable[..., Project], weave_stub
+) -> Callable[..., Project]:
     """Factory: create, submit and get `reviewer` to approve a project for `user`."""
 
     def _approve(user: User, reviewer: User, **kwargs) -> Project:
@@ -64,6 +66,7 @@ def approved_project(db_session: Session, submitted_project: Callable[..., Proje
             revision=project.current_revision,
             decision=ReviewDecision.APPROVE,
             source=ReviewSource.WEB,
+            weave_client=weave_stub,
         )
         db_session.refresh(project)
         return project

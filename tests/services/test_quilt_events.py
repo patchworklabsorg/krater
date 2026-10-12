@@ -61,16 +61,21 @@ def _submit(session: Session, member: Actor, *, budget_cents: int = 100_000, tit
     return projects.submit(session, member, project=project)
 
 
-def _approve(session: Session, reviewer: Actor, project: Project) -> Project:
+def _approve(session: Session, reviewer: Actor, project: Project, weave) -> Project:
     projects.record_review(
-        session, reviewer, revision=project.current_revision, decision=ReviewDecision.APPROVE, source=ReviewSource.WEB
+        session,
+        reviewer,
+        revision=project.current_revision,
+        decision=ReviewDecision.APPROVE,
+        source=ReviewSource.WEB,
+        weave_client=weave,
     )
     session.refresh(project)
     return project
 
 
-def _approved(session: Session, member: Actor, reviewer: Actor, *, budget_cents: int = 100_000) -> Project:
-    return _approve(session, reviewer, _submit(session, member, budget_cents=budget_cents))
+def _approved(session: Session, member: Actor, reviewer: Actor, weave, *, budget_cents: int = 100_000) -> Project:
+    return _approve(session, reviewer, _submit(session, member, budget_cents=budget_cents), weave=weave)
 
 
 def _spend(session: Session, project: Project, cents: int) -> None:
@@ -131,7 +136,7 @@ def test_the_first_submission_sends_submission_created(db_session: Session, memb
 
 
 def test_a_rejection_and_resubmission_send_updates_not_a_second_created(
-    db_session: Session, member: Actor, reviewer: Actor
+    db_session: Session, member: Actor, reviewer: Actor, weave
 ) -> None:
     project = _submit(db_session, member, budget_cents=10_000)
     projects.record_review(
@@ -141,6 +146,7 @@ def test_a_rejection_and_resubmission_send_updates_not_a_second_created(
         decision=ReviewDecision.REJECT,
         reason="Too vague.",
         source=ReviewSource.WEB,
+        weave_client=weave,
     )
     projects.update_draft(db_session, member, project=project, title="Rover 2", budget_requested_cents=20_000)
     projects.submit(db_session, member, project=project)
@@ -158,8 +164,10 @@ def test_a_rejection_and_resubmission_send_updates_not_a_second_created(
     assert rows[2].id == event_id(SUBMISSION_UPDATED, project.id, 1)
 
 
-def test_approval_sends_the_status_and_budget_committed(db_session: Session, member: Actor, reviewer: Actor) -> None:
-    project = _approved(db_session, member, reviewer, budget_cents=50_000)
+def test_approval_sends_the_status_and_budget_committed(
+    db_session: Session, member: Actor, reviewer: Actor, weave
+) -> None:
+    project = _approved(db_session, member, reviewer, budget_cents=50_000, weave=weave)
 
     rows = _rows(db_session, project)
     assert [row.type for row in rows] == [SUBMISSION_CREATED, SUBMISSION_UPDATED, BUDGET_COMMITTED]
@@ -175,24 +183,24 @@ def test_approval_sends_the_status_and_budget_committed(db_session: Session, mem
 
 
 def test_an_approval_that_does_not_meet_the_policy_yet_sends_nothing(
-    db_session: Session, member: Actor, reviewer: Actor
+    db_session: Session, member: Actor, reviewer: Actor, weave
 ) -> None:
     db_session.add(ApprovalPolicy(stage=ApprovalStage.PROPOSAL, min_approvals=2))
     project = _submit(db_session, member)
     before = _types(db_session, project)
-    _approve(db_session, reviewer, project)
+    _approve(db_session, reviewer, project, weave=weave)
 
     assert _types(db_session, project) == before
 
 
 def test_an_amendment_increase_sends_the_new_request_then_the_added_budget(
-    db_session: Session, member: Actor, reviewer: Actor
+    db_session: Session, member: Actor, reviewer: Actor, weave
 ) -> None:
-    project = _approved(db_session, member, reviewer, budget_cents=100_000)
+    project = _approved(db_session, member, reviewer, budget_cents=100_000, weave=weave)
     projects.start_amendment(db_session, member, project=project)
     projects.update_draft(db_session, member, project=project, budget_requested_cents=150_000)
     projects.submit(db_session, member, project=project)
-    _approve(db_session, reviewer, project)
+    _approve(db_session, reviewer, project, weave=weave)
 
     rows = _rows(db_session, project)[3:]
     assert [row.type for row in rows] == [SUBMISSION_UPDATED, BUDGET_COMMITTED]
@@ -200,12 +208,14 @@ def test_an_amendment_increase_sends_the_new_request_then_the_added_budget(
     assert rows[1].payload["amount_cents"] == 50_000
 
 
-def test_an_amendment_decrease_sends_budget_released(db_session: Session, member: Actor, reviewer: Actor) -> None:
-    project = _approved(db_session, member, reviewer, budget_cents=100_000)
+def test_an_amendment_decrease_sends_budget_released(
+    db_session: Session, member: Actor, reviewer: Actor, weave
+) -> None:
+    project = _approved(db_session, member, reviewer, budget_cents=100_000, weave=weave)
     projects.start_amendment(db_session, member, project=project)
     projects.update_draft(db_session, member, project=project, budget_requested_cents=60_000)
     projects.submit(db_session, member, project=project)
-    _approve(db_session, reviewer, project)
+    _approve(db_session, reviewer, project, weave=weave)
 
     last = _rows(db_session, project)[-1]
     assert last.type == BUDGET_RELEASED
@@ -216,12 +226,12 @@ def test_an_amendment_decrease_sends_budget_released(db_session: Session, member
     }
 
 
-def test_an_unchanged_amendment_budget_is_skipped(db_session: Session, member: Actor, reviewer: Actor) -> None:
-    project = _approved(db_session, member, reviewer, budget_cents=100_000)
+def test_an_unchanged_amendment_budget_is_skipped(db_session: Session, member: Actor, reviewer: Actor, weave) -> None:
+    project = _approved(db_session, member, reviewer, budget_cents=100_000, weave=weave)
     projects.start_amendment(db_session, member, project=project)
     projects.update_draft(db_session, member, project=project, write_up="A bigger rover.")
     projects.submit(db_session, member, project=project)
-    _approve(db_session, reviewer, project)
+    _approve(db_session, reviewer, project, weave=weave)
 
     zero = db_session.scalars(
         sa.select(BudgetEntry).where(BudgetEntry.project_id == project.id, BudgetEntry.amount_cents == 0)
@@ -232,9 +242,9 @@ def test_an_unchanged_amendment_budget_is_skipped(db_session: Session, member: A
 
 
 def test_a_rejected_amendment_puts_the_approved_request_back(
-    db_session: Session, member: Actor, reviewer: Actor
+    db_session: Session, member: Actor, reviewer: Actor, weave
 ) -> None:
-    project = _approved(db_session, member, reviewer, budget_cents=100_000)
+    project = _approved(db_session, member, reviewer, budget_cents=100_000, weave=weave)
     projects.start_amendment(db_session, member, project=project)
     projects.update_draft(db_session, member, project=project, budget_requested_cents=150_000)
     projects.submit(db_session, member, project=project)
@@ -245,6 +255,7 @@ def test_a_rejected_amendment_puts_the_approved_request_back(
         decision=ReviewDecision.REJECT,
         reason="No.",
         source=ReviewSource.WEB,
+        weave_client=weave,
     )
 
     rows = _rows(db_session, project)[3:]
@@ -255,11 +266,15 @@ def test_a_rejected_amendment_puts_the_approved_request_back(
 
 
 def test_admin_adjustments_and_reclaims_follow_the_ledger(
-    db_session: Session, member: Actor, reviewer: Actor, admin: Actor
+    db_session: Session, member: Actor, reviewer: Actor, admin: Actor, weave
 ) -> None:
-    project = _approved(db_session, member, reviewer, budget_cents=100_000)
-    projects.admin_adjust_budget(db_session, admin, project=project, amount_cents=25_000, reason="More GPUs.")
-    projects.admin_adjust_budget(db_session, admin, project=project, amount_cents=-5_000, reason="Less.")
+    project = _approved(db_session, member, reviewer, budget_cents=100_000, weave=weave)
+    projects.admin_adjust_budget(
+        db_session, admin, project=project, amount_cents=25_000, reason="More GPUs.", weave_client=weave
+    )
+    projects.admin_adjust_budget(
+        db_session, admin, project=project, amount_cents=-5_000, reason="Less.", weave_client=weave
+    )
     projects.reclaim_budget(db_session, admin, project=project, amount_cents=20_000, reason="Stalled.")
 
     rows = _rows(db_session, project)[3:]
@@ -272,13 +287,13 @@ def test_admin_adjustments_and_reclaims_follow_the_ledger(
 
 
 def test_completion_sends_the_statuses_and_releases_the_unspent_budget(
-    db_session: Session, member: Actor, reviewer: Actor
+    db_session: Session, member: Actor, reviewer: Actor, weave
 ) -> None:
-    project = _approved(db_session, member, reviewer, budget_cents=100_000)
+    project = _approved(db_session, member, reviewer, budget_cents=100_000, weave=weave)
     _spend(db_session, project, 30_000)
     projects.start_completion(db_session, member, project=project)
     projects.submit_completion(db_session, member, project=project)
-    _approve(db_session, reviewer, project)
+    _approve(db_session, reviewer, project, weave=weave)
 
     rows = _rows(db_session, project)[3:]
     assert [(row.type, row.payload) for row in rows] == [
@@ -292,8 +307,10 @@ def test_completion_sends_the_statuses_and_releases_the_unspent_budget(
     ]
 
 
-def test_withdrawal_sends_the_status_and_releases_the_rest(db_session: Session, member: Actor, reviewer: Actor) -> None:
-    project = _approved(db_session, member, reviewer, budget_cents=100_000)
+def test_withdrawal_sends_the_status_and_releases_the_rest(
+    db_session: Session, member: Actor, reviewer: Actor, weave
+) -> None:
+    project = _approved(db_session, member, reviewer, budget_cents=100_000, weave=weave)
     _spend(db_session, project, 10_000)
     projects.withdraw(db_session, member, project=project)
 
@@ -317,9 +334,9 @@ def test_withdrawing_a_pending_submission_sends_only_the_status(db_session: Sess
 
 
 def test_spend_is_sent_as_the_cumulative_total_only_when_it_changes(
-    db_session: Session, member: Actor, reviewer: Actor
+    db_session: Session, member: Actor, reviewer: Actor, weave
 ) -> None:
-    project = _approved(db_session, member, reviewer)
+    project = _approved(db_session, member, reviewer, weave=weave)
     _spend(db_session, project, 1_000)
     _spend(db_session, project, 1_000)
     _spend(db_session, project, 2_500)
@@ -339,11 +356,13 @@ def test_spend_is_sent_as_the_cumulative_total_only_when_it_changes(
 
 
 def test_a_release_is_capped_at_what_quilt_still_has_committed(
-    db_session: Session, member: Actor, reviewer: Actor, admin: Actor
+    db_session: Session, member: Actor, reviewer: Actor, admin: Actor, weave
 ) -> None:
-    project = _approved(db_session, member, reviewer, budget_cents=100_000)
+    project = _approved(db_session, member, reviewer, budget_cents=100_000, weave=weave)
     _spend(db_session, project, 80_000)  # Quilt draws down 80_000; 20_000 stays committed
-    projects.admin_adjust_budget(db_session, admin, project=project, amount_cents=-50_000, reason="Cut.")
+    projects.admin_adjust_budget(
+        db_session, admin, project=project, amount_cents=-50_000, reason="Cut.", weave_client=weave
+    )
 
     last = _rows(db_session, project)[-1]
     assert (last.type, last.payload["amount_cents"], last.state) == (BUDGET_RELEASED, 20_000, QuiltOutboxState.PENDING)
@@ -356,12 +375,14 @@ def test_a_release_is_capped_at_what_quilt_still_has_committed(
 
 
 def test_a_skipped_release_is_never_sent_later(
-    db_session: Session, member: Actor, reviewer: Actor, admin: Actor
+    db_session: Session, member: Actor, reviewer: Actor, admin: Actor, weave
 ) -> None:
-    project = _approved(db_session, member, reviewer, budget_cents=10_000)
+    project = _approved(db_session, member, reviewer, budget_cents=10_000, weave=weave)
     _spend(db_session, project, 10_000)
     projects.reclaim_budget(db_session, admin, project=project, amount_cents=5_000, reason="Cut.")
-    projects.admin_adjust_budget(db_session, admin, project=project, amount_cents=50_000, reason="More.")
+    projects.admin_adjust_budget(
+        db_session, admin, project=project, amount_cents=50_000, reason="More.", weave_client=weave
+    )
 
     rows = _rows(db_session, project)
     assert [(row.type, row.state) for row in rows[-2:]] == [
@@ -374,13 +395,17 @@ def test_a_skipped_release_is_never_sent_later(
 
 
 def test_a_new_commitment_covers_earlier_overspend_before_the_release_cap(
-    db_session: Session, member: Actor, reviewer: Actor, admin: Actor
+    db_session: Session, member: Actor, reviewer: Actor, admin: Actor, weave
 ) -> None:
-    project = _approved(db_session, member, reviewer, budget_cents=10_000)
+    project = _approved(db_session, member, reviewer, budget_cents=10_000, weave=weave)
     _spend(db_session, project, 12_000)  # 2_000 over the commitment
-    projects.admin_adjust_budget(db_session, admin, project=project, amount_cents=5_000, reason="More.")
+    projects.admin_adjust_budget(
+        db_session, admin, project=project, amount_cents=5_000, reason="More.", weave_client=weave
+    )
     # Quilt uses 2_000 of the new 5_000 to cover the overspend, so 3_000 stays committed.
-    projects.admin_adjust_budget(db_session, admin, project=project, amount_cents=-4_000, reason="Cut.")
+    projects.admin_adjust_budget(
+        db_session, admin, project=project, amount_cents=-4_000, reason="Cut.", weave_client=weave
+    )
 
     last = _rows(db_session, project)[-1]
     assert (last.type, last.payload["amount_cents"], last.state) == (BUDGET_RELEASED, 3_000, QuiltOutboxState.PENDING)
@@ -412,8 +437,8 @@ def test_a_failed_submit_writes_nothing(db_session: Session, member: Actor) -> N
     assert _rows(db_session, project) == []
 
 
-def test_sync_is_idempotent(db_session: Session, member: Actor, reviewer: Actor) -> None:
-    project = _approved(db_session, member, reviewer)
+def test_sync_is_idempotent(db_session: Session, member: Actor, reviewer: Actor, weave) -> None:
+    project = _approved(db_session, member, reviewer, weave=weave)
     _spend(db_session, project, 500)
     count = len(_rows(db_session, project))
 
@@ -424,14 +449,14 @@ def test_sync_is_idempotent(db_session: Session, member: Actor, reviewer: Actor)
 
 
 def test_backfill_enqueues_existing_projects_once(
-    db_session: Session, member: Actor, reviewer: Actor, admin: Actor
+    db_session: Session, member: Actor, reviewer: Actor, admin: Actor, weave
 ) -> None:
     draft = projects.create_project(db_session, member, title="Draft", write_up="x", budget_requested_cents=5)
-    completed = _approved(db_session, member, reviewer, budget_cents=100_000)
+    completed = _approved(db_session, member, reviewer, budget_cents=100_000, weave=weave)
     _spend(db_session, completed, 40_000)
     projects.start_completion(db_session, member, project=completed)
     projects.submit_completion(db_session, member, project=completed)
-    _approve(db_session, reviewer, completed)
+    _approve(db_session, reviewer, completed, weave=weave)
     pending = _submit(db_session, member, title="Pending")
     live_budget_ids = {row.id for row in _rows(db_session, completed) if row.type.startswith("budget.")}
 

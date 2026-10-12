@@ -329,6 +329,41 @@ def test_get_user_parses_a_directory_record(fake_weave: FakeWeave, live_client: 
     )
 
 
+def test_get_user_reads_the_minor_and_guardian_verified_fields(
+    fake_weave: FakeWeave, live_client: LiveWeaveClient
+) -> None:
+    fake_weave.directory_users["PWLDIR0001"] = {**DIRECTORY_USER, "minor": True, "guardian_verified": False}
+
+    user = live_client.get_user("PWLDIR0001")
+
+    assert user is not None
+    assert user.minor is True
+    assert user.guardian_verified is False
+
+
+def test_a_record_without_the_age_fields_says_nothing_about_age(
+    fake_weave: FakeWeave, live_client: LiveWeaveClient
+) -> None:
+    # Older Weave versions leave both fields out.
+    fake_weave.directory_users["PWLDIR0001"] = DIRECTORY_USER
+
+    user = live_client.get_user("PWLDIR0001")
+
+    assert user is not None
+    assert user.minor is None
+    assert user.guardian_verified is None
+
+
+def test_non_boolean_age_fields_count_as_missing(fake_weave: FakeWeave, live_client: LiveWeaveClient) -> None:
+    fake_weave.directory_users["PWLDIR0001"] = {**DIRECTORY_USER, "minor": "yes", "guardian_verified": 1}
+
+    user = live_client.get_user("PWLDIR0001")
+
+    assert user is not None
+    assert user.minor is None
+    assert user.guardian_verified is None
+
+
 def test_get_user_answers_none_on_404(live_client: LiveWeaveClient) -> None:
     assert live_client.get_user("PWLNOBODY") is None
 

@@ -69,6 +69,9 @@ tests/             mirrors krater/ layout
   of its own app (scope `directory`). Its token for Quilt (scope `quilt`) comes from `WeaveClient.quilt_token`.
 - **Events for Quilt go through the outbox.** A service that changes a project's status, title, ledger or spend
   calls `krater.services.quilt_events.sync_project` in the same transaction. Never post to Quilt from a request.
+- **Every budget grant passes the guardian gate** (`krater.services.guardian.require_team_cleared`): no grant while a
+  team member is `minor` in Weave without `guardian_verified`, or the directory doesn't return them. Weave owns that
+  check; Krater stores no copy, and no admin override bypasses it (`docs/SPEC.md` "Guardian verification").
 - **Every admin override writes an `AuditEvent`** (who, what, reason). Budget changes write a `BudgetEntry` (append-only;
   never update or delete ledger rows).
 - **Stub mode** (`KRATER_WEAVE_MODE=stub`) replaces Weave with a local fixture of fake users for dev and tests. The
