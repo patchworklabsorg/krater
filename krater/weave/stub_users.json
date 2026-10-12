@@ -1,0 +1,74 @@
+[
+  {
+    "sub": "PWLMEMBERONE",
+    "name": "Mia Member",
+    "email": "mia@example.com",
+    "email_verified": true,
+    "slack_id": "U0001MEMBER",
+    "groups": ["ganymede-members"],
+    "roles": ["member"]
+  },
+  {
+    "sub": "PWLMEMBERTWO",
+    "name": "Max Member",
+    "email": "max@example.com",
+    "email_verified": true,
+    "slack_id": null,
+    "groups": ["ganymede-members"],
+    "roles": ["member"]
+  },
+  {
+    "sub": "PWLREVIEWERONE",
+    "name": "Rae Reviewer",
+    "email": "rae@example.com",
+    "email_verified": true,
+    "slack_id": "U0002REVIEW",
+    "groups": ["ganymede-members", "krater-reviewers"],
+    "roles": ["member", "reviewer"]
+  },
+  {
+    "sub": "PWLREVIEWERTWO",
+    "name": "Remy Reviewer",
+    "email": "remy@example.com",
+    "email_verified": true,
+    "slack_id": "U0003REVIEW",
+    "groups": ["ganymede-members", "krater-reviewers"]
+  },
+  {
+    "sub": "PWLADMINONE",
+    "name": "Ana Admin",
+    "email": "ana@example.com",
+    "email_verified": true,
+    "slack_id": "U0004ADMIN",
+    "groups": ["ganymede-members", "krater-reviewers", "krater-admins"],
+    "roles": ["member", "reviewer", "admin"]
+  },
+  {
+    "sub": "PWLNONMEMBER",
+    "name": "Nico Nonmember",
+    "email": "nico@example.com",
+    "email_verified": true,
+    "slack_id": null,
+    "groups": ["ganymede-members"],
+    "roles": []
+  },
+  {
+    "sub": "PWLUNVERIFIED",
+    "name": "Uma Unverified",
+    "email": "uma@example.com",
+    "email_verified": false,
+    "slack_id": null,
+    "groups": [],
+    "roles": ["member"]
+  },
+  {
+    "sub": "PWLSLACKGUEST",
+    "name": "Gus Guest",
+    "email": "gus@example.com",
+    "email_verified": true,
+    "slack_id": "U0005GUEST",
+    "slack_member": false,
+    "groups": ["ganymede-members"],
+    "roles": ["member"]
+  }
+]

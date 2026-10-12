@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% import "_macros.html" as macros %}
+
+{% block content %}
+{% if not signed_in %}
+<section class="card hero">
+  <svg class="brand-mark" width="48" height="48" viewBox="0 0 32 32" aria-hidden="true" focusable="false">
+    <rect class="q1" x="0" y="0" width="15" height="15" rx="3" />
+    <rect class="q2" x="17" y="0" width="15" height="15" rx="3" />
+    <path class="q3" d="M17 3 a3 3 0 0 1 3 -3 H29 a3 3 0 0 1 3 3 V12 Z" />
+    <rect class="q4" x="0" y="17" width="15" height="15" rx="3" />
+    <path class="q2" d="M0 20 a3 3 0 0 1 3 -3 H12 a3 3 0 0 1 3 3 V29 Z" />
+    <rect class="q3" x="17" y="17" width="15" height="15" rx="3" />
+    <rect class="stitch" x="2.5" y="2.5" width="10" height="10" rx="1.5" />
+    <rect class="stitch" x="19.5" y="19.5" width="10" height="10" rx="1.5" />
+  </svg>
+  <p class="eyebrow">Project Ganymede &middot; Patchwork Labs</p>
+  <h1>Krater</h1>
+  <p class="hero__lead">
+    The Project Ganymede portal: proposal review, compute budget allocation, and a public gallery of
+    completed projects.
+  </p>
+  <div class="action-row">
+    <a class="button button--primary" href="/login">Sign in with Weave</a>
+    <a class="button" href="/gallery">Browse the public gallery</a>
+  </div>
+</section>
+
+<ul class="feature-list">
+  <li>
+    <h2>Propose</h2>
+    <p>Write up your project and ask for a compute budget. Estimate it from current GPU prices.</p>
+  </li>
+  <li>
+    <h2>Review</h2>
+    <p>Reviewers approve proposals. Approved projects get a budget ceiling.</p>
+  </li>
+  <li>
+    <h2>Show</h2>
+    <p>Completed projects go into the public gallery, with their write-up, demo and builders.</p>
+  </li>
+</ul>
+{% else %}
+<div class="page-head">
+  <div>
+    <h1>My projects</h1>
+    <p class="page-subtitle">Your proposals and approved projects.</p>
+  </div>
+  <div class="page-actions">
+    <a class="button button--primary" href="/projects/new">New proposal</a>
+  </div>
+</div>
+
+{% if is_reviewer or is_admin %}
+<nav class="stats" aria-label="Shortcuts">
+  {% if is_reviewer %}
+    <a class="stat{% if review_queue_count %} stat--accent{% endif %}" href="/reviews">
+      <span class="stat__label">Reviewer</span>
+      <span class="stat__value">Review queue ({{ review_queue_count }})</span>
+    </a>
+  {% endif %}
+  {% if is_admin %}
+    <a class="stat" href="/admin">
+      <span class="stat__label">Admin</span>
+      <span class="stat__value">All projects</span>
+    </a>
+  {% endif %}
+</nav>
+{% endif %}
+
+{% if my_projects %}
+  <section class="card card--flush" aria-label="My projects">
+    <ul class="project-list">
+      {% for project in my_projects %}
+        <li class="project-list__item">
+          <a class="project-list__title" href="/projects/{{ project.id }}">{{ project.title or "Untitled proposal" }}</a>
+          {{ macros.status_badge(project.status) }}
+        </li>
+      {% endfor %}
+    </ul>
+  </section>
+{% else %}
+  <div class="empty-state">
+    <p class="empty-state__title">You haven't started a proposal yet.</p>
+    <p><a href="/projects/new">Start your first proposal</a> &middot; <a href="/pricing">Check GPU prices</a></p>
+  </div>
+{% endif %}
+{% endif %}
+{% endblock %}

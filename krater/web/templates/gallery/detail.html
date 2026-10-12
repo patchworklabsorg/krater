@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+{% block title %}{{ project.title or "Untitled project" }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <a class="back-link" href="/gallery">&larr; Gallery</a>
+    <h1>{{ project.title or "Untitled project" }}</h1>
+    {% if revision and revision.tags %}
+      <p class="tag-list page-subtitle">
+        {% for tag in revision.tags %}<span class="tag">{{ tag }}</span>{% endfor %}
+      </p>
+    {% endif %}
+  </div>
+  {% if (revision and revision.demo_url) or project.repo_url %}
+    <div class="page-actions">
+      {% if revision and revision.demo_url %}
+        <a class="button button--primary" href="{{ revision.demo_url }}">View demo</a>
+      {% endif %}
+      {% if project.repo_url %}
+        <a class="button" href="{{ project.repo_url }}">View repo</a>
+      {% endif %}
+    </div>
+  {% endif %}
+</div>
+
+{% if screenshot_urls %}
+  <ul class="gallery-screenshots" aria-label="Screenshots">
+    {% for url in screenshot_urls %}
+      <li><img src="{{ url }}" alt="{{ project.title or 'Project' }} screenshot" loading="lazy"></li>
+    {% endfor %}
+  </ul>
+{% endif %}
+
+<div class="layout-split">
+  <section class="card">
+    <h2>Write-up</h2>
+    {% if revision %}
+      <p class="write-up">{{ revision.write_up | nl2br }}</p>
+    {% else %}
+      <p class="muted">No write-up.</p>
+    {% endif %}
+  </section>
+
+  <aside class="stack">
+    <dl class="stats">
+      <div class="stat">
+        <dt>Compute spend</dt>
+        <dd>&asymp; {{ spend_cents | dollars }}</dd>
+      </div>
+    </dl>
+    {% if builders %}
+      <section class="card">
+        <h2>Credited builders</h2>
+        <ul class="link-list">
+          {% for builder in builders %}<li>{{ builder }}</li>{% endfor %}
+        </ul>
+      </section>
+    {% endif %}
+  </aside>
+</div>
+{% endblock %}

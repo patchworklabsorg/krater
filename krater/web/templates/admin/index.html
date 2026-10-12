@@ -1,0 +1,171 @@
+{% extends "base.html" %}
+{% import "_macros.html" as macros %}
+
+{% block title %}Admin{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Admin</h1>
+    <p class="page-subtitle">Every project with its budget, the approval policy, and the delivery of events to Quilt.</p>
+  </div>
+</div>
+
+<dl class="stats stats--compact">
+  {% for status in statuses %}
+    <div class="stat">
+      <dt>{{ status.value.replace('_', ' ') | capitalize }}</dt>
+      <dd>{{ by_status[status] | length }}</dd>
+    </div>
+  {% endfor %}
+</dl>
+
+<section aria-labelledby="all-projects">
+  <div class="section-head">
+    <h2 id="all-projects">All projects</h2>
+  </div>
+  {% set ns = namespace(any=false) %}
+  {% for status in statuses %}{% if by_status[status] %}{% set ns.any = true %}{% endif %}{% endfor %}
+  {% if ns.any %}
+    <div class="table-scroll">
+      <table class="table">
+        <thead>
+          <tr>
+            <th scope="col">Project</th>
+            <th scope="col">Status</th>
+            <th scope="col" class="num">Ceiling</th>
+            <th scope="col" class="num">Spend</th>
+            <th scope="col" class="num">Remaining</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for status in statuses %}
+            {% for summary in by_status[status] %}
+              <tr>
+                <td class="cell-title"><a href="/projects/{{ summary.project.id }}">{{ summary.project.title or "Untitled proposal" }}</a></td>
+                <td>{{ macros.status_badge(status) }}</td>
+                <td class="num">{{ summary.ceiling_cents | dollars }}</td>
+                <td class="num">{{ summary.spend_cents | dollars }}</td>
+                <td class="num">{{ summary.remaining_cents | dollars }}</td>
+              </tr>
+            {% endfor %}
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="empty-state"><p>No projects yet.</p></div>
+  {% endif %}
+</section>
+
+<section class="card" aria-labelledby="approval-policy">
+  <h2 id="approval-policy">Approval policy</h2>
+  {% if policies %}
+    <div class="table-scroll">
+      <table class="table">
+        <thead>
+          <tr>
+            <th scope="col">Stage</th>
+            <th scope="col" class="num">Min budget</th>
+            <th scope="col" class="num">Min approvals</th>
+            <th scope="col">Required group</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for policy in policies %}
+            <tr>
+              <td>{{ policy.stage.value | capitalize }}</td>
+              <td class="num">{{ policy.min_budget_cents | dollars if policy.min_budget_cents is not none else "Any" }}</td>
+              <td class="num">{{ policy.min_approvals }}</td>
+              <td>{{ policy.required_group or "Any reviewer" }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="muted">
+      No custom policies configured. The default applies to every stage: 1 approval, from any reviewer.
+    </p>
+  {% endif %}
+</section>
+
+<section class="card" id="quilt" aria-labelledby="quilt-heading">
+  <div class="card-head">
+    <h2 id="quilt-heading">Delivery to Quilt</h2>
+    {% if quilt.failed %}
+      <span class="badge badge--bad">{{ quilt.failed | length }} refused</span>
+    {% elif quilt.pending_count %}
+      <span class="badge badge--info">{{ quilt.pending_count }} waiting to send</span>
+    {% else %}
+      <span class="badge badge--good">All sent</span>
+    {% endif %}
+  </div>
+  <p class="muted">
+    Krater sends submission and budget events to Quilt. {{ quilt.pending_count }} waiting to send.
+  </p>
+  {% if quilt.failed %}
+    <h3>Refused by Quilt</h3>
+    <p class="muted">
+      Quilt refused these events. Later events of the same project wait until you retry or dismiss the event.
+    </p>
+    <ul class="event-list">
+      {% for row in quilt.failed %}
+        <li>
+          <div class="event-list__head">
+            <span>{{ row.type }}</span>
+            <span class="badge badge--bad">{{ row.last_status or "no answer" }}</span>
+          </div>
+          <dl class="details">
+            <dt>Answer</dt><dd>{{ row.last_status }} {{ row.last_error or "" }}</dd>
+            <dt>Project</dt><dd><a href="/projects/{{ row.external_id }}"><code>{{ row.external_id }}</code></a></dd>
+            <dt>Event</dt><dd><code>{{ row.id }}</code></dd>
+          </dl>
+          <div class="event-list__forms">
+            <form method="post" action="/admin/quilt/{{ row.id }}/retry" class="compact-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <label for="quilt-retry-{{ row.id }}">Reason to retry (required)</label>
+              <input type="text" id="quilt-retry-{{ row.id }}" name="reason">
+              <button type="submit" class="button button--small">Retry</button>
+            </form>
+            <form method="post" action="/admin/quilt/{{ row.id }}/dismiss" class="compact-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <label for="quilt-dismiss-{{ row.id }}">Reason to dismiss (required)</label>
+              <input type="text" id="quilt-dismiss-{{ row.id }}" name="reason">
+              <button type="submit" class="button button--small button--danger">Dismiss</button>
+            </form>
+          </div>
+        </li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+  {% if quilt.retrying %}
+    <h3>Waiting for a retry</h3>
+    <div class="table-scroll">
+      <table class="table">
+        <thead>
+          <tr>
+            <th scope="col">Event</th>
+            <th scope="col">Project</th>
+            <th scope="col" class="num">Attempts</th>
+            <th scope="col">Last answer</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in quilt.retrying %}
+            <tr>
+              <td>{{ row.type }}<span class="cell-sub"><code>{{ row.id }}</code></span></td>
+              <td><a href="/projects/{{ row.external_id }}"><code>{{ row.external_id }}</code></a></td>
+              <td class="num">{{ row.attempts }}</td>
+              <td>{{ row.last_status or "no answer" }} {{ row.last_error or "" }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+  {% if not quilt.failed and not quilt.retrying %}
+    <p class="muted">No refused or retrying events.</p>
+  {% endif %}
+</section>
+{% endblock %}

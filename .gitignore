@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+
+# uv
+# (uv.lock IS committed -- do not ignore it)
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+# Live-Weave e2e fixture (scripts/dev/weave_e2e_setup.py) -- carries a live OAuth client secret
+# and service API key, regenerated on every run. See docs/dev/weave-e2e.md.
+.weave_e2e_fixture.json
+
+# Testing / tooling
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Logs
+*.log
+
+# Database dumps from the db-backup service (docker-compose.yml, --profile backup).
+/backups/

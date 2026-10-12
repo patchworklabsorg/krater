@@ -1,0 +1,18 @@
+# Keep the host's virtualenv out of the build context: `COPY . .` would otherwise merge it into the image's
+# own /app/.venv (on Windows that overwrites its pyvenv.cfg with a C:\ interpreter path).
+.venv/
+venv/
+# Never bake local env files (live secrets) into an image.
+.env
+.env.*
+!.env.example
+.weave_e2e_fixture.json
+.git/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.log
+backups/

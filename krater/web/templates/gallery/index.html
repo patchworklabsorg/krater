@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+
+{% block title %}Gallery{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Gallery</h1>
+    <p class="page-subtitle">Completed Project Ganymede projects.</p>
+  </div>
+</div>
+
+{% if entries %}
+  <ul class="gallery-list">
+    {% for entry in entries %}
+      <li class="gallery-list__item">
+        {% if entry.thumbnail_url %}
+          <img
+            class="gallery-list__thumb"
+            src="{{ entry.thumbnail_url }}"
+            alt="{{ entry.project.title or 'Project' }} screenshot"
+            loading="lazy"
+          >
+        {% else %}
+          <div class="gallery-list__thumb gallery-list__thumb--empty" aria-hidden="true">{{ (entry.project.title or "?")[:1] }}</div>
+        {% endif %}
+        <div class="gallery-list__body">
+          <h2><a href="/gallery/{{ entry.project.id }}">{{ entry.project.title or "Untitled project" }}</a></h2>
+          {% if entry.revision and entry.revision.tags %}
+            <p class="tag-list">
+              {% for tag in entry.revision.tags %}<span class="tag">{{ tag }}</span>{% endfor %}
+            </p>
+          {% endif %}
+          <p class="muted">&asymp; {{ entry.spend_cents | dollars }} estimated compute</p>
+        </div>
+      </li>
+    {% endfor %}
+  </ul>
+{% else %}
+  <div class="empty-state">
+    <p class="empty-state__title">No completed projects yet.</p>
+    <p>Projects show here when their completion is approved.</p>
+  </div>
+{% endif %}
+{% endblock %}
