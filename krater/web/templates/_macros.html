@@ -1,0 +1,7 @@
+{% macro status_badge(status) %}
+<span class="badge badge--{{ status.value }}">{{ status.value.replace('_', ' ') | capitalize }}</span>
+{%- endmacro %}
+
+{% macro decision_badge(decision) %}
+<span class="badge badge--decision-{{ decision.value }}">{{ decision.value | capitalize }}</span>
+{%- endmacro %}

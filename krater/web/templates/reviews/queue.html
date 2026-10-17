@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+
+{% block title %}Review queue{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Review queue</h1>
+    <p class="page-subtitle">Submitted revisions that wait for your decision.</p>
+  </div>
+</div>
+
+{% if queue %}
+  <section class="card card--flush" aria-label="Review queue">
+    <ul class="project-list">
+      {% for revision in queue %}
+        <li class="project-list__item">
+          <div class="project-list__main">
+            <a class="project-list__title" href="/projects/{{ revision.project_id }}">{{ revision.project.title or "Untitled proposal" }}</a>
+            <span class="project-list__meta">
+              {{ revision.kind.value | capitalize }}
+              &middot; {{ revision.budget_requested_cents | dollars }} requested
+              {%- if revision.submitted_at %} &middot; submitted {{ revision.submitted_at.strftime("%Y-%m-%d") }}{% endif %}
+            </span>
+          </div>
+          <a class="button button--small" href="/projects/{{ revision.project_id }}">Review</a>
+        </li>
+      {% endfor %}
+    </ul>
+  </section>
+{% else %}
+  <div class="empty-state">
+    <p class="empty-state__title">Nothing waiting on your review.</p>
+    <p>New submissions show here.</p>
+  </div>
+{% endif %}
+{% endblock %}

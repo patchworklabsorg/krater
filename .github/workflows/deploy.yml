@@ -1,0 +1,40 @@
+name: Deploy
+
+# Deploys a commit of this repo to alastor. There's no registry image: the NixOS module
+# (patchworklabsorg/infra, modules/krater) builds the image on alastor from the commit written to
+# /var/lib/krater/source-rev. This workflow writes that file, builds while the running site keeps
+# serving, then restarts krater-web, which migrates and starts; krater-worker follows it. Manual only,
+# like Weave's production deploys. See docs/dev/production.md.
+#
+# Required repository secrets:
+#   ALASTOR_HOST           - alastor's SSH host / IP
+#   KRATER_DEPLOY_SSH_KEY  - private key for the krater-deploy user on alastor (its public key goes in
+#                            the infra repo's hosts/alastor/krater.nix, deployAuthorizedKeys)
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-krater
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Deploy ${{ github.sha }}
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.ALASTOR_HOST }}
+          username: krater-deploy
+          key: ${{ secrets.KRATER_DEPLOY_SSH_KEY }}
+          # The first build of the Python dependencies takes several minutes on alastor.
+          command_timeout: 50m
+          script: |
+            set -e
+            echo "${{ github.sha }}" > /var/lib/krater/source-rev
+            sudo systemctl start krater-build
+            sudo systemctl restart krater-web
+            systemctl is-active krater-web krater-worker

@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+
+{% block title %}GPU price history{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <a class="back-link" href="/pricing">&larr; GPU pricing</a>
+    <h1>GPU price history</h1>
+    <p class="page-subtitle">
+      What a 1-GPU machine with {{ disk_gb }} GB of disk costs per hour on Vast, sampled by Krater every hour. Pick a
+      job's target from the line: a target at the cheapest price waits for the dips; one inside the band starts sooner.
+    </p>
+  </div>
+</div>
+
+<section class="card">
+  <form method="get" action="/pricing/history" class="filter-bar" data-role="pricing-filter-form">
+    <div class="field">
+      <label for="history-gpu">GPU</label>
+      <select id="history-gpu" name="gpu" data-role="auto-submit">
+        {% for name in gpus %}<option value="{{ name }}" {% if name == gpu %}selected{% endif %}>{{ name }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label for="history-rental">Rental</label>
+      <select id="history-rental" name="rental" data-role="auto-submit">
+        <option value="bid" {% if rental == "bid" %}selected{% endif %}>Interruptible (bid)</option>
+        <option value="ondemand" {% if rental == "ondemand" %}selected{% endif %}>On demand</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="history-days">Period</label>
+      <select id="history-days" name="days" data-role="auto-submit">
+        {% for d in (1, 7, 30) %}<option value="{{ d }}" {% if d == days %}selected{% endif %}>Last {{ d }} day{{ "s" if d > 1 }}</option>{% endfor %}
+      </select>
+    </div>
+    <noscript><button type="submit" class="button">Show</button></noscript>
+  </form>
+
+  {% if chart %}
+    <figure class="chart-figure">
+      <ul class="chart-legend">
+        <li><span class="chart-key chart-key--line" aria-hidden="true"></span> Cheapest offer</li>
+        <li><span class="chart-key chart-key--band" aria-hidden="true"></span> Typical range (10th to 50th percentile of offers)</li>
+      </ul>
+      <div class="chart-wrap" data-role="price-chart">
+        {{ chart | safe }}
+        <div class="chart-tooltip" hidden></div>
+      </div>
+    </figure>
+    <details>
+      <summary>Show as a table</summary>
+      <div class="table-scroll">
+        <table class="table">
+          <thead>
+            <tr>
+              <th scope="col">Sampled</th>
+              <th scope="col" class="num">Cheapest</th>
+              <th scope="col" class="num">10th percentile</th>
+              <th scope="col" class="num">Median</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for p in points | reverse %}
+              <tr>
+                <td class="nowrap">{{ p.at.strftime("%Y-%m-%d %H:%M UTC") }}</td>
+                <td class="num">{{ p.min_microusd | rate }}</td>
+                <td class="num">{{ p.p10_microusd | rate }}</td>
+                <td class="num">{{ p.median_microusd | rate }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </details>
+  {% else %}
+    <div class="empty-state">
+      <p class="empty-state__title">Not enough samples for {{ gpu }} yet.</p>
+      <p>Krater samples Vast every hour while compute is on.</p>
+    </div>
+  {% endif %}
+</section>
+{% endblock %}
+
+{% block scripts %}
+  <script src="/static/js/pricing-filters.js" defer></script>
+  <script src="/static/js/price-chart.js" defer></script>
+{% endblock %}

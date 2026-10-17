@@ -1,0 +1,184 @@
+{% extends "base.html" %}
+
+{% block title %}New job: {{ project.title or "Untitled proposal" }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <a class="back-link" href="/projects/{{ project.id }}/compute">&larr; Compute for {{ project.title or "this project" }}</a>
+    <h1>New job or box</h1>
+    <p class="page-subtitle">
+      Prices are the full hourly cost: the GPU plus your disk. This project's cap is {{ cap_cents | dollars }}/h.
+      Interruptible machines are much cheaper but can pause when outbid; save checkpoints to
+      <code>$KRATER_CHECKPOINT_DIR</code> and resume from them when <code>$KRATER_RESUMED</code> is 1.
+    </p>
+  </div>
+</div>
+
+<section class="card form-card">
+  <form method="post" action="/projects/{{ project.id }}/compute" class="form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+    <fieldset class="form-fieldset">
+      <legend>What to run</legend>
+      <div class="field">
+        <label for="job-name">Name</label>
+        <input type="text" id="job-name" name="name" maxlength="200" value="{{ posted.name or '' }}">
+        {% if errors.name %}<p class="field-error">{{ errors.name }}</p>{% endif %}
+      </div>
+      <div class="field">
+        <span class="field-label">Kind</span>
+        <div class="choice-list choice-list--stacked">
+          <label><input type="radio" name="kind" value="job" {% if posted.kind != "box" %}checked{% endif %}> Job: runs a command, then the machine is destroyed</label>
+          <label><input type="radio" name="kind" value="box" {% if posted.kind == "box" %}checked{% endif %}> Box: a workspace you SSH into, stopped when idle</label>
+        </div>
+        <p class="field-hint">A box needs one of your <a href="/account/ssh-keys">SSH keys</a>.</p>
+      </div>
+      <div class="field">
+        <label for="job-image">Container image</label>
+        <input type="text" id="job-image" name="image" placeholder="ghcr.io/you/train:v1" value="{{ posted.image or '' }}">
+        <p class="field-hint">It needs a POSIX shell and one of curl, wget or Python. Its own entrypoint isn't run.</p>
+        {% if errors.image %}<p class="field-error">{{ errors.image }}</p>{% endif %}
+      </div>
+      <div class="field">
+        <label for="job-command">Command (jobs)</label>
+        <textarea id="job-command" name="command" rows="3" placeholder="python train.py">{{ posted.command or '' }}</textarea>
+        <p class="field-hint">What it prints shows on the job's page; files in <code>$KRATER_OUTPUT_DIR</code> can be downloaded there.</p>
+        {% if errors.command %}<p class="field-error">{{ errors.command }}</p>{% endif %}
+      </div>
+    </fieldset>
+
+    <fieldset class="form-fieldset">
+      <legend>Machine</legend>
+      <div class="field">
+        <span class="field-label">GPU models</span>
+        <div class="choice-list">
+          {% for name in gpus %}
+            <label><input type="checkbox" name="gpu" value="{{ name }}" {% if name in (posted.gpu or []) %}checked{% endif %}> {{ name }}</label>
+          {% endfor %}
+        </div>
+        {% if errors.gpu_names %}<p class="field-error">{{ errors.gpu_names }}</p>{% endif %}
+      </div>
+      <div class="form-grid">
+        <div class="field">
+          <label for="job-vram">Or any GPU with at least (GB of memory)</label>
+          <input type="text" inputmode="numeric" id="job-vram" name="min_vram" value="{{ posted.min_vram or '' }}">
+          {% if errors.min_gpu_ram_gb %}<p class="field-error">{{ errors.min_gpu_ram_gb }}</p>{% endif %}
+        </div>
+        <div class="field">
+          <label for="job-gpus">GPUs</label>
+          <input type="text" inputmode="numeric" id="job-gpus" name="num_gpus" value="{{ posted.num_gpus or '1' }}">
+          {% if errors.num_gpus %}<p class="field-error">{{ errors.num_gpus }}</p>{% endif %}
+        </div>
+        <div class="field">
+          <label for="job-disk">Disk (GB)</label>
+          <input type="text" inputmode="numeric" id="job-disk" name="disk_gb" value="{{ posted.disk_gb or '32' }}">
+          {% if errors.disk_gb %}<p class="field-error">{{ errors.disk_gb }}</p>{% endif %}
+        </div>
+      </div>
+    </fieldset>
+
+    <fieldset class="form-fieldset">
+      <legend>Price</legend>
+      {% set limit_order = posted.order == "limit" or not posted %}
+      <div class="field">
+        <span class="field-label">Order</span>
+        <div class="choice-list choice-list--stacked">
+          <label><input type="radio" name="order" value="limit" data-role="order-choice" {% if limit_order %}checked{% endif %}> Limit order: one price. It starts at or under it, never pays more, and if it's outbid it keeps its machine (and what's on its disk) until it wins again, moving only when another machine is free under the limit.</label>
+          <label><input type="radio" name="order" value="range" data-role="order-choice" {% if not limit_order %}checked{% endif %}> Target and max: it starts at or under the target; if it's outbid, Krater raises the bid up to the max, then moves it elsewhere after a while.</label>
+        </div>
+        {% if errors.on_outbid %}<p class="field-error">{{ errors.on_outbid }}</p>{% endif %}
+      </div>
+      <div class="field" data-order="limit">
+        <label for="job-limit">Limit (USD per hour)</label>
+        <input type="text" inputmode="decimal" id="job-limit" name="limit" placeholder="0.12" value="{{ posted.limit or '' }}">
+        <p class="field-hint">Interruptible machines pay their bid: Krater bids just enough to win, up to your limit.</p>
+        {% if errors.limit %}<p class="field-error">{{ errors.limit }}</p>{% endif %}
+      </div>
+      <div class="form-grid" data-order="range">
+        <div class="field">
+          <label for="job-target">Start at or under (USD per hour)</label>
+          <input type="text" inputmode="decimal" id="job-target" name="target" placeholder="0.12" value="{{ posted.target or '' }}">
+          {% if errors.target %}<p class="field-error">{{ errors.target }}</p>{% endif %}
+        </div>
+        <div class="field">
+          <label for="job-max">Never pay more than (USD per hour)</label>
+          <input type="text" inputmode="decimal" id="job-max" name="max" placeholder="0.25" value="{{ posted.max or '' }}">
+          {% if errors.max %}<p class="field-error">{{ errors.max }}</p>{% endif %}
+        </div>
+      </div>
+      <div class="field">
+        <label class="choice"><input type="checkbox" name="interruptible" {% if not posted or posted.interruptible %}checked{% endif %}> Interruptible (bid; cheaper, can pause)</label>
+      </div>
+      <div class="form-grid">
+        <div class="field">
+          <label for="job-wait">Wait at most (minutes)</label>
+          <input type="text" inputmode="numeric" id="job-wait" name="max_wait_minutes" value="{{ posted.max_wait_minutes or '720' }}">
+          {% if errors.max_wait_minutes %}<p class="field-error">{{ errors.max_wait_minutes }}</p>{% endif %}
+        </div>
+        <div class="field">
+          <label for="job-escalation">Then</label>
+          <select id="job-escalation" name="on_max_wait">
+            {% for value, label in escalations.items() %}
+              <option value="{{ value.value }}" {% if posted.on_max_wait == value.value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label for="job-runtime">Stop after (minutes of running)</label>
+          <input type="text" inputmode="numeric" id="job-runtime" name="max_runtime_minutes" value="{{ posted.max_runtime_minutes or '480' }}">
+          {% if errors.max_runtime_minutes %}<p class="field-error">{{ errors.max_runtime_minutes }}</p>{% endif %}
+        </div>
+      </div>
+    </fieldset>
+
+    <div class="form-actions">
+      <button type="submit" class="button button--primary">Queue it</button>
+      <p class="muted">It starts when an offer at or under your price appears.</p>
+    </div>
+  </form>
+</section>
+
+<section class="card">
+  <div class="card-head">
+    <h2>Prices right now</h2>
+    <a class="muted" href="/pricing/history">Price history</a>
+  </div>
+  {% if latest %}
+    <p class="muted">
+      Full hourly cost of 1-GPU offers{% if latest[0].sampled_at %}, as Krater sampled them at
+      {{ latest[0].sampled_at.strftime("%Y-%m-%d %H:%M UTC") }}{% endif %}.
+    </p>
+    <div class="table-scroll">
+      <table class="table">
+        <thead>
+          <tr>
+            <th scope="col">GPU</th>
+            <th scope="col">Rental</th>
+            <th scope="col" class="num">Cheapest</th>
+            <th scope="col" class="num">Typical (10th to 50th percentile)</th>
+            <th scope="col" class="num">Offers</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for sample in latest %}
+            <tr>
+              <td class="nowrap"><a href="/pricing/history?gpu={{ sample.gpu_name | urlencode }}&rental={{ sample.rental_type }}">{{ sample.gpu_name }}</a></td>
+              <td>{{ "interruptible" if sample.rental_type == "bid" else "on demand" }}</td>
+              <td class="num">{{ sample.min_microusd | rate if sample.min_microusd is not none else "none" }}</td>
+              <td class="num">{% if sample.p10_microusd is not none %}{{ sample.p10_microusd | rate }} to {{ sample.median_microusd | rate }}{% endif %}</td>
+              <td class="num">{{ sample.offer_count }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="muted">No prices sampled yet.</p>
+  {% endif %}
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/compute-form.js"></script>
+{% endblock %}

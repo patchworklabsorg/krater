@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% import "projects/_application.html" as application with context %}
+
+{% block title %}New proposal{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <a class="back-link" href="/">&larr; My projects</a>
+    <h1>New proposal</h1>
+    <p class="page-subtitle">
+      Tell reviewers about you and your project, and what compute it needs. It stays a draft until you submit it, so
+      you can save and come back.
+    </p>
+  </div>
+</div>
+
+<section class="card form-card">
+  <form method="post" action="/projects/new" class="form" novalidate>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {{ application.application_fields(values, errors, summaries, gpu_options, applicant, word_limits, summary_max, other_gpu) }}
+    <div class="form-actions">
+      <button type="submit" name="form_action" value="save" class="button button--primary">Save draft</button>
+      <p class="muted">Nothing is checked until you submit.</p>
+    </div>
+  </form>
+</section>
+{% endblock %}
+
+{% block scripts %}
+  <script src="/static/js/budget-estimator.js" defer></script>
+  <script src="/static/js/application-form.js" defer></script>
+{% endblock %}

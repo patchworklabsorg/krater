@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+
+{% block title %}Compute settings{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <a class="back-link" href="/admin">&larr; Admin</a>
+    <h1>Compute settings</h1>
+    <p class="page-subtitle">
+      The defaults every project's machines follow. An admin can override any of them for one project from that
+      project's compute settings. Members choose their own target and max prices, within their project's hourly cap.
+    </p>
+  </div>
+</div>
+
+<section class="card" id="search-quota">
+  <h2>Vast search quota</h2>
+  {% if quota %}
+    {% set row = quota.row %}
+    {% if quota.reset_passed %}
+      <p>The quota reset at {{ row.reset_at.strftime("%H:%M UTC") }}. Fresh numbers come with the worker's next search.</p>
+    {% else %}
+      <p>
+        <strong>{{ "{:,}".format(row.remaining_rows) }} of {{ "{:,}".format(row.limit_rows) }}</strong> search rows left
+        today, as of {{ row.observed_at.strftime("%H:%M UTC") }}. It resets at {{ row.reset_at.strftime("%H:%M UTC") }}.
+      </p>
+      {% if quota.exhausted %}
+        <p class="budget-banner" role="status">Used up: Krater can't find offers, so no job or box can start until the reset.</p>
+      {% elif quota.low %}
+        <p class="budget-banner budget-banner--warn" role="status">Under a quarter left: Krater searches for each waiting job at most every 15 minutes.</p>
+      {% endif %}
+    {% endif %}
+  {% else %}
+    <p class="muted">The worker hasn't searched Vast yet.</p>
+  {% endif %}
+  <p class="muted">
+    Vast counts offer-search rows against a daily quota per account. Krater backs off searches that find nothing,
+    and price history stops at half the quota, so starting jobs gets the rest.
+  </p>
+</section>
+
+<section class="card form-card">
+  <h2>Defaults</h2>
+  <form method="post" action="/admin/compute" class="form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="form-grid">
+      {% for row in rows %}
+        <div class="field">
+          <label for="compute-{{ row.field.name }}">{{ row.field.label }}{% if row.field.unit %} ({{ row.field.unit }}){% endif %}</label>
+          <input type="text" inputmode="decimal" id="compute-{{ row.field.name }}" name="{{ row.field.name }}" value="{{ row.value }}">
+          <p class="field-hint">{{ row.field.help }}</p>
+          {% if errors[row.field.name] %}<p class="field-error">{{ errors[row.field.name] }}</p>{% endif %}
+        </div>
+      {% endfor %}
+    </div>
+    <div class="field">
+      <label for="compute-reason">Reason (required)</label>
+      <textarea id="compute-reason" name="reason" rows="2">{{ reason }}</textarea>
+      {% if errors.reason %}<p class="field-error">{{ errors.reason }}</p>{% endif %}
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="button button--primary">Save defaults</button>
+    </div>
+  </form>
+</section>
+
+<section aria-labelledby="overrides">
+  <div class="section-head">
+    <h2 id="overrides">Projects with their own settings</h2>
+  </div>
+  {% if overrides %}
+    <div class="table-scroll">
+      <table class="table">
+        <thead>
+          <tr>
+            <th scope="col">Project</th>
+            <th scope="col">Overrides</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in overrides %}
+            <tr>
+              <td class="cell-title"><a href="/admin/compute/projects/{{ item.project.id }}">{{ item.project.title or "Untitled proposal" }}</a></td>
+              <td>
+                {% for field, value in item.fields %}
+                  {{ field.label }}: {{ value }}{% if field.unit %} {{ field.unit }}{% endif %}{% if not loop.last %}<br>{% endif %}
+                {% endfor %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="muted">Every project follows the defaults.</p>
+  {% endif %}
+</section>
+
+<section aria-labelledby="mismatches">
+  <div class="section-head">
+    <h2 id="mismatches">Spend checks that didn't match</h2>
+    <p>
+      Every hour Krater compares its spend estimate with what Vast charged. These differed by more than the
+      reconciliation alert threshold. Krater now uses Vast's figure.
+    </p>
+  </div>
+  {% if mismatches %}
+    <div class="table-scroll">
+      <table class="table">
+        <thead>
+          <tr>
+            <th scope="col">Checked</th>
+            <th scope="col">Project</th>
+            <th scope="col" class="num">Krater's estimate</th>
+            <th scope="col" class="num">Vast charged</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for check, project in mismatches %}
+            <tr>
+              <td class="nowrap">{{ check.checked_at.strftime("%Y-%m-%d %H:%M UTC") }}</td>
+              <td><a href="/projects/{{ project.id }}">{{ project.title or "Untitled proposal" }}</a></td>
+              <td class="num">${{ "%.4f" | format(check.estimate_microusd / 1000000) }}</td>
+              <td class="num">${{ "%.4f" | format(check.actual_microusd / 1000000) }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="muted">None.</p>
+  {% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+
+{% block title %}Compute: {{ project.title or "Untitled proposal" }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <a class="back-link" href="/projects/{{ project.id }}">&larr; {{ project.title or "Untitled proposal" }}</a>
+    <h1>Compute</h1>
+    <p class="page-subtitle">
+      Jobs wait until a machine at or under their price is free, then run on it. Boxes keep a workspace open for SSH
+      and stop on their own when idle. <a href="/pricing/history">GPU price history</a> helps pick a price.
+    </p>
+  </div>
+  {% if can_launch %}
+    <div class="page-actions">
+      <a class="button button--primary" href="/projects/{{ project.id }}/compute/new">New job or box</a>
+    </div>
+  {% endif %}
+</div>
+
+<section aria-labelledby="jobs">
+  <div class="section-head">
+    <h2 id="jobs">Jobs and boxes</h2>
+  </div>
+  {% if jobs %}
+    <div class="table-scroll">
+      <table class="table">
+        <thead>
+          <tr>
+            <th scope="col">Name</th>
+            <th scope="col">State</th>
+            <th scope="col" class="num">Price</th>
+            <th scope="col" class="num">Spent</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for job in jobs %}
+            <tr>
+              <td class="cell-title">
+                <a href="/projects/{{ project.id }}/compute/{{ job.id }}">{{ job.name }}</a>
+                <span class="cell-sub">{{ "Box" if job.kind.value == "box" else "Job" }}</span>
+              </td>
+              <td>
+                <span class="badge badge--compute-{{ job.state.value }}">{{ job.state.value }}</span>
+                {% if job.state_reason %}<span class="cell-sub">{{ job.state_reason }}</span>{% endif %}
+              </td>
+              <td class="num">
+                {% if job.is_limit_order %}limit {{ job.max_microusd | rate }}{% else %}{{ job.target_microusd | rate }} / {{ job.max_microusd | rate }}{% endif %}
+              </td>
+              <td class="num">{{ job.spend_cents | dollars }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="empty-state">
+      <p class="empty-state__title">No jobs yet.</p>
+      {% if can_launch %}<p>Queue one with <strong>New job or box</strong>, or from a terminal with <code>krater submit</code>.</p>{% endif %}
+    </div>
+  {% endif %}
+</section>
+
+<section class="card" id="secrets">
+  <div class="card-head">
+    <h2>Secrets</h2>
+    <span class="muted">Up to {{ max_secrets }}</span>
+  </div>
+  <p class="muted">
+    Values your jobs and boxes need, such as a Hugging Face token, as environment variables. Krater stores them
+    encrypted and hands them to each machine when it starts; nobody can read a value back here. The machine's host can
+    still see them, so use tokens you can limit and revoke.
+  </p>
+  {% if secrets %}
+    <div class="table-scroll">
+      <table class="table">
+        <thead>
+          <tr>
+            <th scope="col">Name</th>
+            <th scope="col">Updated</th>
+            {% if can_manage_secrets %}<th scope="col"><span class="visually-hidden">Delete</span></th>{% endif %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for secret in secrets %}
+            <tr>
+              <td><code>{{ secret.name }}</code></td>
+              <td class="nowrap">{{ secret.updated_at.strftime("%Y-%m-%d %H:%M") }} UTC</td>
+              {% if can_manage_secrets %}
+                <td class="num">
+                  <form method="post" action="/projects/{{ project.id }}/compute/secrets/{{ secret.name }}/delete">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit" class="button button--small">Delete</button>
+                  </form>
+                </td>
+              {% endif %}
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="muted">No secrets yet.</p>
+  {% endif %}
+
+  {% if can_manage_secrets %}
+    {% if secrets_enabled %}
+      <form method="post" action="/projects/{{ project.id }}/compute/secrets" class="form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="field">
+          <label for="secret-name">Name</label>
+          <input type="text" id="secret-name" name="name" maxlength="64" placeholder="HF_TOKEN" autocomplete="off"
+                 value="{{ posted.name or '' }}">
+          <p class="field-hint">Capital letters, digits and underscores. Saving an existing name replaces its value.</p>
+          {% if errors.name %}<p class="field-error">{{ errors.name }}</p>{% endif %}
+        </div>
+        <div class="field">
+          <label for="secret-value">Value</label>
+          <input type="password" id="secret-value" name="value" autocomplete="off">
+          {% if errors.value %}<p class="field-error">{{ errors.value }}</p>{% endif %}
+        </div>
+        <button type="submit" class="button button--primary">Save secret</button>
+      </form>
+    {% else %}
+      <p class="muted">Secrets aren't set up on this Krater yet: an admin needs to add an encryption key.</p>
+    {% endif %}
+  {% endif %}
+</section>
+{% endblock %}

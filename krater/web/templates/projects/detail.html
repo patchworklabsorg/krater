@@ -1,0 +1,438 @@
+{% extends "base.html" %}
+{% import "_macros.html" as macros %}
+
+{% block title %}{{ project.title or "Untitled proposal" }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <a class="back-link" href="/">&larr; My projects</a>
+    <h1>{{ project.title or "Untitled proposal" }} {{ macros.status_badge(project.status) }}</h1>
+    {% if project.repo_url %}
+      <p class="page-subtitle project-link"><a href="{{ project.repo_url }}">{{ project.repo_url }}</a></p>
+    {% endif %}
+  </div>
+  {% if compute_on %}
+    <div class="page-actions">
+      <a class="button button--primary" href="/projects/{{ project.id }}/compute">Compute</a>
+    </div>
+  {% endif %}
+</div>
+
+<dl class="stats">
+  <div class="stat stat--accent"><dt>Ceiling</dt><dd>{{ summary.ceiling_cents | dollars }}</dd></div>
+  <div class="stat"><dt>Estimated spend</dt><dd>{{ summary.spend_cents | dollars }}</dd></div>
+  <div class="stat{% if summary.remaining_cents < 0 %} stat--bad{% endif %}"><dt>Remaining</dt><dd>{{ summary.remaining_cents | dollars }}</dd></div>
+</dl>
+
+{% if budget_flag == "teardown" %}
+  <p class="budget-banner" role="status">
+    Budget reached: this project's machines have been torn down. New launches are blocked until the ceiling is
+    raised.
+  </p>
+{% elif budget_flag == "warning" %}
+  <p class="budget-banner budget-banner--warn" role="status">
+    Warning: this project is approaching its compute budget ceiling.
+  </p>
+{% endif %}
+
+{% if guardian_pending %}
+  <div class="guardian-banner" role="status">
+    <p><strong>Krater can't grant budget to this project yet.</strong> These team members must be cleared in
+      Weave first:</p>
+    <ul>
+      {% for member in guardian_pending %}
+        <li>{{ member.label }}: {{ member.reason }}</li>
+      {% endfor %}
+    </ul>
+    <p>For a member under 18, a Weave admin records the signed guardian form and the call or video check on the
+      member's Weave admin page. A member who is not available in Weave needs their access to Krater back in Weave.
+      Then a reviewer or admin can approve again.</p>
+  </div>
+{% elif guardian_pending is none %}
+  <p class="guardian-banner">Krater couldn't reach Weave to check whether a team member needs a verified guardian.
+    Krater checks again before it grants budget.</p>
+{% endif %}
+
+<div class="layout-split">
+<div class="stack">
+<section class="card">
+  {% if summary.policy_explanation %}
+    <p class="policy-note">{{ summary.policy_explanation }}</p>
+  {% endif %}
+
+  {% if compute_on %}
+    <p class="compute-hint">
+      <a href="/projects/{{ project.id }}/compute">Compute</a>: run jobs and SSH boxes on this project's budget.
+      Each machine is capped at {{ hourly_cap_cents | dollars }}/hour.
+    </p>
+  {% elif show_compute_off_notice %}
+    <p class="compute-hint">
+      Launching machines from Krater isn't open yet.
+    </p>
+  {% endif %}
+
+  {% set current = summary.current_revision %}
+  {# A completion revision carries the final write-up; the application it reports on is the approved one. #}
+  {% set rev = project.approved_revision if current and current.kind.value == "completion" else current %}
+  {% if current and current.kind.value == "completion" %}
+    <h2>{{ "Final write-up (draft)" if not current.submitted_at else "Final write-up" }}</h2>
+    <p class="write-up">{{ current.write_up | nl2br }}</p>
+    {% if current.demo_url %}<p><a href="{{ current.demo_url }}">Demo</a></p>{% endif %}
+  {% endif %}
+  {% if rev %}
+    <h2>{{ "Draft application" if not rev.submitted_at else ("Approved application" if rev.outcome.value == "approved" else "Application") }}</h2>
+      <div class="answers">
+        {% if rev.summary %}<p class="answer-summary">{{ rev.summary }}</p>{% endif %}
+        <div>
+          <h3>Who they are and their experience</h3>
+          <p class="write-up">{{ rev.experience | nl2br if rev.experience else "Not answered yet." }}</p>
+        </div>
+        <div>
+          <h3>The project: what it is, what it builds on, why it matters</h3>
+          <p class="write-up">{{ rev.write_up | nl2br if rev.write_up else "Not answered yet." }}</p>
+        </div>
+        <div>
+          <h3>Contest or professor</h3>
+          <p>
+            {%- if rev.affiliation == "none" %}Neither
+            {%- else %}{{ {"contest": "A contest", "professor": "A professor", "both": "A contest and a professor"}[rev.affiliation] }}: {{ rev.affiliation_detail }}
+            {%- endif -%}
+          </p>
+        </div>
+        <div>
+          <h3>How they'll use the compute</h3>
+          <p class="write-up">{{ rev.compute_use | nl2br if rev.compute_use else "Not answered yet." }}</p>
+        </div>
+        <div>
+          <h3>{{ "What they need now" if rev.kind.value == "amendment" else "Proof of concept (what approval funds)" }}</h3>
+          <p>
+            <strong>{{ rev.budget_requested_cents | dollars }}</strong>
+            {%- if rev.kind.value == "amendment" %} new total requested
+              {%- if rev is sameas current and amendment_adds_cents is not none %} ({{ "adds" if amendment_adds_cents >= 0 else "cuts" }} {{ amendment_adds_cents | abs | dollars }} to the {{ summary.ceiling_cents | dollars }} approved now){% endif %}.
+            {%- else %} requested.{% endif %}
+            {% if rev.budget_estimate %}<br><span class="muted">Estimate: {{ rev.budget_estimate | estimate_summary }}</span>{% endif %}
+          </p>
+          {% if estimate_mismatch_by_revision.get(rev.id) %}
+            <p class="field-error">The requested amount differs a lot from the estimate.</p>
+          {% endif %}
+        </div>
+        <div>
+          <h3>Finished product (information only)</h3>
+          <p>
+            {% if rev.full_budget_cents %}<strong>{{ rev.full_budget_cents | dollars }}</strong>, roughly.{% else %}Not answered yet.{% endif %}
+            {% if rev.full_budget_estimate %}<br><span class="muted">Estimate: {{ rev.full_budget_estimate | estimate_summary }}</span>{% endif %}
+          </p>
+        </div>
+      </div>
+  {% else %}
+    <p class="muted">No application yet.</p>
+  {% endif %}
+</section>
+
+{% if screenshots %}
+<section class="card">
+  <h2>Screenshots</h2>
+  <ul class="gallery-screenshots">
+    {% for shot in screenshots %}
+      <li><img src="{{ shot.url }}" alt="{{ project.title or 'Project' }} screenshot" loading="lazy"></li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>Revision history</h2>
+  {% for revision in revisions %}
+    <article class="revision">
+      <div class="revision__head">
+        <h3>Revision {{ revision.number }} &middot; {{ revision.kind.value | capitalize }}</h3>
+        {% if revision.submitted_at %}
+          <span class="badge badge--outcome-{{ revision.outcome.value }}">{{ revision.outcome.value | capitalize }}</span>
+        {% else %}
+          <span class="badge badge--draft">Draft</span>
+        {% endif %}
+      </div>
+      <p class="muted">
+        {% if revision.submitted_at %}Submitted {{ revision.submitted_at.strftime("%Y-%m-%d %H:%M UTC") }}{% else %}Draft, not yet submitted{% endif %}
+        &middot; Budget requested: {{ revision.budget_requested_cents | dollars }}
+      </p>
+      {% if revision.budget_estimate %}
+        <p class="muted">
+          Estimate: {{ revision.budget_estimate | estimate_summary }}
+          {%- if estimate_mismatch_by_revision.get(revision.id) %}
+            &mdash; <strong class="field-error">requested budget differs a lot from this estimate</strong>
+          {%- endif %}
+        </p>
+      {% endif %}
+      {% if revision.reviews %}
+        <ul class="review-list">
+          {% for review in revision.reviews %}
+            <li>
+              <strong>{{ names_by_id.get(review.reviewer_id, "Unknown reviewer") }}</strong>
+              {{ macros.decision_badge(review.decision) }}
+              {% if review.reason %}<span class="muted"> &mdash; {{ review.reason }}</span>{% endif %}
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="muted">No reviews yet.</p>
+      {% endif %}
+    </article>
+  {% endfor %}
+</section>
+</div>
+
+<aside class="stack" aria-label="Actions">
+{% if my_invitation %}
+<section class="card">
+  <h2>You're invited</h2>
+  <p>Join this project's team to work on it with them. Until you join, you can only read it.</p>
+  <div class="action-row">
+    <form method="post" action="/projects/{{ project.id }}/team/{{ my_invitation.id }}/accept" class="form--inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="button button--primary">Join the team</button>
+    </form>
+    <form method="post" action="/projects/{{ project.id }}/team/{{ my_invitation.id }}/decline" class="form--inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="button">Decline</button>
+    </form>
+  </div>
+</section>
+{% endif %}
+
+<section class="card" id="team">
+  <h2>Team</h2>
+  <ul class="team-list">
+    {% for person in team %}
+      <li class="team-list__item">
+        <span class="team-list__name">
+          {{ person.name }}
+          <span class="cell-sub"><code>{{ person.sub }}</code>
+            {%- if person.lead %} &middot; Lead{% elif not person.accepted %} &middot; Invited{% endif %}</span>
+        </span>
+        {% if person.can_remove %}
+          <form method="post" action="/projects/{{ project.id }}/team/{{ person.id }}/remove" class="form--inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="button button--small">
+              {%- if person.is_me %}Leave{% elif person.accepted %}Remove{% else %}Cancel invitation{% endif -%}
+            </button>
+          </form>
+        {% endif %}
+      </li>
+    {% endfor %}
+  </ul>
+  {% if can_invite %}
+    <form method="post" action="/projects/{{ project.id }}/team" class="form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="field">
+        <label for="team-member">Add a teammate</label>
+        <input type="text" id="team-member" name="member" value="{{ posted.member if error_form == 'team' else '' }}"
+               placeholder="Patchwork ID or email" autocomplete="off"{% if errors.member %} aria-invalid="true"{% endif %}>
+        <p class="field-hint">They need a Patchwork account with Ganymede access. They join once they accept.</p>
+        {% if errors.member %}<p class="field-error">{{ errors.member }}</p>{% endif %}
+      </div>
+      <button type="submit" class="button">Invite</button>
+    </form>
+  {% endif %}
+</section>
+
+{% if is_team and (can_edit_draft or can_submit or can_submit_completion or can_start_amendment or can_start_completion or can_withdraw) %}
+<section class="card">
+  <h2>Your actions</h2>
+  <div class="action-row">
+    {% if can_edit_draft %}
+      <a class="button" href="/projects/{{ project.id }}/edit">Edit draft</a>
+    {% endif %}
+    {% if can_submit %}
+      <form method="post" action="/projects/{{ project.id }}/submit" class="form--inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="button button--primary">Submit for review</button>
+      </form>
+    {% endif %}
+    {% if can_submit_completion %}
+      <form method="post" action="/projects/{{ project.id }}/submit-completion" class="form--inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="button button--primary">Submit completion for review</button>
+      </form>
+    {% endif %}
+    {% if can_start_amendment %}
+      <form method="post" action="/projects/{{ project.id }}/amend" class="form--inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="button">Start amendment</button>
+      </form>
+    {% endif %}
+    {% if can_start_completion %}
+      <form method="post" action="/projects/{{ project.id }}/complete" class="form--inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="button">Start completion</button>
+      </form>
+    {% endif %}
+  </div>
+  {% if can_withdraw %}
+    <form method="post" action="/projects/{{ project.id }}/withdraw" class="form--inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="button button--danger button--small">Withdraw project</button>
+    </form>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if can_review %}
+<section class="card">
+  <h2>Review this proposal</h2>
+  <div class="action-row">
+    <form method="post" action="/projects/{{ project.id }}/review" class="form--inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="decision" value="approve">
+      <button type="submit" class="button button--primary">Approve</button>
+    </form>
+  </div>
+  <form method="post" action="/projects/{{ project.id }}/review" class="form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="decision" value="reject">
+    <div class="field">
+      <label for="review-reason">Reason for rejecting</label>
+      <textarea id="review-reason" name="reason" rows="3">{{ posted.reason if error_form == "review" else "" }}</textarea>
+      {% if error_form == "review" and errors.reason %}<p class="field-error">{{ errors.reason }}</p>{% endif %}
+    </div>
+    <button type="submit" class="button button--danger">Reject</button>
+  </form>
+</section>
+{% endif %}
+
+{% if is_admin %}
+<section class="card">
+  <div class="card-head">
+    <h2>Admin</h2>
+    <a class="muted" href="/admin">Admin overview</a>
+  </div>
+  <p><a href="/admin/compute/projects/{{ project.id }}">Compute settings for this project</a></p>
+  {% if admin_own_project %}
+    <p class="policy-note">You lead this project or are on its team, so another admin has to decide it, add
+      to its budget or raise its hourly cap. You can still cut or reclaim its budget, lower its cap, or withdraw it.</p>
+  {% endif %}
+  {% if can_admin_decide %}
+    <div class="admin-action">
+    <h3>Decide without waiting for reviewers</h3>
+    <form method="post" action="/projects/{{ project.id }}/admin-decide" class="form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="field">
+        <label for="admin-decide-reason">Reason (required)</label>
+        <textarea id="admin-decide-reason" name="reason" rows="2">{{ posted.reason if error_form == "admin_decide" else "" }}</textarea>
+        {% if error_form == "admin_decide" and errors.reason %}<p class="field-error">{{ errors.reason }}</p>{% endif %}
+      </div>
+      <div class="action-row">
+        <button type="submit" name="decision" value="approve" class="button button--primary">Admin approve</button>
+        <button type="submit" name="decision" value="reject" class="button button--danger">Admin reject</button>
+      </div>
+    </form>
+    </div>
+  {% endif %}
+
+  {% if can_admin_adjust_budget %}
+    <div class="admin-action">
+    <h3>Adjust budget</h3>
+    <form method="post" action="/projects/{{ project.id }}/admin-budget" class="form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="field">
+        <label for="admin-budget-amount">Adjust budget by (USD, signed)</label>
+        <input
+          type="text"
+          id="admin-budget-amount"
+          name="amount"
+          inputmode="decimal"
+          placeholder="500.00 or -500.00"
+          value="{{ posted.amount if error_form == 'admin_budget' else '' }}"
+        >
+        {% if error_form == "admin_budget" and errors.amount_cents %}<p class="field-error">{{ errors.amount_cents }}</p>{% endif %}
+      </div>
+      <div class="field">
+        <label for="admin-budget-reason">Reason (required)</label>
+        <textarea id="admin-budget-reason" name="reason" rows="2">{{ posted.reason if error_form == "admin_budget" else "" }}</textarea>
+        {% if error_form == "admin_budget" and errors.reason %}<p class="field-error">{{ errors.reason }}</p>{% endif %}
+      </div>
+      <button type="submit" class="button">Adjust budget</button>
+    </form>
+    </div>
+  {% endif %}
+
+  {% if can_admin_reclaim %}
+    <div class="admin-action">
+    <h3>Reclaim unspent budget</h3>
+    <form method="post" action="/projects/{{ project.id }}/admin-reclaim" class="form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="field">
+        <label for="admin-reclaim-amount">Reclaim (USD, positive)</label>
+        <input
+          type="text"
+          id="admin-reclaim-amount"
+          name="amount"
+          inputmode="decimal"
+          placeholder="500.00"
+          value="{{ posted.amount if error_form == 'admin_reclaim' else '' }}"
+        >
+        {% if error_form == "admin_reclaim" and errors.amount_cents %}<p class="field-error">{{ errors.amount_cents }}</p>{% endif %}
+      </div>
+      <div class="field">
+        <label for="admin-reclaim-reason">Reason (required)</label>
+        <textarea id="admin-reclaim-reason" name="reason" rows="2">{{ posted.reason if error_form == "admin_reclaim" else "" }}</textarea>
+        {% if error_form == "admin_reclaim" and errors.reason %}<p class="field-error">{{ errors.reason }}</p>{% endif %}
+      </div>
+      <button type="submit" class="button">Reclaim budget</button>
+    </form>
+    </div>
+  {% endif %}
+
+  {% if can_admin_set_hourly_cap %}
+    <div class="admin-action">
+    <h3>Hourly cap per launch</h3>
+    <p class="muted">
+      Now {{ hourly_cap_cents | dollars }}/hour
+      ({{ "the default" if hourly_cap_is_default else "this project's own cap; the default is " ~ (default_hourly_cap_cents | dollars) }}).
+      Krater only rents machines at or under this rate. It doesn't limit total spend; the budget does.
+    </p>
+    <form method="post" action="/projects/{{ project.id }}/admin-hourly-cap" class="form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="field">
+        <label for="admin-hourly-cap-amount">New cap (USD per hour)</label>
+        <input
+          type="text"
+          id="admin-hourly-cap-amount"
+          name="amount"
+          inputmode="decimal"
+          placeholder="Blank for the default ({{ default_hourly_cap_cents | dollars }})"
+          value="{{ posted.amount if error_form == 'admin_hourly_cap' else hourly_cap_input }}"
+        >
+        {% if error_form == "admin_hourly_cap" and errors.cap_cents %}<p class="field-error">{{ errors.cap_cents }}</p>{% endif %}
+      </div>
+      <div class="field">
+        <label for="admin-hourly-cap-reason">Reason (required)</label>
+        <textarea id="admin-hourly-cap-reason" name="reason" rows="2">{{ posted.reason if error_form == "admin_hourly_cap" else "" }}</textarea>
+        {% if error_form == "admin_hourly_cap" and errors.reason %}<p class="field-error">{{ errors.reason }}</p>{% endif %}
+      </div>
+      <button type="submit" class="button">Set hourly cap</button>
+    </form>
+    </div>
+  {% endif %}
+
+  {% if can_admin_withdraw %}
+    <div class="admin-action">
+    <h3>Withdraw project</h3>
+    <form method="post" action="/projects/{{ project.id }}/withdraw" class="form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="field">
+        <label for="admin-withdraw-reason">Reason (required)</label>
+        <textarea id="admin-withdraw-reason" name="reason" rows="2">{{ posted.reason if error_form == "withdraw" else "" }}</textarea>
+        {% if error_form == "withdraw" and errors.reason %}<p class="field-error">{{ errors.reason }}</p>{% endif %}
+      </div>
+      <button type="submit" class="button button--danger">Withdraw project (admin)</button>
+    </form>
+    </div>
+  {% endif %}
+</section>
+{% endif %}
+
+</aside>
+</div>
+{% endblock %}

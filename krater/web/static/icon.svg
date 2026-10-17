@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Krater">
+  <rect width="512" height="512" rx="104" fill="#2a2050"/>
+  <circle cx="256" cy="160" r="88" fill="#6c3ec1"/>
+  <circle cx="161" cy="322" r="88" fill="#9b7fd4"/>
+  <circle cx="351" cy="322" r="88" fill="#2f7cd6"/>
+  <circle cx="256" cy="268" r="62" fill="#2aa187"/>
+  <circle cx="256" cy="268" r="62" fill="none" stroke="#f7f5fb" stroke-width="9" stroke-dasharray="20 16" stroke-linecap="round"/>
+</svg>

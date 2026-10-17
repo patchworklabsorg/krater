@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+
+{% block title %}SSH keys{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>SSH keys</h1>
+    <p class="page-subtitle">
+      Krater puts these public keys into your own interactive boxes, and nowhere else, when a box starts. Up to
+      {{ max_keys }} keys.
+    </p>
+  </div>
+</div>
+
+<section aria-labelledby="your-keys">
+  <div class="section-head">
+    <h2 id="your-keys">Your keys</h2>
+  </div>
+  {% if keys %}
+    <div class="table-scroll">
+      <table class="table">
+        <thead>
+          <tr>
+            <th scope="col">Name</th>
+            <th scope="col">Fingerprint</th>
+            <th scope="col">Added</th>
+            <th scope="col"><span class="visually-hidden">Remove</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for key in keys %}
+            <tr>
+              <td class="cell-title">{{ key.name }}<span class="cell-sub"><code>{{ key.key_type }}</code></span></td>
+              <td><code>{{ key.fingerprint }}</code></td>
+              <td class="nowrap">{{ key.created_at.strftime("%Y-%m-%d") }}</td>
+              <td class="num">
+                <form method="post" action="/account/ssh-keys/{{ key.id }}/delete">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <button type="submit" class="button button--small">Remove</button>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="empty-state">
+      <p class="empty-state__title">No keys yet.</p>
+      <p>Add one below to SSH into your boxes.</p>
+    </div>
+  {% endif %}
+</section>
+
+<section class="card form-card">
+  <h2>Add a key</h2>
+  <form method="post" action="/account/ssh-keys" class="form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="field">
+      <label for="ssh-key-name">Name</label>
+      <input type="text" id="ssh-key-name" name="name" maxlength="100" placeholder="Laptop" value="{{ posted.name or '' }}">
+    </div>
+    <div class="field">
+      <label for="ssh-key">Public key</label>
+      <textarea id="ssh-key" name="key" rows="3" placeholder="ssh-ed25519 AAAA... you@laptop">{{ posted.key or '' }}</textarea>
+      <p class="field-hint">The contents of a <code>.pub</code> file, such as <code>~/.ssh/id_ed25519.pub</code>. Never a private key.</p>
+      {% if errors.key %}<p class="field-error">{{ errors.key }}</p>{% endif %}
+    </div>
+    <button type="submit" class="button button--primary">Add key</button>
+  </form>
+</section>
+{% endblock %}

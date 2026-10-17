@@ -1,0 +1,210 @@
+{#
+  The application form's questions, shared by projects/new.html and projects/edit.html (proposal and amendment
+  drafts). The questions and what submitting requires are in docs/SPEC.md "The application"; reading the post is
+  krater.web.application_form.
+
+  The two compute estimators work without JavaScript: "Estimate" is a plain submit (form_action=estimate_<prefix>)
+  that comes back with the amount filled in. budget-estimator.js estimates as the fields change instead, and fills
+  the amount unless the team typed their own. application-form.js counts words and shows the "another card" fields.
+#}
+
+{% macro text_field(name, label, values, errors, hint="", rows=0, limit=0, maxlength=0, placeholder="") %}
+  <div class="field">
+    <label for="{{ name }}">{{ label }}</label>
+    {% if rows %}
+      <textarea id="{{ name }}" name="{{ name }}" rows="{{ rows }}"
+        {%- if limit %} data-word-limit="{{ limit }}" aria-describedby="{{ name }}-count"{% endif %}
+        {%- if errors[name] %} aria-invalid="true"{% endif %}>{{ values[name] }}</textarea>
+    {% else %}
+      <input type="text" id="{{ name }}" name="{{ name }}" value="{{ values[name] }}"
+        {%- if maxlength %} maxlength="{{ maxlength }}"{% endif %}
+        {%- if placeholder %} placeholder="{{ placeholder }}"{% endif %}
+        {%- if errors[name] %} aria-invalid="true"{% endif %}>
+    {% endif %}
+    {% if hint %}<p class="field-hint">{{ hint }}</p>{% endif %}
+    {% if limit %}
+      <p class="field-hint word-count" id="{{ name }}-count" data-word-count-for="{{ name }}" aria-live="polite">
+        {{ values[name].split() | length }} of {{ limit }} words
+      </p>
+    {% endif %}
+    {% if errors[name] %}<p class="field-error">{{ errors[name] }}</p>{% endif %}
+  </div>
+{% endmacro %}
+
+{% macro estimator(prefix, legend, hint, amount_label, amount_hint, values, errors, summary, gpu_options, other_gpu, base_cents=0) %}
+  {% set f = prefix ~ "_" %}
+  <fieldset class="form-fieldset estimator" data-estimator="{{ prefix }}" data-estimate-url="/pricing/estimate"
+            data-csrf-token="{{ csrf_token() }}" data-base-cents="{{ base_cents }}" id="{{ prefix }}-estimator">
+    <legend>{{ legend }}</legend>
+    <p class="field-hint">{{ hint }} Prices are what Vast charges now (<a href="/pricing">GPU prices</a>).</p>
+
+    <div class="form-grid">
+      <div class="field">
+        <label for="{{ f }}gpu">Card</label>
+        <select id="{{ f }}gpu" name="{{ f }}gpu"{% if errors[f ~ 'gpu'] %} aria-invalid="true"{% endif %}>
+          <option value="">Choose one&hellip;</option>
+          {% for option in gpu_options %}
+            <option value="{{ option.key }}" {% if values[f ~ 'gpu'] == option.key %}selected{% endif %}>{{ option.label }}</option>
+          {% endfor %}
+          <option value="{{ other_gpu }}" {% if values[f ~ 'gpu'] == other_gpu %}selected{% endif %}>Another card (give its price)</option>
+        </select>
+        {% if errors[f ~ 'gpu'] %}<p class="field-error">{{ errors[f ~ 'gpu'] }}</p>{% endif %}
+      </div>
+
+      <div class="field">
+        <label for="{{ f }}hours">Hours</label>
+        <input type="number" id="{{ f }}hours" name="{{ f }}hours" min="0" step="0.5" inputmode="decimal"
+               value="{{ values[f ~ 'hours'] }}"{% if errors[f ~ 'hours'] %} aria-invalid="true"{% endif %}>
+        {% if errors[f ~ 'hours'] %}<p class="field-error">{{ errors[f ~ 'hours'] }}</p>{% endif %}
+      </div>
+    </div>
+
+    <div class="form-grid" data-role="other-gpu"{% if values[f ~ 'gpu'] != other_gpu %} hidden{% endif %}>
+      <div class="field">
+        <label for="{{ f }}gpu_other">Which card</label>
+        <input type="text" id="{{ f }}gpu_other" name="{{ f }}gpu_other" maxlength="64" placeholder="RTX A4000"
+               value="{{ values[f ~ 'gpu_other'] }}">
+        {% if errors[f ~ 'gpu_other'] %}<p class="field-error">{{ errors[f ~ 'gpu_other'] }}</p>{% endif %}
+      </div>
+      <div class="field">
+        <label for="{{ f }}gpu_count">How many</label>
+        <input type="number" id="{{ f }}gpu_count" name="{{ f }}gpu_count" min="1" max="16" step="1"
+               value="{{ values[f ~ 'gpu_count'] }}">
+        {% if errors[f ~ 'gpu_count'] %}<p class="field-error">{{ errors[f ~ 'gpu_count'] }}</p>{% endif %}
+      </div>
+    </div>
+
+    <details class="estimator__more"{% if values[f ~ 'rate'] or errors[f ~ 'rate'] or errors[f ~ 'margin_percent'] %} open{% endif %}>
+      <summary>Rental, your own price, margin</summary>
+      <div class="form-grid">
+        <div class="field">
+          <label for="{{ f }}basis">Rental</label>
+          <select id="{{ f }}basis" name="{{ f }}basis">
+            <option value="spot" {% if values[f ~ 'basis'] != "on_demand" %}selected{% endif %}>Interruptible (Krater's default)</option>
+            <option value="on_demand" {% if values[f ~ 'basis'] == "on_demand" %}selected{% endif %}>On demand</option>
+          </select>
+          <p class="field-hint">Interruptible machines cost much less and can pause when outbid; Krater resumes them.</p>
+        </div>
+        <div class="field">
+          <label for="{{ f }}rate">Your price per card-hour (USD)</label>
+          <input type="text" id="{{ f }}rate" name="{{ f }}rate" inputmode="decimal" placeholder="Krater's price"
+                 value="{{ values[f ~ 'rate'] }}"{% if errors[f ~ 'rate'] %} aria-invalid="true"{% endif %}>
+          <p class="field-hint">Leave blank to use Krater's current price. Reviewers see both.</p>
+          {% if errors[f ~ 'rate'] %}<p class="field-error">{{ errors[f ~ 'rate'] }}</p>{% endif %}
+        </div>
+        <div class="field">
+          <label for="{{ f }}margin_percent">Safety margin (%)</label>
+          <input type="number" id="{{ f }}margin_percent" name="{{ f }}margin_percent" min="0" step="1"
+                 value="{{ values[f ~ 'margin_percent'] }}">
+          {% if errors[f ~ 'margin_percent'] %}<p class="field-error">{{ errors[f ~ 'margin_percent'] }}</p>{% endif %}
+        </div>
+      </div>
+    </details>
+
+    <p class="policy-note" data-role="estimate-result"{% if not summary %} hidden{% endif %}>
+      {% if summary %}Estimate: {{ summary }}{% endif %}
+    </p>
+
+    <div class="field">
+      <label for="{{ f }}budget">{{ amount_label }}</label>
+      <input type="text" id="{{ f }}budget" name="{{ f }}budget" inputmode="decimal" placeholder="Filled in from the estimate"
+             value="{{ values[f ~ 'budget'] }}" data-role="amount"{% if errors[f ~ 'budget'] %} aria-invalid="true"{% endif %}>
+      <p class="field-hint">{{ amount_hint }}</p>
+      {% if errors[f ~ 'budget'] %}<p class="field-error">{{ errors[f ~ 'budget'] }}</p>{% endif %}
+    </div>
+
+    <div class="action-row">
+      <button type="submit" name="form_action" value="estimate_{{ prefix }}" class="button" data-role="estimate-button">Estimate</button>
+      <button type="button" class="button" data-role="use-estimate-button" hidden>Use the estimate</button>
+    </div>
+  </fieldset>
+{% endmacro %}
+
+{% macro application_fields(values, errors, summaries, gpu_options, applicant, word_limits, summary_max, other_gpu, kind="proposal", team=none, base_cents=0) %}
+  <fieldset class="form-fieldset">
+    <legend>You</legend>
+    <dl class="details">
+      <dt>Name</dt><dd>{{ applicant.name }}</dd>
+      {% if applicant.email %}<dt>Email</dt><dd>{{ applicant.email }}</dd>{% endif %}
+      <dt>Patchwork ID</dt><dd><code>{{ applicant.sub }}</code></dd>
+    </dl>
+    <p class="field-hint">From your Patchwork account. Change them in Weave.</p>
+
+    {{ text_field("experience", "Who are you, and what's your experience in this field?", values, errors,
+                  rows=6, limit=word_limits.experience) }}
+
+    <div class="field">
+      <label for="teammates">Applying as a group? Invite your teammates</label>
+      {% if team %}
+        <ul class="team-list">
+          {% for person in team %}
+            <li class="team-list__item">
+              <span class="team-list__name">{{ person.name }}
+                <span class="cell-sub">{% if person.lead %}Lead{% elif person.accepted %}On the team{% else %}Invited{% endif %}</span>
+              </span>
+            </li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+      <input type="text" id="teammates" name="teammates" value="{{ values.teammates }}" autocomplete="off"
+             placeholder="Patchwork IDs or emails, separated by commas"{% if errors.teammates %} aria-invalid="true"{% endif %}>
+      <p class="field-hint">
+        Each teammate needs a Patchwork account with Ganymede access. They join once they accept the invitation on
+        their Krater home page. You can add more people later from the project page.
+      </p>
+      {% if errors.teammates %}<p class="field-error">{{ errors.teammates }}</p>{% endif %}
+    </div>
+  </fieldset>
+
+  <fieldset class="form-fieldset">
+    <legend>The project</legend>
+    {{ text_field("title", "Project name", values, errors, maxlength=255) }}
+    {{ text_field("summary", "What is your project, in a sentence normal people would understand?", values, errors,
+                  maxlength=summary_max, hint="One sentence. Reviewers and the gallery show it first.") }}
+    {{ text_field("write_up", "Now explain it properly. What is it, what does it build on or depart from, and why does it matter?",
+                  values, errors, rows=10, limit=word_limits.write_up) }}
+    {{ text_field("repo_url", "Repo link (optional)", values, errors, placeholder="https://github.com/...") }}
+
+    <div class="field">
+      <fieldset class="choice-list">
+        <legend class="field-label">Are you doing this as part of a contest or with the help of a professor?</legend>
+        {% for value, label in (("none", "Neither"), ("contest", "A contest"), ("professor", "A professor"), ("both", "Both")) %}
+          <label class="choice">
+            <input type="radio" name="affiliation" value="{{ value }}" data-role="affiliation"
+                   {% if values.affiliation == value %}checked{% endif %}> {{ label }}
+          </label>
+        {% endfor %}
+      </fieldset>
+      {% if errors.affiliation %}<p class="field-error">{{ errors.affiliation }}</p>{% endif %}
+    </div>
+    <div data-role="affiliation-detail"{% if values.affiliation == "none" and not errors.affiliation_detail %} hidden{% endif %}>
+      {{ text_field("affiliation_detail", "Which contest or professor?", values, errors, rows=2,
+                    hint="The contest's name and a link, or your professor's name and school.") }}
+    </div>
+  </fieldset>
+
+  <fieldset class="form-fieldset">
+    <legend>Compute</legend>
+    {{ text_field("compute_use", "How are you going to use the compute?", values, errors, rows=5,
+                  hint="Training, fine-tuning, inference, rendering... What runs, on what data, and roughly how often.") }}
+
+    {% if kind == "amendment" %}
+      {{ estimator("poc", "What you need now",
+                   "The card and hours the next stage needs, on top of what's approved. It starts as your finished-product estimate.",
+                   "New total budget (USD)",
+                   "The project's whole budget if this amendment is approved: the " ~ (base_cents | dollars) ~ " approved so far plus the estimate. Type a different total if you need one; it can be lower, too.",
+                   values, errors, summaries.poc, gpu_options, other_gpu, base_cents=base_cents) }}
+    {% else %}
+      {{ estimator("poc", "Proof of concept",
+                   "How much compute a proof of concept needs: which card, and about how many hours. This is what gets approved first.",
+                   "Budget to request (USD)",
+                   "Filled in from the estimate. Change it if you need a different amount; reviewers see both.",
+                   values, errors, summaries.poc, gpu_options, other_gpu) }}
+    {% endif %}
+    {{ estimator("full", "Finished product",
+                 "Roughly how much the finished product would need. A rough guess is fine; it isn't approved now, and you can ask for it later with an amendment.",
+                 "Rough total (USD)",
+                 "For reviewers' information only.",
+                 values, errors, summaries.full, gpu_options, other_gpu) }}
+  </fieldset>
+{% endmacro %}

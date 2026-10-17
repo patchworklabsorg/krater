@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+{% import "projects/_application.html" as application with context %}
+
+{% block title %}Edit draft{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <a class="back-link" href="/projects/{{ project.id }}">&larr; Back to project</a>
+    <h1>Edit draft</h1>
+    <p class="page-subtitle">
+      {% if draft.kind.value == "completion" %}
+        Completion write-up for &ldquo;{{ project.title }}&rdquo;.
+      {% elif draft.kind.value == "amendment" %}
+        Amendment to &ldquo;{{ project.title }}&rdquo;.
+      {% else %}
+        Proposal draft.
+      {% endif %}
+    </p>
+  </div>
+</div>
+
+<section class="card form-card">
+
+  <form method="post" action="/projects/{{ project.id }}/edit" class="form" novalidate>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+    {% if draft.kind.value == "completion" %}
+      <div class="field">
+        <label for="title">Project name</label>
+        <input type="text" id="title" name="title" value="{{ values.title }}" maxlength="255">
+        {% if errors.title %}<p class="field-error">{{ errors.title }}</p>{% endif %}
+      </div>
+
+      <div class="field">
+        <label for="repo_url">Repo link</label>
+        <input type="url" id="repo_url" name="repo_url" value="{{ values.repo_url }}" placeholder="https://github.com/..."{% if errors.repo_url %} aria-invalid="true"{% endif %}>
+        {% if errors.repo_url %}<p class="field-error">{{ errors.repo_url }}</p>{% endif %}
+      </div>
+
+      <div class="field">
+        <label for="write_up">Final write-up</label>
+        <textarea id="write_up" name="write_up" rows="10">{{ values.write_up }}</textarea>
+        <p class="field-hint">What you built and how it went. The gallery shows it.</p>
+        {% if errors.write_up %}<p class="field-error">{{ errors.write_up }}</p>{% endif %}
+      </div>
+    {% else %}
+      {{ application.application_fields(values, errors, summaries, gpu_options, applicant, word_limits, summary_max, other_gpu, kind=draft.kind.value, team=team, base_cents=base_cents) }}
+    {% endif %}
+
+    {% if draft.kind.value == "completion" %}
+      <div class="field">
+        <label for="demo_url">Demo link</label>
+        <input type="url" id="demo_url" name="demo_url" value="{{ values.demo_url }}" placeholder="https://..."{% if errors.demo_url %} aria-invalid="true"{% endif %}>
+        {% if errors.demo_url %}<p class="field-error">{{ errors.demo_url }}</p>{% endif %}
+      </div>
+
+      <div class="field">
+        <label for="tags">Tags</label>
+        <input type="text" id="tags" name="tags" value="{{ values.tags }}" placeholder="robotics, ganymede">
+        <p class="field-hint">Comma-separated.</p>
+      </div>
+
+    {% endif %}
+
+    <div class="form-actions">
+      <button type="submit" name="form_action" value="save" class="button button--primary">Save draft</button>
+    </div>
+  </form>
+
+  {% if draft.kind.value == "completion" %}
+    {% set current_screenshots = screenshots|default([]) %}
+    {% set max_shots = max_screenshots|default(6) %}
+    <div class="field edit-section">
+      <label for="screenshot-input">Screenshots</label>
+
+      {% if current_screenshots %}
+        <ul class="screenshot-list">
+          {% for shot in current_screenshots %}
+            <li class="screenshot-list__item">
+              <img
+                class="screenshot-list__thumb"
+                src="{{ shot.url }}"
+                alt="{{ project.title or 'Project' }} screenshot"
+                loading="lazy"
+              >
+              <form method="post" action="/projects/{{ project.id }}/screenshots/{{ shot.key }}/delete">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="button button--danger">Remove</button>
+              </form>
+            </li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+
+      <noscript>
+        <p class="field-hint">
+          Uploading screenshots needs JavaScript enabled. You can still remove existing ones above.
+        </p>
+      </noscript>
+
+      <div
+        id="screenshot-widget"
+        data-presign-url="/projects/{{ project.id }}/screenshots/presign"
+        data-confirm-url="/projects/{{ project.id }}/screenshots/confirm"
+        data-csrf-token="{{ csrf_token() }}"
+        data-max-screenshots="{{ max_shots }}"
+        data-max-bytes="{{ max_screenshot_bytes|default(5242880) }}"
+        data-remaining="{{ max_shots - current_screenshots|length }}"
+      >
+        {% if current_screenshots|length < max_shots %}
+          <input type="file" id="screenshot-input" accept="image/png,image/jpeg,image/webp" multiple data-role="file-input">
+          <p class="field-hint">PNG, JPEG or WebP, up to 5 MB each. Up to {{ max_shots }} total.</p>
+        {% else %}
+          <p class="field-hint">Maximum of {{ max_shots }} screenshots reached. Remove one to add another.</p>
+        {% endif %}
+        <p class="field-error" data-role="status" role="status"></p>
+      </div>
+    </div>
+  {% endif %}
+
+  <div class="edit-section">
+  <h2>Submit for review</h2>
+  <p class="muted">Saved changes stay a draft until you submit. Save first: submitting doesn't include unsaved edits.</p>
+  <form
+    method="post"
+    action="/projects/{{ project.id }}/{{ 'submit-completion' if draft.kind.value == 'completion' else 'submit' }}"
+    class="form form--inline"
+  >
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" class="button">
+      {{ "Submit completion for review" if draft.kind.value == "completion" else "Submit for review" }}
+    </button>
+  </form>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+  {% if draft.kind.value == "completion" %}
+    <script src="/static/js/screenshot-upload.js" defer></script>
+  {% else %}
+    <script src="/static/js/budget-estimator.js" defer></script>
+    <script src="/static/js/application-form.js" defer></script>
+  {% endif %}
+{% endblock %}
