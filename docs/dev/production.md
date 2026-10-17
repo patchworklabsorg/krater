@@ -30,14 +30,18 @@ Settings live in `hosts/alastor/krater.nix` (hostnames, Weave client id, the fal
 are `krater` and `krater-storage` under `patchworklabs.org`, added by a PR to
 [patchworklabsorg/dns](https://github.com/patchworklabsorg/dns). They're proxied through Cloudflare like Weave's,
 whose edge certificate covers only one subdomain level. Behind Cloudflare and Traefik, `KRATER_TRUSTED_PROXY_COUNT`
-probably needs to be 2 (see the host file). Secrets are one agenix
-file, `secrets/krater-env.age`, with the keys listed at the top of `modules/krater/default.nix`. The module splits them
-so each container gets only its own. Getting a module change
+probably needs to be 2 (see the host file). Secrets are the agenix file
+`secrets/krater-env.age`, with the keys listed at the top of `modules/krater/default.nix`, plus
+`secrets/central-prod-krater.age` (the database password alone, for skein); infra's `bin/new-krater-secrets` writes
+both. The module splits the env file so each container gets only its own. Getting a module change
 onto alastor takes a merge in `patchworklabsorg/infra`, then `nix flake update patchwork-infra` and a deploy from
 `jaspermayone/infra`. Krater releases don't need that, only the `Deploy` workflow.
 
-Backups are a `krater-backup` timer (03:30 UTC) writing to `/var/lib/krater/backups`. Restore as in section 4, with
-`docker exec -i krater-db` in place of `docker compose ... exec -T db`, user and database `krater`.
+The database is Krater's schema `krater` in `patchwork_central` on skein (infra's `modules/central-db`), not a
+Postgres of its own: the role `krater` has `search_path = krater`, so Krater's tables, its procrastinate queue and
+`alembic_version` all live in that schema, and nothing changes in Krater's code. `KRATER_DATABASE_URL` points at skein
+(its tailnet name from alastor). skein's nightly dump is the backup; a restore is of the schema `krater` and goes
+through whoever runs skein.
 
 **Compute off (the first deploy).** Krater ships to production with `KRATER_COMPUTE_MODE=off`: proposals, review,
 budgets, Slack, the gallery and Quilt events, but no rented machines, until the paid checks in
