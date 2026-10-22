@@ -370,6 +370,13 @@ def _budget_event_message(event: AuditEvent) -> tuple[list[dict], str]:
             f"torn down. Ceiling: {_format_cents(payload.get('ceiling_cents', 0))}, "
             f"spend: {_format_cents(payload.get('spend_cents', 0))}."
         )
+    elif payload.get("final"):
+        text = (
+            f":rotating_light: *Final budget warning*: this project has used {payload.get('percent', 0)}% of its "
+            f"ceiling ({_format_cents(payload.get('spend_cents', 0))} of "
+            f"{_format_cents(payload.get('ceiling_cents', 0))}). Krater stops every job and machine just before 100%. "
+            "Save your work now."
+        )
     else:
         text = (
             f":warning: *Budget warning*: this project has used {payload.get('percent', 0)}% of its ceiling "
@@ -384,13 +391,19 @@ def sync_budget_notifications(session: Session, slack_client: SlackClient) -> No
 
     These events are written by `krater.services.budget_alerts` with `actor=None` (a
     system process, not a request), so nothing calls this synchronously the way `notify_decision`/
-    `post_admin_override` are -- the periodic reconcile is the only thing that posts them.
+    `post_admin_override` are: the periodic reconcile and the compute scheduler task post them. The caller commits.
     """
+    # Both callers can run at once; the lock (held until the caller commits) keeps them from posting one event twice.
+    session.execute(sa.text("SELECT pg_advisory_xact_lock(hashtext('krater.budget_notifications'))"))
     already_posted = sa.select(SlackNotification.audit_event_id)
-    stmt = sa.select(AuditEvent).where(
-        AuditEvent.action.in_((AUDIT_BUDGET_WARNING, AUDIT_BUDGET_TEARDOWN)),
-        AuditEvent.project_id.is_not(None),
-        AuditEvent.id.not_in(already_posted),
+    stmt = (
+        sa.select(AuditEvent)
+        .where(
+            AuditEvent.action.in_((AUDIT_BUDGET_WARNING, AUDIT_BUDGET_TEARDOWN)),
+            AuditEvent.project_id.is_not(None),
+            AuditEvent.id.not_in(already_posted),
+        )
+        .order_by(AuditEvent.created_at, AuditEvent.id)
     )
     for event in list(session.scalars(stmt)):
         project = session.get(Project, event.project_id)

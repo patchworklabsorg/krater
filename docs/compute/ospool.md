@@ -88,7 +88,7 @@ member must be a verified US resident.
   The OSPool client can report these as its `charges`, which turns Krater's reconcile on for it. Two ways to use them:
   - **A shadow price.** Each GPU class has an admin-set hourly rate, and the OSPool's offers carry it. Krater's spend
     accrues at an instance's hourly rate (`krater.compute.spend`), and the hourly cap and affordability checks read the
-    offer's rate. So with the rate in the offer, the ceilings, the 80%/100% alerts and the reports work during the run.
+    offer's rate. So with the rate in the offer, the ceilings, the 80%, 95% and 100% alerts and the reports work during the run.
     Reconcile then corrects the total to the actual GPU-hours. **This is the recommendation.**
     - With $0 offers instead, every project could afford every job, the hourly cap would never bind, and the alerts
       would stay silent until reconcile.

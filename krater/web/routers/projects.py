@@ -486,7 +486,7 @@ def _build_detail_context(
             project,
             ceiling_cents=budget_service.ceiling_cents(session, project),
             spend_cents=budget_service.latest_spend_cents(session, project),
-            warn_percent=get_settings().budget_warn_percent,
+            warn_percents=get_settings().budget_warn_percents,
         )
 
     screenshots = _screenshot_entries(get_object_store(), current) if current is not None else []

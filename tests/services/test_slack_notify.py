@@ -398,6 +398,26 @@ def test_sync_budget_notifications_posts_a_warning_once(db_session: Session, mem
     assert len(slack_client.messages) == 1
 
 
+def test_the_final_budget_warning_tells_members_to_save_their_work(db_session: Session, member: Actor) -> None:
+    project = new_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=5000)
+    slack_client = FakeSlackClient()
+    project.slack_channel_id = slack_client.create_channel("ganymede-rover-test")
+    db_session.add(
+        AuditEvent(
+            actor_id=None,
+            action=slack_notify.AUDIT_BUDGET_WARNING,
+            project_id=project.id,
+            payload={"ceiling_cents": 5000, "spend_cents": 4800, "percent": 96.0, "threshold": 95, "final": True},
+        )
+    )
+    db_session.flush()
+
+    slack_notify.sync_budget_notifications(db_session, slack_client)
+
+    (message,) = slack_client.messages.values()
+    assert "Final budget warning" in message["text"] and "Save your work now" in message["text"]
+
+
 class _BrokenChannelSlack(FakeSlackClient):
     def __init__(self) -> None:
         super().__init__()

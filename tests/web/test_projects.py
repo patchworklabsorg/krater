@@ -571,6 +571,8 @@ def test_compute_on_vast_shows_the_budget_banner_without_a_workspace(
 
     with patch("krater.web.routers.projects.current_budget_flag", return_value="teardown"):
         assert "machines have been torn down" in client.get(f"/projects/{project.id}").text
+    with patch("krater.web.routers.projects.current_budget_flag", return_value="final_warning"):
+        assert "save your work now" in client.get(f"/projects/{project.id}").text
 
 
 # --------------------------------------------------------------------------------------------------

@@ -121,7 +121,7 @@ def test_the_project_is_warned_then_stopped_before_it_overruns(db_session, membe
             .order_by(AuditEvent.created_at)
         )
     )
-    assert actions.count(budget_alerts.AUDIT_BUDGET_WARNING) == 1
+    assert actions.count(budget_alerts.AUDIT_BUDGET_WARNING) == 2  # 80%, then the final warning at 95%
     assert actions.count(budget_alerts.AUDIT_BUDGET_TEARDOWN) == 1
 
 
@@ -147,4 +147,4 @@ def test_next_minute_counts_running_gpu_and_paused_disk(db_session, member, proj
 
     assert spend.next_minute_cents(db_session, project) == 1  # ceil($0.0638 / 60)
     assert scheduler.MICROUSD_PER_CENT == spend.MICROUSD_PER_CENT
-    assert SETTINGS.budget_warn_percent == 80
+    assert SETTINGS.budget_warn_percents == (80, 95)

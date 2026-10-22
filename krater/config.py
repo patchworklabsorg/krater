@@ -84,6 +84,9 @@ class Settings(BaseSettings):
     budget_warn_percent: int = Field(
         80, validation_alias=AliasChoices("KRATER_BUDGET_WARN_PERCENT", "KRATER_SKYPILOT_BUDGET_WARN_PERCENT")
     )
+    # A second, last warning before the hard stop near 100%, so members have time to save their work
+    # (patchworklabsorg/krater#2).
+    budget_final_warn_percent: int = 95
     # The default hourly price cap per machine; a project can have its own.
     compute_max_hourly_cost_cents: int = Field(
         500,
@@ -187,6 +190,14 @@ class Settings(BaseSettings):
     def compute_on(self) -> bool:
         """Whether Krater Compute runs, with any provider."""
         return self.compute_mode != "off"
+
+    @property
+    def budget_warn_percents(self) -> tuple[int, ...]:
+        """The budget warning thresholds, first then final. A final threshold at or below the first one turns the
+        final warning off, so a deploy that already set a high KRATER_BUDGET_WARN_PERCENT keeps working."""
+        if self.budget_final_warn_percent <= self.budget_warn_percent:
+            return (self.budget_warn_percent,)
+        return (self.budget_warn_percent, self.budget_final_warn_percent)
 
     @field_validator("compute_label_prefix")
     @classmethod

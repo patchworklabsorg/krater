@@ -172,6 +172,14 @@ def compute_schedule(timestamp: int) -> None:
                 len(result.swept),
                 result.errors,
             )
+        # Budget warnings and stops go out now, not at the next Slack reconcile: a final warning that waits up to
+        # `slack_reconcile_interval_minutes` could reach the channel after the stop it warns about.
+        try:
+            slack_notify.sync_budget_notifications(session, get_slack_client())
+            session.commit()
+        except SlackError:
+            logger.exception("krater.compute_schedule: budget notices failed; the Slack reconcile retries them")
+            session.rollback()
     except Exception:
         logger.exception("krater.compute_schedule failed")
         session.rollback()

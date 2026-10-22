@@ -46,7 +46,7 @@ through whoever runs skein.
 **Compute off (the first deploy).** Krater ships to production with `KRATER_COMPUTE_MODE=off`: proposals, review,
 budgets, Slack, the gallery and Quilt events, but no rented machines, until the paid checks in
 [compute/README.md](../compute/README.md) pass. Staging has done all but the Cloudflare checks (the runner's self-stop last, on
-2026-10-14); the Vast key must also be rotated first. With nothing launched, the 80% and 100% budget alerts never fire.
+2026-10-14); the Vast key must also be rotated first. With nothing launched, the 80%, 95% and 100% budget alerts never fire.
 `KRATER_PRICING_MODE=live` (or its old name, `KRATER_SKYPILOT_MODE`) fetches the public GPU catalog the budget estimator
 reads; it needs no server or credentials.
 

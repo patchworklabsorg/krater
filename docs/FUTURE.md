@@ -8,7 +8,7 @@ this list covers what comes after, plus loose ends from building v1.
 - **Staging run on the maintainer's machine** ([dev/staging.md](dev/staging.md)). The Compose stack itself has now
   been run with stub credentials (HANDOFF section 4), so what's left needs real accounts:
   - a real Vast launch;
-  - the 80% warning and 100% teardown with real spend;
+  - the 80% warning, the final 95% warning and the 100% stop with real spend;
   - how far `cost_report` drifts from the Vast bill. That sets the safety margin, if any, to take off the ceiling.
 - **Production deployment** ([dev/production.md](dev/production.md)). Compose now has opt-in `proxy` (Caddy, TLS)
   and `backup` (nightly `pg_dump`) profiles, restart policies and a bind address. For alastor, a NixOS module in
@@ -22,8 +22,6 @@ this list covers what comes after, plus loose ends from building v1.
   for local testing.
 - **Pick a long-term screenshot storage provider.** Today it's a temporary self-hosted SeaweedFS container. The options
   are R2/B2/S3, or keeping SeaweedFS with backups (a reminder was set for early October 2026).
-- **Decide what happens exactly at the ceiling** (patchworklabsorg/krater#2). Today warnings go out at 80% and teardown happens at 100% with no
-  grace period, which can kill a long training run just past the limit. Consider a small admin-configurable grace margin.
 
 ## Weave follow-ups
 

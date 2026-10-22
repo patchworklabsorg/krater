@@ -223,7 +223,7 @@ class Scheduler:
                 project,
                 ceiling_cents=ceiling,
                 spend_cents=spent,
-                warn_percent=self.settings.budget_warn_percent,
+                warn_percents=self.settings.budget_warn_percents,
             )
             projected = spent + spend.next_minute_cents(self.session, project)
             if budget_alerts.budget_percent(ceiling, projected) >= 100.0:

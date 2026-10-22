@@ -122,7 +122,7 @@ Fit:
   (`bids=False`), and limit orders are Vast's only.
 - **Interruption.** An interruption is a lost machine. The job requeues and resumes from its last checkpoint in Krater's
   storage, which the scheduler already does for a machine that disappears.
-- **Charges.** Reconcile stays useful but lags by hours; the 80%/100% alerts keep running on Krater's estimate.
+- **Charges.** Reconcile stays useful but lags by hours; the 80%, 95% and 100% alerts keep running on Krater's estimate.
 - **Credentials.** Each provider's credentials (an IAM role or access key, a service-account key) belong in the worker
   only, like the Vast key.
 

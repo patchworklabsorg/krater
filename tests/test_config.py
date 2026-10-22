@@ -175,3 +175,8 @@ def test_production_accepts_a_blank_or_https_quilt_url() -> None:
 def test_production_rejects_a_plain_http_quilt_url() -> None:
     with pytest.raises(ValueError, match="KRATER_QUILT_URL"):
         Settings(**_PRODUCTION_READY, quilt_url="http://quilt.patchworklabs.example")
+
+
+def test_a_final_warning_at_or_below_the_first_turns_the_final_warning_off() -> None:
+    assert Settings().budget_warn_percents == (80, 95)
+    assert Settings(budget_warn_percent=95).budget_warn_percents == (95,)

@@ -307,8 +307,11 @@ Uploads use presigned URLs, and only objects from approved completion revisions 
   while running), corrected every hour from Vast's own charges. A correction downwards reaches Quilt as
   `spend.corrected`.
 - **Enforcement** (details in [compute/scheduler.md](compute/scheduler.md)): Krater only rents within the project's
-  hourly cap and remaining budget (holding a job's expected cost), warns the project channel at 80% of the ceiling, and
-  stops and destroys the project's machines one minute before it would pass 100%.
+  hourly cap and remaining budget (holding a job's expected cost), warns the project channel at 80% of the ceiling and
+  again at 95% (a final warning to save work), and stops and destroys the project's machines one minute before it
+  would pass 100%. There is no grace period past the ceiling (decided in patchworklabsorg/krater#2). The warnings go
+  to Slack right after the scheduler pass that writes them, but the time between the final warning and the stop is
+  not guaranteed: a fast burn, a small ceiling or an hourly correction from Vast's charges can put both in one pass.
 - **No automatic expiry.** Stalled projects are reclaimed manually by an admin (`BudgetEntry(reclaim)`).
 - **Quilt.** Krater tells Quilt (Patchwork Labs finance) about each submission, each ledger entry and each change of
   spend, through Quilt's patch API. The events go through an outbox table in the same transaction as the change.
@@ -407,8 +410,9 @@ Networking:
    provider (e.g. R2/B2/S3, or keep SeaweedFS with backups). A reminder is set to circle back.
 2. **How members run compute:** decided 2026-10-11. Krater Compute instead of SkyPilot: jobs and SSH boxes submitted on
    the project page, rented by Krater. See [compute/README.md](compute/README.md) for what still needs a paid check.
-3. **What happens at the ceiling.** Proposed: warn at 80%, block new launches and tear down at 100%, with no grace
-   period. Consider a small admin-configurable grace so a running training job isn't killed at 100.1%.
+3. **What happens at the ceiling:** decided 2026-10-22 (patchworklabsorg/krater#2). Warn at 80%, warn a final time at
+   95%, and stop every machine one minute before 100%, with no grace period. Members checkpoint before the stop.
+   Revisit a grace margin only if the staging run shows a large drift from the Vast bill.
 4. **Weave changes:** resolved. Krater needs the Weave stack patchworklabsorg/weave#156 to #161, plus app roles
    (patchworklabsorg/weave#165) and the directory API (patchworklabsorg/weave#166), tracked in
    patchworklabsorg/weave#163. All of it was merged to Weave `main` on 2026-10-07. Each deployment still needs Krater's

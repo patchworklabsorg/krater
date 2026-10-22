@@ -35,7 +35,7 @@ move), runtime limits and finished projects, and confirms every destroy. Searche
 to stay inside Vast's daily search quota. See [scheduler.md](scheduler.md).
 
 **Spend**. A live estimate per instance (disk from create, GPU only while running) into `SpendSnapshot`, so the project
-page, the 80%/100% alerts and Quilt events work as before; a hard stop one minute ahead of the ceiling; an hourly
+page, the 80%, 95% and 100% alerts and Quilt events work as before; a hard stop one minute ahead of the ceiling; an hourly
 reconciliation with Vast's charges, which never lowers a live instance's estimate; a finished machine's lower final
 charge lowers the total, sent to Quilt as `spend.corrected`. Charges for a create Vast didn't confirm count against
 that create's job.

@@ -42,6 +42,11 @@
     Budget reached: this project's machines have been torn down. New launches are blocked until the ceiling is
     raised.
   </p>
+{% elif budget_flag == "final_warning" %}
+  <p class="budget-banner budget-banner--warn" role="status">
+    Final warning: this project is almost at its compute budget ceiling. Krater stops every job and machine just
+    before it is reached, so save your work now.
+  </p>
 {% elif budget_flag == "warning" %}
   <p class="budget-banner budget-banner--warn" role="status">
     Warning: this project is approaching its compute budget ceiling.
