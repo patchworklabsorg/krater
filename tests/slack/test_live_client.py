@@ -139,3 +139,34 @@ def test_get_user_info_reads_the_guest_flags() -> None:
 
 def test_get_user_info_is_none_for_an_unknown_user() -> None:
     assert _client(_DirectoryWebClient(error=_api_error("user_not_found"))).get_user_info("U404") is None  # type: ignore[arg-type]
+
+
+class _KickWebClient:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.calls: list[dict[str, Any]] = []
+
+    def conversations_kick(self, **kwargs: Any) -> dict:
+        self.calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
+        return {"ok": True}
+
+
+def test_remove_user_kicks_them_from_the_channel() -> None:
+    web_client = _KickWebClient()
+
+    _client(web_client).remove_user("C1", "U1")  # type: ignore[arg-type]
+
+    assert web_client.calls == [{"channel": "C1", "user": "U1"}]
+
+
+@pytest.mark.parametrize("code", ["not_in_channel", "user_not_found"])
+def test_someone_already_out_of_the_channel_or_slack_is_fine(code: str) -> None:
+    # `user_not_found` was seen on staging (2026-10-22) for a stored Slack id the workspace doesn't have.
+    _client(_KickWebClient(_api_error(code))).remove_user("C1", "U1")  # type: ignore[arg-type]
+
+
+def test_a_refused_kick_raises() -> None:
+    with pytest.raises(SlackRequestFailedError):
+        _client(_KickWebClient(_api_error("restricted_action"))).remove_user("C1", "U1")  # type: ignore[arg-type]

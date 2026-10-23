@@ -695,6 +695,79 @@ def test_a_machine_that_never_starts_is_given_up(db_session, member, project, cl
     assert fake.instances == {}
 
 
+CDI_ERROR = "Error response from daemon: failed to create task for container: failed to inject CDI devices"
+
+
+def _host_fails(fake, row) -> None:
+    """What Vast showed for a host that couldn't give the container its GPU (staging, 2026-10-15)."""
+    fake.set_status(row.provider_instance_id, "created", intended_status="stopped", status_msg=CDI_ERROR)
+
+
+def test_a_host_that_cannot_start_the_container_is_left_for_another_machine(
+    db_session,  # noqa: F811
+    member,  # noqa: F811
+    project,  # noqa: F811
+    client,  # noqa: F811
+    fake,  # noqa: F811
+) -> None:
+    job = _submit(db_session, member, project)
+    _pass(db_session, client)
+    row = _instance(db_session, job)
+    assert row.provider_machine_id == "501"
+    _host_fails(fake, row)
+
+    _pass(db_session, client, NOW + timedelta(minutes=4))  # inside the grace: Vast may still start it
+    assert row.state is ComputeInstanceState.PROVISIONING
+
+    _pass(db_session, client, NOW + timedelta(minutes=5))
+
+    assert row.state is ComputeInstanceState.DESTROYED and row.destroy_reason == scheduler.HOST_FAILED
+    assert row.provider_instance_id not in fake.instances
+    event = db_session.scalars(
+        sa.select(ComputeEvent).where(ComputeEvent.job_id == job.id, ComputeEvent.kind == "host_failed")
+    ).one()
+    assert event.payload["provider_message"] == CDI_ERROR
+    # Requeued and, in the same pass, rented on another machine though 501 is still the cheapest.
+    new = _instance(db_session, job)
+    assert new.attempt == 2 and new.provider_machine_id != "501"
+    assert job.state is ComputeJobState.STARTING
+
+
+def test_a_job_whose_containers_never_start_anywhere_fails(db_session, member, project, client, fake) -> None:  # noqa: F811
+    job = _submit(db_session, member, project, target_microusd=100_000)  # all three RTX 3060 machines qualify
+    _pass(db_session, client)
+    minute = 0
+    for _ in range(scheduler.MAX_HOST_FAILURES):
+        _host_fails(fake, _instance(db_session, job))
+        minute += 5
+        _pass(db_session, client, NOW + timedelta(minutes=minute))
+
+    assert job.state is ComputeJobState.FAILED
+    assert "couldn't start the container" in job.state_reason
+    assert fake.instances == {}
+    assert len({row.provider_machine_id for row in job.instances}) == scheduler.MAX_HOST_FAILURES
+
+
+def test_a_machine_whose_runner_reported_is_not_taken_for_a_broken_host(
+    db_session,  # noqa: F811
+    member,  # noqa: F811
+    project,  # noqa: F811
+    client,  # noqa: F811
+    fake,  # noqa: F811
+) -> None:
+    # The container starts before Vast says `running`: a runner that reported means the host works.
+    job = _submit(db_session, member, project)
+    _pass(db_session, client)
+    row = _instance(db_session, job)
+    _runner_starts(db_session, fake, row, NOW + timedelta(minutes=1))
+    fake.set_status(row.provider_instance_id, "exited", intended_status="stopped")
+
+    _pass(db_session, client, NOW + timedelta(minutes=6))
+
+    assert row.state is not ComputeInstanceState.DESTROYED
+    assert "host_failed" not in _events(db_session, job)
+
+
 def test_a_vanished_machine_requeues_the_job(db_session, member, project, client, fake) -> None:  # noqa: F811
     job, row = _running_job(db_session, member, project, client, fake)
     fake.instances.pop(row.provider_instance_id)

@@ -70,6 +70,23 @@ def test_an_admin_overrides_some_numbers_for_one_project(db_session: Session, me
     assert event.payload["changed"]["bid_margin_percent"] == {"old": None, "new": 25}
 
 
+def test_an_admin_cannot_override_settings_on_their_own_project(
+    db_session: Session, member: Actor, admin: Actor
+) -> None:
+    from tests.services.conftest import add_to_team
+
+    led = _project(db_session, admin)
+    joined = _project(db_session, member)
+    add_to_team(db_session, joined, admin, accepted=False)  # invited is enough
+
+    for project in (led, joined):
+        with pytest.raises(NotAllowed, match="Ask another admin"):
+            compute_settings.set_project_overrides(
+                db_session, admin, project=project, overrides={"storage_quota_gb": 500}, reason="r"
+            )
+    assert _audits(db_session, compute_settings.AUDIT_PROJECT) == []
+
+
 def test_clearing_an_override_returns_to_the_default(db_session: Session, member: Actor, admin: Actor) -> None:
     project = _project(db_session, member)
     compute_settings.set_project_overrides(

@@ -633,3 +633,55 @@ def test_a_failing_channel_does_not_hold_up_other_box_notices(db_session: Sessio
 
     texts = [m["text"] for m in slack_client.messages.values()]
     assert len(texts) == 1 and "second" in texts[0]  # the archived channel's is dropped, the failing one retried later
+
+
+def test_someone_who_left_the_team_is_taken_out_of_the_channel(
+    db_session: Session, member: Actor, make_actor, weave: StubWeaveClient
+) -> None:
+    teammate = make_actor(slack_user_id="U_TEAMMATE")
+    project = new_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=1000)
+    seat = add_to_team(db_session, project, teammate)
+    slack_client = FakeSlackClient()
+    channel_id = slack_notify.ensure_channel(db_session, slack_client, weave, project=project)
+    assert "U_TEAMMATE" in slack_client.channels[channel_id]["members"]
+
+    project.members.remove(seat)
+    db_session.flush()
+    removed = slack_notify.remove_from_channel(
+        db_session, slack_client, weave, project=project, user_id=teammate.user.id
+    )
+
+    assert removed and "U_TEAMMATE" not in slack_client.channels[channel_id]["members"]
+    # Safe to re-run.
+    assert slack_notify.remove_from_channel(db_session, slack_client, weave, project=project, user_id=teammate.user.id)
+
+
+def test_a_reviewer_who_left_the_team_stays_in_the_channel(
+    db_session: Session, member: Actor, reviewer: Actor, weave: StubWeaveClient
+) -> None:
+    reviewer.user.slack_user_id = "U_REVIEWER"
+    project = new_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=1000)
+    slack_client = FakeSlackClient()
+    channel_id = slack_notify.ensure_channel(db_session, slack_client, weave, project=project)
+
+    removed = slack_notify.remove_from_channel(
+        db_session, slack_client, weave, project=project, user_id=reviewer.user.id
+    )
+
+    assert not removed and "U_REVIEWER" in slack_client.channels[channel_id]["members"]
+
+
+def test_someone_back_on_the_team_is_not_taken_out(
+    db_session: Session, member: Actor, make_actor, weave: StubWeaveClient
+) -> None:
+    teammate = make_actor(slack_user_id="U_TEAMMATE")
+    project = new_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=1000)
+    add_to_team(db_session, project, teammate)
+    slack_client = FakeSlackClient()
+    channel_id = slack_notify.ensure_channel(db_session, slack_client, weave, project=project)
+
+    removed = slack_notify.remove_from_channel(
+        db_session, slack_client, weave, project=project, user_id=teammate.user.id
+    )
+
+    assert not removed and "U_TEAMMATE" in slack_client.channels[channel_id]["members"]

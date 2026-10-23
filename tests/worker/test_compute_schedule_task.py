@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 from unittest.mock import patch
 
+from krater.compute.scheduler import PassResult
 from krater.config import get_settings
 from krater.worker.app import COMPUTE_SCHEDULER_LOCK, app, compute_schedule
 
@@ -48,11 +49,26 @@ def test_compute_schedule_runs_a_pass(monkeypatch) -> None:
         patch("krater.worker.app.get_sessionmaker") as mock_sessionmaker,
     ):
         session = mock_sessionmaker.return_value.return_value
+        mock_scheduler.run_pass.return_value = PassResult()
         compute_schedule.func(timestamp=1_791_700_000)
 
         args, _ = mock_scheduler.run_pass.call_args
         assert args[0] is session and args[1] is mock_client.return_value
         session.close.assert_called_once()
+
+
+def test_a_pass_with_provider_errors_counts_towards_the_admin_alert(monkeypatch) -> None:
+    monkeypatch.setattr(get_settings(), "compute_mode", "vast")
+    with (
+        patch("krater.providers.get_provider"),
+        patch("krater.worker.app.compute_scheduler") as mock_scheduler,
+        patch("krater.worker.app.get_sessionmaker"),
+        patch("krater.worker.app._report_failure") as mock_report,
+    ):
+        mock_scheduler.run_pass.return_value = PassResult(errors=2)
+        compute_schedule.func(timestamp=1_791_700_000)
+
+    assert mock_report.call_args.args[0] == "compute_schedule"
 
 
 def test_compute_reconcile_runs_hourly_under_the_scheduler_lock(monkeypatch) -> None:

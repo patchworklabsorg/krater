@@ -162,6 +162,9 @@ class Settings(BaseSettings):
     slack_bot_token: str = ""
     slack_signing_secret: str = ""
     slack_feed_channel_id: str = ""
+    # Where the worker tells admins that something keeps failing (`krater.services.ops_alerts`). Blank logs the
+    # alerts instead.
+    slack_alerts_channel_id: str = ""
     slack_reconcile_interval_minutes: int = 10
 
     # S3-compatible object storage (gallery screenshots). docker-compose runs a temporary SeaweedFS as `storage`.

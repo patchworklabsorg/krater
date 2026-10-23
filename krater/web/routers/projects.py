@@ -62,6 +62,7 @@ from krater.worker.app import (
     slack_notify_decision,
     slack_notify_revision_submitted,
     slack_post_admin_override,
+    slack_remove_from_channel,
 )
 
 router = APIRouter()
@@ -842,14 +843,22 @@ def remove_team_member(
     project = _get_visible_project(db_session, actor, project_id)
     leaving = any(m.id == member_id and m.user_id == actor.user.id for m in project.members)
     try:
-        teams.remove(db_session, actor, project=project, member_id=member_id)
+        left = teams.remove(db_session, actor, project=project, member_id=member_id)
     except InvalidState as exc:
         return _invalid_state_redirect(db_session, request, project_id, exc)
+
+    def remove_from_channel() -> None:
+        if left is not None:
+            slack_remove_from_channel.defer(project_id=str(project_id), user_id=str(left))
+
     if leaving:
         db_session.commit()
+        remove_from_channel()
         flash(request, "You left the team.", "success")
         return RedirectResponse("/", status_code=303)
-    return _success_redirect(db_session, request, project_id, "Removed from the team.")
+    return _success_redirect(
+        db_session, request, project_id, "Removed from the team.", after_commit=remove_from_channel
+    )
 
 
 # --------------------------------------------------------------------------------------------------

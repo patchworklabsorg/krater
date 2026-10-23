@@ -268,6 +268,50 @@ def test_uploads_must_fit_the_projects_storage_quota(http, machine, store, db_se
     assert replacing.status_code == 200  # replacing a file counts only the difference
 
 
+def test_uploads_in_flight_count_against_the_quota(http, machine, store, db_session, admin) -> None:  # noqa: F811
+    from krater.services import compute_settings
+
+    job, row, token = machine
+    compute_settings.set_project_overrides(
+        db_session, admin, project=job.project, overrides={"storage_quota_gb": 1}, reason="small"
+    )
+    db_session.commit()
+    gb = 1024**3
+
+    def begin(name: str, size: int):
+        return http.post("/runner/v1/files/outputs/upload", headers=_auth(token), json={"name": name, "size": size})
+
+    # Neither file is in storage yet: the second must still not get the space the first was promised.
+    assert begin("a.bin", gb // 2 + 1).status_code == 200
+    second = begin("b.bin", gb // 2)
+    assert second.status_code == 422 and "quota" in second.json()["error"]
+    # Asking again for the same file replaces its reservation rather than adding to it.
+    assert begin("a.bin", gb // 2).status_code == 200
+    # Once the first upload lands, it counts once, not as stored plus reserved.
+    prefix = f"projects/{job.project_id}/jobs/{job.id}/outputs/"
+    store.put(prefix + "a.bin", content_type="application/octet-stream", size_bytes=gb // 2)
+    assert begin("b.bin", gb // 2).status_code == 200
+
+
+def test_an_expired_reservation_frees_its_space(http, machine, store, db_session, admin, monkeypatch) -> None:  # noqa: F811
+    from krater.services import compute_settings
+    from krater.web.routers import runner as runner_routes
+
+    job, row, token = machine
+    compute_settings.set_project_overrides(
+        db_session, admin, project=job.project, overrides={"storage_quota_gb": 1}, reason="small"
+    )
+    db_session.commit()
+    gb = 1024**3
+    body = {"name": "a.bin", "size": gb}
+    assert http.post("/runner/v1/files/outputs/upload", headers=_auth(token), json=body).status_code == 200
+
+    later = runner_routes._now() + timedelta(seconds=runner_api.URL_EXPIRES_SECONDS + 1)
+    monkeypatch.setattr(runner_routes, "_now", lambda: later)
+    body = {"name": "b.bin", "size": gb}
+    assert http.post("/runner/v1/files/outputs/upload", headers=_auth(token), json=body).status_code == 200
+
+
 def test_unfinished_uploads_are_aborted_only_once_their_job_has_ended(http, machine, store, db_session, member) -> None:  # noqa: F811
     from krater.compute import storage_cleanup
     from krater.services import compute_jobs

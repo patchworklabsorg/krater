@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from krater.models import ComputeSettings, Project, ProjectComputeSettings
 from krater.models.compute_settings import GLOBAL_ID
-from krater.services import audit
+from krater.services import audit, teams
 from krater.services.actor import Actor
 from krater.services.errors import NotAllowed, ValidationFailed
 
@@ -321,8 +321,15 @@ def set_project_overrides(
     session: Session, actor: Actor, *, project: Project, overrides: dict[str, int | None], reason: str
 ) -> ComputePolicy:
     """Replace `project`'s overrides with `overrides` (`None` = use the default; a field left out is cleared too).
-    Admin only; `reason` required. Validates the resulting effective policy."""
+    Admin only, and never on a project the admin leads, is on the team of or is invited to, as for budget and the
+    hourly cap (`projects.admin_decide`): a bigger storage quota or a longer runtime is theirs to use. `reason`
+    required. Validates the resulting effective policy."""
     _require_admin_and_reason(actor, reason)
+    if teams.has_conflict(project, actor.user.id):
+        raise NotAllowed(
+            "Admins can't change the compute settings of a project they lead or are on the team of (or invited to). "
+            "Ask another admin."
+        )
     unknown = set(overrides) - set(FIELDS_BY_NAME)
     if unknown:
         raise ValidationFailed({name: "Unknown setting." for name in sorted(unknown)})

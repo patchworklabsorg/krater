@@ -23,7 +23,7 @@ from krater.db import get_sessionmaker
 from krater.models import Project, ProjectRevision
 from krater.pricing.catalog import CatalogError, get_price_catalog
 from krater.quilt import sender as quilt_sender
-from krater.services import people, price_history, slack_notify, slack_reviews
+from krater.services import ops_alerts, people, price_history, slack_notify, slack_reviews
 from krater.services.pricing import refresh_prices
 from krater.slack import SlackError, get_slack_client
 from krater.storage import StorageError, get_compute_store
@@ -52,8 +52,53 @@ app = procrastinate.App(
 @app.periodic(cron="* * * * *")
 @app.task(name="heartbeat")
 def heartbeat(timestamp: int) -> None:
-    """Log once a minute, so it's easy to see the worker and its scheduler are alive."""
+    """Log once a minute, and record it for `/healthz/worker`, so it's easy to see the worker and its scheduler are
+    alive."""
     logger.info("krater worker heartbeat", extra={"timestamp": timestamp})
+    session = get_sessionmaker()()
+    try:
+        ops_alerts.beat(session, now=datetime.fromtimestamp(timestamp, tz=UTC))
+        session.commit()
+    finally:
+        session.close()
+
+
+def _report_failure(key: str, message: str) -> None:
+    """Count a task's failure towards an admin alert (`krater.services.ops_alerts`), in a session of its own: the
+    task's was just rolled back. Never raises: an alert that can't be recorded mustn't hide the failure's own log."""
+    session = get_sessionmaker()()
+    try:
+        ops_alerts.record_failure(session, key, message, now=datetime.now(UTC))
+        session.commit()
+    except Exception:
+        logger.exception("krater: could not record a failure of %s for the admin alerts", key)
+        session.rollback()
+    finally:
+        session.close()
+
+
+def _failure(exc: BaseException) -> str:
+    return f"{type(exc).__name__}: {exc}"[:500]
+
+
+@app.periodic(cron="*/5 * * * *")
+@app.task(name="ops_watch")
+def ops_watch(timestamp: int) -> None:
+    """Every five minutes: check for problems and post the admin alerts that changed (`krater.services.ops_alerts`)."""
+    settings = get_settings()
+    now = max(datetime.now(UTC), datetime.fromtimestamp(timestamp, tz=UTC))
+    session = get_sessionmaker()()
+    try:
+        ops_alerts.check(session, settings, now=now)
+        session.commit()
+        channel = settings.slack_alerts_channel_id or None
+        ops_alerts.deliver(session, get_slack_client() if channel else None, channel, now=now)
+        session.commit()
+    except Exception:
+        logger.exception("krater.ops_watch failed")
+        session.rollback()
+    finally:
+        session.close()
 
 
 # --------------------------------------------------------------------------------------------------
@@ -131,9 +176,10 @@ def price_history_record(timestamp: int) -> None:
             result.failed,
             " (stopped early)" if result.stopped_early else "",
         )
-    except Exception:
+    except Exception as exc:
         logger.exception("krater.price_history_record failed")
         session.rollback()
+        _report_failure("price_history", _failure(exc))
     finally:
         session.close()
 
@@ -164,6 +210,8 @@ def compute_schedule(timestamp: int) -> None:
             runner_sha256=compute_launch.runner_sha256(settings.compute_runner_binary_path),
             pacer=SEARCH_PACER,
         )
+        if result.errors:
+            _report_failure("compute_schedule", f"{result.errors} provider errors in one pass; see the worker's log.")
         if result.rented or result.destroyed or result.swept or result.errors:
             logger.info(
                 "krater compute_schedule: rented %d, destroyed %d, swept %d, errors %d",
@@ -172,9 +220,10 @@ def compute_schedule(timestamp: int) -> None:
                 len(result.swept),
                 result.errors,
             )
-    except Exception:
+    except Exception as exc:
         logger.exception("krater.compute_schedule failed")
         session.rollback()
+        _report_failure("compute_schedule", _failure(exc))
     finally:
         session.close()
 
@@ -201,9 +250,10 @@ def compute_reconcile(timestamp: int) -> None:
             result.alerts,
             len(result.unknown_sources),
         )
-    except Exception:
+    except Exception as exc:
         logger.exception("krater.compute_reconcile failed")
         session.rollback()
+        _report_failure("compute_reconcile", _failure(exc))
     finally:
         session.close()
 
@@ -221,8 +271,9 @@ def compute_storage_cleanup(timestamp: int) -> None:
         )
         if aborted:
             logger.info("krater compute_storage_cleanup: aborted %d unfinished uploads", aborted)
-    except StorageError:
+    except StorageError as exc:
         logger.exception("krater.compute_storage_cleanup failed")
+        _report_failure("compute_storage_cleanup", _failure(exc))
     finally:
         session.close()
 
@@ -254,9 +305,10 @@ def slack_notify_revision_submitted(revision_id: str) -> None:
             feed_channel_id=settings.slack_feed_channel_id or None,
         )
         session.commit()
-    except SlackError:
+    except SlackError as exc:
         logger.exception("krater.slack_notify_revision_submitted failed")
         session.rollback()
+        _report_failure("slack", f"slack_notify_revision_submitted: {_failure(exc)}")
     finally:
         session.close()
 
@@ -273,9 +325,10 @@ def slack_notify_decision(revision_id: str) -> None:
             return
         slack_notify.notify_decision(session, get_slack_client(), revision=revision)
         session.commit()
-    except SlackError:
+    except SlackError as exc:
         logger.exception("krater.slack_notify_decision failed")
         session.rollback()
+        _report_failure("slack", f"slack_notify_decision: {_failure(exc)}")
     finally:
         session.close()
 
@@ -301,9 +354,10 @@ def slack_post_admin_override(
             extra=extra,
         )
         session.commit()
-    except SlackError:
+    except SlackError as exc:
         logger.exception("krater.slack_post_admin_override failed")
         session.rollback()
+        _report_failure("slack", f"slack_post_admin_override: {_failure(exc)}")
     finally:
         session.close()
 
@@ -319,9 +373,30 @@ def slack_invite_team(project_id: str) -> None:
             return
         slack_notify.ensure_channel(session, get_slack_client(), get_weave_client(), project=project)
         session.commit()
-    except SlackError:
+    except SlackError as exc:
         logger.exception("krater.slack_invite_team failed")
         session.rollback()
+        _report_failure("slack", f"slack_invite_team: {_failure(exc)}")
+    finally:
+        session.close()
+
+
+@app.task(name="slack_remove_from_channel")
+def slack_remove_from_channel(project_id: str, user_id: str) -> None:
+    """Take someone who left a project's team out of its channel (`slack_notify.remove_from_channel`)."""
+    session = get_sessionmaker()()
+    try:
+        project = session.get(Project, uuid.UUID(project_id))
+        if project is None:
+            return
+        slack_notify.remove_from_channel(
+            session, get_slack_client(), get_weave_client(), project=project, user_id=uuid.UUID(user_id)
+        )
+        session.commit()
+    except SlackError as exc:
+        logger.exception("krater.slack_remove_from_channel failed")
+        session.rollback()
+        _report_failure("slack", f"slack_remove_from_channel: {_failure(exc)}")
     finally:
         session.close()
 
@@ -338,9 +413,10 @@ def slack_archive_channel(project_id: str) -> None:
             return
         slack_notify.archive_project_channel(session, get_slack_client(), project=project)
         session.commit()
-    except SlackError:
+    except SlackError as exc:
         logger.exception("krater.slack_archive_channel failed")
         session.rollback()
+        _report_failure("slack", f"slack_archive_channel: {_failure(exc)}")
     finally:
         session.close()
 
@@ -360,9 +436,10 @@ def slack_process_approve(revision_id: str, slack_user_id: str, response_url: st
             response_url=response_url,
         )
         kick_quilt_delivery()
-    except SlackError:
+    except SlackError as exc:
         logger.exception("krater.slack_process_approve failed")
         session.rollback()
+        _report_failure("slack", f"slack_process_approve: {_failure(exc)}")
     finally:
         session.close()
 
@@ -382,9 +459,10 @@ def slack_process_reject(revision_id: str, slack_user_id: str, reason: str, resp
             response_url=response_url,
         )
         kick_quilt_delivery()
-    except SlackError:
+    except SlackError as exc:
         logger.exception("krater.slack_process_reject failed")
         session.rollback()
+        _report_failure("slack", f"slack_process_reject: {_failure(exc)}")
     finally:
         session.close()
 
@@ -405,9 +483,10 @@ def slack_reconcile(timestamp: int) -> None:
     session = get_sessionmaker()()
     try:
         slack_notify.reconcile(session, get_slack_client(), get_weave_client())
-    except SlackError:
+    except SlackError as exc:
         # `reconcile` already catches per-step Slack errors and logs+continues; this is a last-resort net.
         logger.exception("krater.slack_reconcile task failed")
+        _report_failure("slack", f"slack_reconcile: {_failure(exc)}")
     finally:
         session.close()
 
@@ -426,6 +505,8 @@ def _quilt_deliver() -> None:
     session = get_sessionmaker()()
     try:
         result = quilt_sender.run(session, get_weave_client(), get_settings())
+        if result is not None and result.failed:
+            _report_failure("quilt", f"Quilt refused {result.failed} events for good; see the outbox on /admin.")
         if result is not None and (result.sent or result.retried or result.failed):
             logger.info(
                 "krater quilt_deliver: sent %d, retry %d, failed %d",
@@ -433,9 +514,10 @@ def _quilt_deliver() -> None:
                 result.retried,
                 result.failed,
             )
-    except Exception:
+    except Exception as exc:
         logger.exception("krater.quilt_deliver failed")
         session.rollback()
+        _report_failure("quilt", _failure(exc))
     finally:
         session.close()
 

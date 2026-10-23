@@ -126,18 +126,22 @@ async def begin_upload(area: str, request: Request, db_session: Annotated[Sessio
     size = body.get("size")
     if not isinstance(size, int) or isinstance(size, bool):
         return JSONResponse({"error": "size must be an integer"}, status_code=422)
-    return _files(
-        request,
-        db_session,
-        lambda instance: runner_api.begin_upload(
+
+    def _begin(instance: ComputeInstance) -> dict:
+        upload = runner_api.begin_upload(
+            db_session,
             get_compute_store(),
             instance,
             area,
             str(body.get("name", "")),
             size,
             quota_bytes=compute_settings.effective_policy(db_session, instance.job.project).storage_quota_gb * 1024**3,
-        ),
-    )
+            now=_now(),
+        )
+        db_session.commit()  # the reservation, and the project's row lock with it
+        return upload
+
+    return _files(request, db_session, _begin)
 
 
 @router.post("/files/{area}/complete")
@@ -158,10 +162,13 @@ def _files(request: Request, db_session: Session, action):
     try:
         return action(_instance(request, db_session))
     except NotAllowed as exc:
+        db_session.rollback()
         return _deny(exc)
     except ValidationFailed as exc:
+        db_session.rollback()  # lets go of the project's row lock an upload took
         return JSONResponse({"error": str(exc), "fields": exc.errors}, status_code=422)
     except StorageError:
+        db_session.rollback()
         return JSONResponse({"error": "Storage is unavailable; try again."}, status_code=503)
 
 

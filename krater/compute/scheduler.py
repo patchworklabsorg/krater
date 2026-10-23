@@ -68,6 +68,14 @@ logger = logging.getLogger(__name__)
 CREATE_SETTLE = timedelta(minutes=5)
 #: How long a machine may take from create to running (the image pull bills disk) before Krater gives up on it.
 PROVISION_TIMEOUT = timedelta(minutes=30)
+#: A machine whose container never ran, and that its provider has stopped or interrupted, gets this long to come back
+#: before Krater tries another machine. On staging (2026-10-15) a V100 host couldn't give the container its GPU (a CDI
+#: error): Vast stopped it at once, and Krater waited out PROVISION_TIMEOUT, then failed the job and blamed the image.
+HOST_START_GRACE = timedelta(minutes=5)
+#: `destroy_reason` of such a machine. The job doesn't go back to it.
+HOST_FAILED = "container never started"
+#: Machines a job may lose this way before it fails: by then the fault is more likely the job's own.
+MAX_HOST_FAILURES = 3
 MICROUSD_PER_CENT = 10_000
 #: A box is idle while its GPU use stays under this (percent), and its CPU use, when reported, under that.
 IDLE_GPU_PERCENT = 5
@@ -470,6 +478,14 @@ class Scheduler:
             return
         if (
             row.state is ComputeInstanceState.PROVISIONING
+            and seen.phase in (Phase.STOPPED, Phase.INTERRUPTED)
+            and row.runner_starts == 0
+            and self.now - row.created_at >= HOST_START_GRACE
+        ):
+            self._give_up_on_host(row, job, seen)
+            return
+        if (
+            row.state is ComputeInstanceState.PROVISIONING
             and seen.phase is not Phase.RUNNING
             and self.now - row.created_at >= PROVISION_TIMEOUT
         ):
@@ -571,6 +587,48 @@ class Scheduler:
                     self._requeue_moved(job)
             elif paused_for >= timedelta(minutes=policy.pause_grace_minutes) and row.interruptible:
                 self._raise_bid(row, job, policy)
+
+    def _failed_machines(self, job: ComputeJob) -> set[str]:
+        """The machines whose container never started for `job`."""
+        stmt = sa.select(ComputeInstance.provider_machine_id).where(
+            ComputeInstance.job_id == job.id,
+            ComputeInstance.destroy_reason == HOST_FAILED,
+            ComputeInstance.provider_machine_id.is_not(None),
+        )
+        return set(self.session.scalars(stmt))
+
+    def _give_up_on_host(self, row: ComputeInstance, job: ComputeJob, seen: Instance) -> None:
+        """The machine was rented but its container never ran: the host's fault (a pull of the same image works
+        elsewhere), so try another machine, a few times, rather than fail the job."""
+        failures = len(self._failed_machines(job) | {row.provider_machine_id or row.provider_instance_id or ""})
+        _event(
+            self.session,
+            job,
+            "host_failed",
+            f"Instance {row.provider_instance_id} never started its container ({seen.status or 'no status'}).",
+            now=self.now,
+            instance=row,
+            provider_status=seen.status,
+            provider_message=(seen.status_msg or "")[:500],
+        )
+        if failures >= MAX_HOST_FAILURES:
+            _finish(
+                job,
+                ComputeJobState.FAILED,
+                f"{failures} machines in a row couldn't start the container. Check that the image exists, can be "
+                "pulled, and runs on a GPU machine.",
+                now=self.now,
+            )
+            self._destroy(row, HOST_FAILED)
+            return
+        # Destroyed first, so the requeued job can't be rented back onto it in the same pass.
+        if self._destroy(row, HOST_FAILED) and self._still_active(job):
+            _requeue(
+                self.session,
+                job,
+                "The machine couldn't start the container. Waiting for another machine.",
+                now=self.now,
+            )
 
     def _check_runner(self, row: ComputeInstance, job: ComputeJob, policy: ComputePolicy) -> None:
         """A running machine's runner must start within the start deadline of the container (re)starting, and keep
@@ -1010,6 +1068,9 @@ class Scheduler:
         if searched is None:
             return False  # paced, or out of quota: it keeps its reason
         pace_key, found = searched
+        failed = self._failed_machines(job)
+        if failed:
+            found = [offer for offer in found if offer.machine_id not in failed]
         choice = offers.choose(
             found,
             rental_type=rental_type,

@@ -3,11 +3,13 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -90,6 +92,8 @@ type SelfStop struct {
 	Env func(name string) string
 	// Exec runs a command to completion; tests replace it so nothing shuts down.
 	Exec func(name string, args ...string) error
+	// StatePath is where Configure keeps what /start said; blank keeps nothing.
+	StatePath string
 
 	mu         sync.Mutex
 	after      time.Duration
@@ -124,6 +128,7 @@ func (s *SelfStop) Configure(info *StartInfo) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer s.save()
 	switch {
 	case info.SelfStopAfterSeconds > 0:
 		s.after = time.Duration(info.SelfStopAfterSeconds) * time.Second
@@ -143,6 +148,71 @@ func (s *SelfStop) Configure(info *StartInfo) {
 	if info.VastAPIURL != "" {
 		s.vastURL = info.VastAPIURL
 	}
+}
+
+// selfStopState is what /start configured, on disk. Vast restarts a container on the same machine with its disk as
+// it was, and a runner restarted while Krater is down can't ask /start again: without this it would wait the 3-hour
+// default rather than the project's silence, and stop the machine the default way. The clock is not kept: a restarted
+// runner counts from its own start, as a new one does.
+type selfStopState struct {
+	AfterSeconds int64  `json:"after_seconds"` // 0 is off
+	InstanceID   int64  `json:"instance_id"`
+	VastURL      string `json:"vast_url"`
+	Method       string `json:"method"`
+	Disabled     string `json:"disabled"`
+}
+
+// save writes the configuration to StatePath; s.mu is held. A failure only costs the restart case, so it is logged.
+func (s *SelfStop) save() {
+	if s.StatePath == "" {
+		return
+	}
+	data, _ := json.Marshal(selfStopState{
+		AfterSeconds: int64(s.after / time.Second),
+		InstanceID:   s.instanceID,
+		VastURL:      s.vastURL,
+		Method:       s.method,
+		Disabled:     s.disabled,
+	})
+	tmp := s.StatePath + ".tmp"
+	err := os.MkdirAll(filepath.Dir(s.StatePath), 0o700)
+	if err == nil {
+		err = os.WriteFile(tmp, data, 0o600)
+	}
+	if err == nil {
+		err = os.Rename(tmp, s.StatePath)
+	}
+	if err != nil {
+		logf("could not keep the self-stop settings for a restart: %v", err)
+	}
+}
+
+// Load takes the configuration an earlier run of this runner kept at StatePath, and reports whether there was one.
+// /start, when it gets through, configures the switch again.
+func (s *SelfStop) Load() bool {
+	if s == nil || s.StatePath == "" {
+		return false
+	}
+	data, err := os.ReadFile(s.StatePath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			logf("could not read the kept self-stop settings: %v", err)
+		}
+		return false
+	}
+	var st selfStopState
+	if err := json.Unmarshal(data, &st); err != nil || st.AfterSeconds < 0 {
+		logf("ignoring kept self-stop settings this runner can't read")
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.after = time.Duration(st.AfterSeconds) * time.Second
+	s.instanceID, s.method, s.disabled = st.InstanceID, st.Method, st.Disabled
+	if st.VastURL != "" {
+		s.vastURL = st.VastURL
+	}
+	return true
 }
 
 // configureMethod applies a descriptor; s.mu is held.

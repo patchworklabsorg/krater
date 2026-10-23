@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -409,5 +410,68 @@ func TestMinusOneTurnsTheSwitchOffWhateverTheDescriptorSays(t *testing.T) {
 
 	if len(vast.calls()) != 0 || len(execs) != 0 || s.Fired() {
 		t.Errorf("Vast got %v, ran %v, fired %v", vast.calls(), execs, s.Fired())
+	}
+}
+
+func TestARestartedRunnerStopsAsTheLastStartSaid(t *testing.T) {
+	vast := newFakeVast(t)
+	var execs []string
+	path := filepath.Join(t.TempDir(), "state", "selfstop.json")
+	first, _ := descriptorSelfStop(vast, &StartInfo{}, &execs, 0)
+	first.StatePath = path
+	first.Configure(&StartInfo{SelfStopAfterSeconds: 1800, SelfStop: &SelfStopDescriptor{Method: "shutdown"}})
+
+	// The container restarts while Krater is down: a new process, no /start.
+	now := time.Date(2026, 10, 22, 9, 0, 0, 0, time.UTC)
+	s := NewSelfStop(http.DefaultClient)
+	s.StatePath = path
+	s.Contact = NewContact(now)
+	s.Exec = func(name string, args ...string) error { execs = append(execs, name); return nil }
+	if !s.Load() {
+		t.Fatal("found no kept settings")
+	}
+	s.Now = func() time.Time { return now.Add(29 * time.Minute) }
+	s.Check(context.Background())
+	if s.Fired() {
+		t.Fatal("stopped before the project's 30 minutes")
+	}
+	s.Now = func() time.Time { return now.Add(30 * time.Minute) }
+	s.Check(context.Background())
+
+	if !s.Fired() || len(execs) != 1 || execs[0] != "shutdown" || len(vast.calls()) != 0 {
+		t.Errorf("fired=%v execs=%v vast=%v", s.Fired(), execs, vast.calls())
+	}
+}
+
+func TestARestartedRunnerKeepsTheSwitchOffIfKraterTurnedItOff(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "selfstop.json")
+	first := NewSelfStop(http.DefaultClient)
+	first.StatePath = path
+	first.Configure(&StartInfo{SelfStopAfterSeconds: -1})
+
+	s := NewSelfStop(http.DefaultClient)
+	s.StatePath = path
+	now := time.Now()
+	s.Contact = NewContact(now)
+	s.Now = func() time.Time { return now.Add(48 * time.Hour) }
+	s.Load()
+	s.Check(context.Background())
+
+	if s.Fired() {
+		t.Error("a switch Krater turned off came back on after a restart")
+	}
+}
+
+func TestWithoutKeptSettingsARunnerUsesTheDefault(t *testing.T) {
+	s := NewSelfStop(http.DefaultClient)
+	s.StatePath = filepath.Join(t.TempDir(), "selfstop.json")
+	if s.Load() || s.after != DefaultSelfStopAfter {
+		t.Errorf("loaded %v", s.after)
+	}
+	if err := os.WriteFile(s.StatePath, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if s.Load() || s.after != DefaultSelfStopAfter {
+		t.Errorf("a broken file changed the switch: %v", s.after)
 	}
 }

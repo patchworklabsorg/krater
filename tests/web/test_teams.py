@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import sqlalchemy as sa
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
@@ -135,3 +137,35 @@ def test_an_admin_can_remove_a_member(client: TestClient, login_as, create_proje
 
     assert response.status_code == 303
     assert db_session.scalar(sa.select(ProjectMember).where(ProjectMember.project_id == project.id)) is None
+
+
+def test_removing_or_leaving_takes_the_person_out_of_the_slack_channel(
+    client: TestClient, login_as, create_project, db_session: Session, monkeypatch
+) -> None:
+    lead = login_as(MEMBER_SUB)
+    project = create_project(lead)
+    db_session.commit()
+    _invite(client, project.id, OTHER_MEMBER_SUB)
+    seat = db_session.scalar(sa.select(ProjectMember).where(ProjectMember.project_id == project.id))
+    deferred: list[dict] = []
+    monkeypatch.setattr(route_module.slack_remove_from_channel, "defer", lambda **kwargs: deferred.append(kwargs) or 1)
+
+    # A cancelled invitation: they were never in the channel.
+    page = client.get(f"/projects/{project.id}")
+    client.post(f"/projects/{project.id}/team/{seat.id}/remove", data={"csrf_token": get_csrf_token(page.text)})
+    assert deferred == []
+
+    _invite(client, project.id, OTHER_MEMBER_SUB)
+    seat = db_session.scalar(sa.select(ProjectMember).where(ProjectMember.project_id == project.id))
+    seat.accepted_at = datetime.now(UTC)
+    db_session.commit()
+    login_as(OTHER_MEMBER_SUB)
+    page = client.get(f"/projects/{project.id}")
+    left = client.post(
+        f"/projects/{project.id}/team/{seat.id}/remove",
+        data={"csrf_token": get_csrf_token(page.text)},
+        follow_redirects=False,
+    )
+
+    assert left.status_code == 303
+    assert deferred == [{"project_id": str(project.id), "user_id": str(seat.user_id)}]

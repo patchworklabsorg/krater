@@ -88,8 +88,14 @@ the runner was reporting again within seconds. Two earlier tries on interruptibl
 within minutes of renting, before the switch could fire; Krater read both as outbid, correctly, since their runners
 had reported moments before.
 
-One gap remains: a runner whose machine restarts while Krater is still down (an outbid machine Vast resumes) can't
-fetch `/start`, so it runs on the 3-hour default rather than the project's setting until Krater answers.
+**A restart while Krater is down.** A machine's container can restart on the same machine (an outbid machine Vast
+resumes, a host reboot), and its runner then can't fetch `/start`. So the runner keeps what `/start` last said about
+self-stopping (the silence, the method and the instance) in `$KRATER_STATE_DIR/selfstop.json` (default
+`/krater/state`, or `/tmp/krater/state` for a user who can't create it), on the container's disk, which a restart
+keeps. A restarted runner stops on the project's setting, not the 3-hour default, and by the method Krater named; its
+silence counts from its own start, like a new runner's. Seen on staging (2026-10-15): a Titan Xp's container
+restarted at 7 minutes and its runner came back on the default. A runner whose `/start` never got through at all
+still uses the default.
 
 The scheduler doesn't count Krater's own downtime against a runner either: a live instance it hasn't looked at for
 5 minutes or more restarts its runner deadlines (`watch_resumed_at`), so the first pass after an outage doesn't fail

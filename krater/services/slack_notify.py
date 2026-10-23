@@ -139,6 +139,24 @@ def ensure_channel(session: Session, slack_client: SlackClient, weave_client: We
     return project.slack_channel_id
 
 
+def remove_from_channel(
+    session: Session, slack_client: SlackClient, weave_client: WeaveClient, *, project: Project, user_id: uuid.UUID
+) -> bool:
+    """Take someone who left `project`'s team, or was removed from it, out of its channel, which holds the project's
+    review and budget talk. Not while they still belong there: back on the team, or a current reviewer (reviewers are
+    in every open channel). Returns whether Slack was asked to remove them; safe to re-run."""
+    if project.slack_channel_id is None or project.slack_channel_archived:
+        return False
+    if user_id in teams.team_user_ids(project):
+        return False
+    user = session.get(User, user_id)
+    slack_id = slack_id_for(session, slack_client, user) if user is not None else None
+    if not slack_id or slack_id in _reviewer_slack_ids(session, slack_client, weave_client):
+        return False
+    slack_client.remove_user(project.slack_channel_id, slack_id)
+    return True
+
+
 def _stage_label(revision: ProjectRevision) -> str:
     if revision.kind is RevisionKind.COMPLETION:
         return "Completion review"

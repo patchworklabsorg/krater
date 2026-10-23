@@ -44,6 +44,7 @@ def test_a_sender_crash_is_logged_and_rolled_back() -> None:
         patch("krater.worker.app.quilt_sender.run", side_effect=RuntimeError("boom")),
         patch("krater.worker.app.get_weave_client"),
         patch("krater.worker.app.get_sessionmaker") as mock_sessionmaker,
+        patch("krater.worker.app._report_failure") as mock_report,
     ):
         session = mock_sessionmaker.return_value.return_value
 
@@ -51,6 +52,8 @@ def test_a_sender_crash_is_logged_and_rolled_back() -> None:
 
         session.rollback.assert_called_once()
         session.close.assert_called_once()
+        # Counted towards the admins' alert for Quilt.
+        mock_report.assert_called_once_with("quilt", "RuntimeError: boom")
 
 
 def test_the_kick_does_nothing_without_a_quilt_url() -> None:

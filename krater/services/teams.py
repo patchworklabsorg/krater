@@ -139,12 +139,13 @@ def decline(session: Session, actor: Actor, *, member_id: uuid.UUID) -> Project:
     return project
 
 
-def remove(session: Session, actor: Actor, *, project: Project, member_id: uuid.UUID) -> None:
+def remove(session: Session, actor: Actor, *, project: Project, member_id: uuid.UUID) -> uuid.UUID | None:
     """Remove a member or cancel an invitation. The lead or an admin can remove anyone; a member can leave.
 
     The lead can't be removed: they answer for the project. Nor can anyone with a job or box on the project that
     hasn't finished: it would keep running on the project's budget and secrets after they left. Writes an audit
-    event.
+    event. Returns the user who left the team, for taking them out of its Slack channel; `None` for a cancelled
+    invitation, whose person was never in it.
     """
     member = next((m for m in project.members if m.id == member_id), None)
     if member is None:
@@ -169,11 +170,13 @@ def remove(session: Session, actor: Actor, *, project: Project, member_id: uuid.
             "project that hasn't finished. Cancel them first: they use the project's budget and secrets."
         )
     sub = member.user.weave_sub
+    left = member.user_id if member.accepted else None
     project.members.remove(member)
     session.flush()
     audit.record(
         session, actor, "team_leave" if leaving else "team_remove", project=project, payload={"member_sub": sub}
     )
+    return left
 
 
 def pending_invitations(session: Session, user_id: uuid.UUID) -> list[ProjectMember]:

@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from krater.db import get_session
 from krater.models import User
-from krater.services import people, teams
+from krater.services import ops_alerts, people, teams
 from krater.services import projects as project_service
 from krater.services import users as user_service
 from krater.weave import WeaveClient, get_weave_client
@@ -57,3 +58,12 @@ def home(
 def healthz(session: Annotated[Session, Depends(get_session)]) -> dict[str, str]:
     session.execute(text("SELECT 1"))
     return {"status": "ok"}
+
+
+@router.get("/healthz/worker")
+def healthz_worker(session: Annotated[Session, Depends(get_session)]):
+    """For an uptime check outside Krater: 503 once the worker's heartbeat is stale. The worker posts every other
+    admin alert itself (`krater.services.ops_alerts`), but it can't report its own death."""
+    alive, last = ops_alerts.worker_alive(session, now=datetime.now(UTC))
+    body = {"status": "ok" if alive else "stale", "last_heartbeat": last.isoformat() if last else None}
+    return JSONResponse(body, status_code=200 if alive else 503)

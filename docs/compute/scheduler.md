@@ -21,6 +21,11 @@ minute (`compute_schedule`), under a procrastinate lock so passes never overlap,
      holds when outbid (`on_outbid = hold`, which limit orders use) instead keeps the paused machine, with its disk,
      and moves only once a search finds another machine free at or under its target (paced like any search);
    - running past the job's max runtime → job failed, machine destroyed;
+   - rented but stopped or interrupted before its container ever ran, with no word from its runner, for 5 minutes
+     (`HOST_START_GRACE`) → the host's fault (on staging a V100 host couldn't give the container its GPU, a CDI
+     error): the machine is destroyed and the job requeued, never onto that machine again. After 3 such machines
+     (`MAX_HOST_FAILURES`) the job fails: by then the image is the likelier cause. A bid machine outbid before its
+     container started counts as one too;
    - never running within 30 minutes → job failed (check the image), machine destroyed;
    - stopped by its own runner after `runner_self_stop_minutes` without Krater (see [runner.md](runner.md)) → a
      job's machine is started again (then the pause rules apply), a box becomes `stopped` for its member to resume;

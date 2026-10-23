@@ -53,3 +53,22 @@ def test_home_page_shows_admin_link_for_admins(client: TestClient, login_as) -> 
     response = client.get("/")
 
     assert ">Admin<" in response.text
+
+
+def test_healthz_worker_answers_503_once_the_worker_heartbeat_is_stale(client: TestClient, db_session) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    import sqlalchemy as sa
+
+    from krater.services import ops_alerts
+
+    assert client.get("/healthz/worker").status_code == 503  # never beat
+    ops_alerts.beat(db_session, now=datetime.now(UTC) - timedelta(minutes=1))
+    db_session.commit()
+    fresh = client.get("/healthz/worker")
+    assert fresh.status_code == 200 and fresh.json()["status"] == "ok"
+
+    db_session.execute(sa.text("UPDATE worker_heartbeat SET at = now() - interval '10 minutes'"))
+    db_session.commit()
+    stale = client.get("/healthz/worker")
+    assert stale.status_code == 503 and stale.json()["status"] == "stale"

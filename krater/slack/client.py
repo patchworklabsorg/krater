@@ -30,6 +30,10 @@ class SlackClient(Protocol):
         """
         ...
 
+    def remove_user(self, channel_id: str, slack_user_id: str) -> None:
+        """Remove `slack_user_id` from `channel_id`. Safe to retry: someone not in it isn't an error."""
+        ...
+
     def archive_channel(self, channel_id: str) -> None:
         """Archive `channel_id`. Safe to call on a channel that's already archived."""
         ...

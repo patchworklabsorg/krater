@@ -20,7 +20,7 @@ import math
 import re
 import secrets
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import sqlalchemy as sa
@@ -28,7 +28,15 @@ from sqlalchemy.orm import Session
 
 from krater import providers
 from krater.config import Settings
-from krater.models import ComputeEvent, ComputeInstance, ComputeJob, ComputeJobKind, ComputeJobState
+from krater.models import (
+    ComputeEvent,
+    ComputeInstance,
+    ComputeJob,
+    ComputeJobKind,
+    ComputeJobState,
+    Project,
+    StorageReservation,
+)
 from krater.models.compute_job import ACTIVE_JOB_STATES
 from krater.services import compute_settings, project_secrets, ssh_keys
 from krater.services.errors import NotAllowed, ValidationFailed
@@ -248,20 +256,53 @@ def project_usage_bytes(store: ObjectStore, instance: ComputeInstance) -> dict[s
 
 
 def begin_upload(
-    store: ObjectStore, instance: ComputeInstance, area: str, name: str, size: int, *, quota_bytes: int
+    session: Session,
+    store: ObjectStore,
+    instance: ComputeInstance,
+    area: str,
+    name: str,
+    size: int,
+    *,
+    quota_bytes: int,
+    now: datetime,
 ) -> dict[str, Any]:
     """One presigned PUT for a small file; for a big one, a multipart upload with a presigned URL per part. Each URL
     is signed for its exact size, and the upload must fit the project's storage quota (replacing a file counts only
-    the difference)."""
+    the difference).
+
+    Storage lists a file only once its upload finishes, so the size is reserved (`StorageReservation`) until the URLs
+    expire, and the quota counts each file at the larger of what's stored and what's reserved for it. The project's
+    row lock makes two uploads check the quota one after the other. The caller commits."""
     key = _key(instance, area, name)
     if not 0 <= size <= MAX_UPLOAD_BYTES:
         raise ValidationFailed({"size": f"Files can be up to {MAX_UPLOAD_BYTES // 1024**3} GB."})
+    project_id = instance.job.project_id
+    session.execute(sa.select(Project.id).where(Project.id == project_id).with_for_update())
+    session.execute(
+        sa.delete(StorageReservation).where(
+            StorageReservation.project_id == project_id, StorageReservation.expires_at <= now
+        )
+    )
     usage = project_usage_bytes(store, instance)
+    reserved = session.execute(
+        sa.select(StorageReservation.key, StorageReservation.size_bytes).where(
+            StorageReservation.project_id == project_id
+        )
+    )
+    for reserved_key, reserved_size in reserved:
+        usage[reserved_key] = max(usage.get(reserved_key, 0), reserved_size)
     used = sum(usage.values()) - usage.get(key, 0)
     if used + size > quota_bytes:
         raise ValidationFailed(
             {"size": f"The project's storage quota of {quota_bytes // 1024**3} GB is full ({used} bytes used)."}
         )
+    reservation = session.get(StorageReservation, key)
+    if reservation is None:
+        reservation = StorageReservation(key=key, project_id=project_id)
+        session.add(reservation)
+    reservation.size_bytes = size
+    reservation.expires_at = now + timedelta(seconds=URL_EXPIRES_SECONDS)
+    session.flush()
     if size <= PART_BYTES:
         return {"name": name, "url": store.presign_put(key, content_length=size, expires=URL_EXPIRES_SECONDS)}
     upload_id = store.create_multipart_upload(key)

@@ -24,6 +24,7 @@ from krater.models.enums import (
 )
 from krater.models.gpu_price import GpuPrice
 from krater.models.gpu_price_sample import GpuPriceSample
+from krater.models.ops_alert import OpsAlert, WorkerHeartbeat
 from krater.models.project import Project
 from krater.models.project_member import ProjectMember
 from krater.models.project_revision import ProjectRevision
@@ -34,6 +35,7 @@ from krater.models.site_settings import SiteSettings
 from krater.models.slack_notification import SlackNotification
 from krater.models.spend_snapshot import SpendSnapshot
 from krater.models.ssh_key import UserSshKey
+from krater.models.storage_reservation import StorageReservation
 from krater.models.user import User
 from krater.models.vast_search_quota import VastSearchQuota
 
@@ -55,6 +57,7 @@ __all__ = [
     "GalleryMinorNames",
     "GpuPrice",
     "GpuPriceSample",
+    "OpsAlert",
     "Project",
     "ProjectComputeSettings",
     "ProjectMember",
@@ -73,7 +76,9 @@ __all__ = [
     "SpendReconciliation",
     "SpendSnapshot",
     "SpendSource",
+    "StorageReservation",
     "User",
     "VastSearchQuota",
+    "WorkerHeartbeat",
     "UserSshKey",
 ]

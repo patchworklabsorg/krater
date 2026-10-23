@@ -112,6 +112,15 @@ func main() {
 		return
 	}
 	cfg.SelfStop = NewSelfStop(&http.Client{Timeout: 60 * time.Second})
+	if dir, err := usableDir(envOr("KRATER_STATE_DIR", "/krater/state"), os.TempDir()); err != nil {
+		logf("nowhere to keep the self-stop settings: %v", err)
+	} else {
+		cfg.SelfStop.StatePath = filepath.Join(dir, "selfstop.json")
+		if cfg.SelfStop.Load() {
+			// The container restarted on the same machine: until /start answers, stop as Krater last said.
+			logf("restarted: using the self-stop settings Krater gave the last run")
+		}
+	}
 	go cfg.SelfStop.Run(context.Background(), time.Minute)
 	code, err := Run(context.Background(), cfg, &http.Client{Timeout: 60 * time.Second}, &http.Client{}, nvidiaSMI)
 	if err != nil {

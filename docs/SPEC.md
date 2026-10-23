@@ -244,8 +244,14 @@ uses the one interactivity URL a Slack app can have, for code-of-conduct accepta
 **Per-project private channel:** created on first submission and reused for amendments and the completion review.
 Members are the team (the lead and everyone who has accepted an invitation; a new teammate is invited when they
 join), and all reviewers. When someone gets the `reviewer` role in
-Weave, a periodic job invites them to open project channels. The channel is
-archived when the project ends up `completed` or `withdrawn`.
+Weave, a periodic job invites them to open project channels. Someone who leaves the team, or is removed from it, is
+removed from the channel (`conversations.kick`), unless they're a reviewer, who belong in every open channel. The
+channel is archived when the project ends up `completed` or `withdrawn`.
+
+**Admin alerts channel:** the worker posts there when something behind the portal keeps failing (Quilt delivery,
+Slack tasks, the compute scheduler, background jobs ending in errors, prices not refreshed), again every 6 hours
+while it lasts, and when it clears (`krater.services.ops_alerts`). A dead worker can't post: `/healthz/worker`
+answers 503 once its heartbeat is 5 minutes old, for an uptime check outside Krater.
 
 **Master feed channel:** one top-level post per new submission, for visibility across Ganymede. It carries no decisions.
 
@@ -253,8 +259,10 @@ archived when the project ends up `completed` or `withdrawn`.
 mirrored into Krater in v1; the project page links to the channel instead.
 
 **App requirements**
-- Bot scopes: `groups:write`, `groups:write.invites`, `chat:write`, `users:read` (the membership gate, when Weave has
-  no `slack_member` for someone).
+- Bot scopes: `groups:write` (creating, archiving, and removing people from project channels), `groups:write.invites`,
+  `chat:write`, `users:read` (the membership gate, when Weave has no `slack_member` for someone). A workspace that
+  restricts who may remove members from private channels refuses the removal; Krater logs it, and an admin removes
+  the person by hand.
 - An HTTPS interactivity endpoint on the portal, reachable by Slack.
 - Slack signature verification (`X-Slack-Signature` with the signing secret, and a check on how old the timestamp is).
   Weave's `SlackSignatureVerification` concern is a working reference.

@@ -53,6 +53,9 @@ class FakeSlackClient:
             return
         self.channels[channel_id]["members"].update(slack_user_ids)
 
+    def remove_user(self, channel_id: str, slack_user_id: str) -> None:
+        self.channels[channel_id]["members"].discard(slack_user_id)
+
     def archive_channel(self, channel_id: str) -> None:
         self.channels[channel_id]["archived"] = True
 

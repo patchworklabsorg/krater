@@ -33,6 +33,8 @@ name, the bot scopes and interactivity (steps 1, 2 and 5 below). Then do steps 3
 6. Invite the bot to a channel you'll use as the master feed (`docs/SPEC.md`: "one top-level post per new
    submission"), then get that channel's id (right-click it in Slack -> **View channel details** -> the
    id is at the bottom, `C0123456789`) -> `KRATER_SLACK_FEED_CHANNEL_ID`.
+7. Make a channel for admin alerts (private is best: alerts quote error messages), invite the bot to it, and copy
+   its id the same way -> `KRATER_SLACK_ALERTS_CHANNEL_ID`. Left blank, the worker logs its alerts instead.
 
 The bot does **not** need to be manually invited to project channels -- it creates them itself
 (`conversations.create`) and is a member from the start.
@@ -44,6 +46,7 @@ KRATER_SLACK_MODE=live
 KRATER_SLACK_BOT_TOKEN=xoxb-...
 KRATER_SLACK_SIGNING_SECRET=...
 KRATER_SLACK_FEED_CHANNEL_ID=C0123456789
+KRATER_SLACK_ALERTS_CHANNEL_ID=C0987654321
 KRATER_SLACK_RECONCILE_INTERVAL_MINUTES=10   # default; how often the worker's periodic slack_reconcile runs
 ```
 

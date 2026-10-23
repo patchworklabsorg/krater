@@ -108,6 +108,7 @@ KRATER_S3_SECRET_ACCESS_KEY=...
 KRATER_WEAVE_MODE=live
 KRATER_PRICING_MODE=live
 KRATER_SLACK_MODE=live
+KRATER_SLACK_ALERTS_CHANNEL_ID=C0987654321          # admin alerts (slack-setup.md); blank logs them instead
 KRATER_S3_MODE=live
 KRATER_S3_PUBLIC_ENDPOINT_URL=https://storage.krater.example.org
 
@@ -133,6 +134,21 @@ itself starts at boot. `migrate` runs once per `up` and is safe to re-run.
   machines download the runner from there, so never firewall it.
 - Upload a screenshot to a completed project. If it fails, check `KRATER_S3_PUBLIC_ENDPOINT_URL` ([storage.md](storage.md)).
 - `ls "$KRATER_BACKUP_DIR"` shows a `krater-*.dump` from the first run of `db-backup`.
+- `curl -s https://<KRATER_DOMAIN>/healthz/worker` answers `{"status": "ok", ...}` within a minute of the worker
+  starting.
+- Refresh the price catalog once by hand (`docker compose exec worker python -m krater.pricing.refresh_once`): the
+  daily refresh runs at 07:00 UTC, and until there are prices the admin alerts report them stale.
+
+### Alerts
+
+The worker posts to `KRATER_SLACK_ALERTS_CHANNEL_ID` when something keeps failing: Quilt delivery, Slack tasks, the
+compute scheduler, spend reconciliation, background jobs ending in errors, or prices not refreshed for two days
+(`krater/services/ops_alerts.py`). It posts again every 6 hours while a problem lasts, and once when it clears.
+
+It can't report its own death, so set up one check outside Krater (an uptime service, or the lab's monitoring) on
+`https://<KRATER_DOMAIN>/healthz/worker`, every 5 minutes, alerting on anything but `200`. It answers `503` once the
+worker's heartbeat is 5 minutes old. Point a second check at `/healthz`, which fails when the portal or its database
+is down.
 
 ## 4. Backups
 
@@ -181,8 +197,7 @@ docker compose --env-file "$KRATER_ENV_FILE" exec -T db   pg_dump --format=custo
 
 ## 6. Not covered yet
 
-- **Alerting.** Nothing tells anyone when the worker's compute scheduler fails. With compute on, it enforces budgets.
-  At least watch `docker compose logs worker` and the `db-backup` logs until a monitor exists.
+- **Backup alerts.** The alerts above don't watch `db-backup`: check its logs (on alastor, skein's nightly dump).
 - **Off-machine backup copies** and a screenshot volume backup (section 4).
 - **The NixOS module has never run on NixOS.** It evaluates and its units build (in a `nixos/nix` container), and
   the image builds from a GitHub commit for arm64, but nothing has started on alastor yet.
