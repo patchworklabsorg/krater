@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% import "gallery/_parts.html" as gallery %}
+
+{% block title %}Gallery preview{% endblock %}
+
+{% block content %}
+<div class="preview-banner" role="note">
+  <p>
+    <strong>Preview, not published.</strong> This is how &ldquo;{{ title or "Untitled project" }}&rdquo; will look in
+    the gallery once its completion is approved,
+    {% if unsaved %}
+      with the edits you haven't saved yet. Nothing here is saved: close this tab and save the draft to keep them.
+    {% else %}
+      as the draft is saved now. Edits you haven't saved aren't in it.
+    {% endif %}
+    <a href="/projects/{{ project.id }}/edit">Back to editing</a>
+  </p>
+</div>
+
+<section class="preview-section" aria-labelledby="preview-list-heading">
+  <h2 id="preview-list-heading" class="preview-section__label">In the gallery list</h2>
+  <ul class="gallery-list">
+    {{ gallery.card(title, summary, tags, spend_cents, image_url) }}
+  </ul>
+</section>
+
+<section class="preview-section" aria-labelledby="preview-page-heading">
+  <h2 id="preview-page-heading" class="preview-section__label">Its page</h2>
+  <div class="preview-frame">
+    {{ gallery.page(title, summary, tags, demo_url, repo_url, image_url, write_up, spend_cents, team, unnamed) }}
+  </div>
+</section>
+{% endblock %}

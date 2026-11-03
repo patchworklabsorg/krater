@@ -175,7 +175,8 @@ Postgres. All money is stored as **integer cents** (`*_cents`). Names are sugges
 
 **ProjectRevision** (an immutable snapshot of what was reviewed)
 - `id`, `project_id`, `number`, `kind` (`proposal` | `amendment` | `completion`), `write_up`,
-  `budget_requested_cents`, completion fields (`demo_url`, `screenshot_keys[]`, `tags[]`),
+  `budget_requested_cents`, completion fields (`demo_url`, `screenshot_keys[]` (the primary image, at most one),
+  `image_keys[]` (the write-up's images), `tags[]`),
   `submitted_at`, `outcome` (`pending` | `approved` | `rejected` | `superseded`)
 - Drafts are edited in place. Submitting freezes them into a revision, and resubmitting creates the next one.
 
@@ -314,30 +315,42 @@ declines and removals are written to the audit log. The gallery credits the team
 
 ## Completion flow & public gallery
 
-The submitter fills in the completion fields (final write-up, screenshots, demo link, repo link,
+The submitter fills in the completion fields (final write-up, primary image, demo link, repo link,
 tags) and submits them as a `completion` revision. The project moves to `pending_completion_review`. Review happens in
 the same channel, under the `completion` stage policy.
 
-**The final write-up is Markdown** (CommonMark, plus tables and strikethrough; a single line break stays a line break).
-The project page and the gallery render it with `krater.web.textfmt.markdown`: raw HTML is shown as text, never passed
-through; `javascript:`, `vbscript:`, `file:` and `data:` links are dropped; every link gets
-`rel="nofollow ugc noopener noreferrer"`; an image becomes a link to it, since the Content-Security-Policy blocks
-images from other sites and an embedded one could track gallery visitors; and headings start at h3, under the page's
-own. The completion form has Write and Preview tabs. Preview posts the unsaved text to
-`POST /projects/{id}/write-up-preview` (team only, CSRF, saves nothing), which renders it with the gallery's own
-write-up card. The application's answers stay plain text with line breaks.
+**The final write-up is Markdown**: CommonMark plus what GitHub adds (tables, strikethrough, task lists, bare
+addresses turned into links) and footnotes; a single line break stays a line break. The project page and the gallery
+render it with `krater.web.textfmt.markdown`: raw HTML is shown as text, never passed through; `javascript:`,
+`vbscript:`, `file:` and `data:` links are dropped; every link gets `rel="nofollow ugc noopener noreferrer"`; and
+headings start at h3, under the page's own. The application's answers stay plain text with line breaks.
+
+**Images.** A completion has one **primary image**, which the gallery shows on its list and at the top of the
+project's page; uploading another replaces it. The write-up's own images (up to 20) are uploaded beside the text box,
+which puts `![Describe the image](/projects/{id}/images/{name})` in the text where the cursor was. Krater hosts them
+all: the renderer shows an image only at exactly that path, and turns any other image into a link to it (the
+Content-Security-Policy would block an image from another site, and one could track gallery visitors).
+`GET /projects/{id}/images/{name}` redirects to a short-lived storage URL for a name in the project's current
+revision's `image_keys`: to anyone once the project is `completed`, before that only to people who may see the
+project, and a 404 otherwise. A rejected completion's next draft keeps both, since the text names its images.
+
+**Preview.** The completion form's "Preview in the gallery" button posts the unsaved fields to
+`POST /projects/{id}/gallery-preview` (team only, CSRF, saves nothing) in a new tab. It shows the project's card as
+the gallery list would and its whole gallery page, from the same templates the gallery uses, under a "Preview, not
+published" banner. A link the form would refuse to save is left out. `GET` on the same path previews the draft
+as saved, for a browser that opens the new tab without the form.
 
 - **Approved:** the project becomes `completed`. It's published to the gallery, spend is frozen at its final value,
   unspent budget is reclaimed to the ledger, and its machines are destroyed.
 - **Rejected:** the project moves to `completion_changes_requested`. The submitter revises and resubmits.
 
-**Public gallery** (no auth). Each entry shows the write-up, screenshots, demo link, repo link, the team,
+**Public gallery** (no auth). Each entry shows the write-up, primary image, demo link, repo link, the team,
 compute spent (latest reconciled estimate, labelled as an estimate), and tags for browsing.
 The team is named as Weave names them, except members under 18: an admin setting on `/admin` (audited) shows their
 full name, their first name only (the default), or no name ("and 1 more team member"). A member whose age Weave
 doesn't say counts as under 18 here.
 
-**Screenshot storage:** S3-compatible object storage, as a placeholder until a provider is chosen (see Open questions).
+**Image storage:** S3-compatible object storage, as a placeholder until a provider is chosen (see Open questions).
 Uploads use presigned URLs, and only objects from approved completion revisions are served publicly.
 
 ## Budget handling

@@ -693,7 +693,11 @@ def test_the_final_write_up_form_says_markdown_works(
     response = client.get(f"/projects/{project.id}/edit")
 
     assert response.status_code == 200
-    assert "You can use Markdown" in response.text
+    assert "Write it in Markdown" in response.text
+    assert 'data-image-widget="inline"' in response.text
+    assert 'data-image-widget="primary"' in response.text
+    assert f'formaction="/projects/{project.id}/gallery-preview"' in response.text
+    assert 'formtarget="_blank"' in response.text
 
 
 def _completion_draft(db_session: Session, login_as, approved_project):
@@ -704,26 +708,70 @@ def _completion_draft(db_session: Session, login_as, approved_project):
     return project
 
 
-def test_the_write_up_preview_renders_the_gallery_card(
+def _preview_form(csrf: str, **values: str) -> dict[str, str]:
+    return {
+        "csrf_token": csrf,
+        "title": "Unsaved Title",
+        "repo_url": "https://github.com/example/rover",
+        "write_up": "# Done\n\n**Yes.** <script>x()</script>\n\n- [x] shipped",
+        "demo_url": "https://example.com/demo",
+        "tags": "rover, ganymede",
+        **values,
+    }
+
+
+def test_the_gallery_preview_shows_the_card_and_the_page_from_unsaved_values(
     client: TestClient, login_as, approved_project, db_session: Session
 ) -> None:
     project = _completion_draft(db_session, login_as, approved_project)
     login_as(MEMBER_SUB)
-    page = client.get(f"/projects/{project.id}/edit")
-    assert 'id="write-up-tabs"' in page.text
+    csrf = get_csrf_token(client.get(f"/projects/{project.id}/edit").text)
+
+    response = client.post(f"/projects/{project.id}/gallery-preview", data=_preview_form(csrf))
+
+    assert response.status_code == 200
+    assert "Preview, not published." in response.text
+    assert "In the gallery list" in response.text and 'class="gallery-list__item"' in response.text
+    assert "<h1>Unsaved Title</h1>" in response.text
+    assert '<span class="tag">rover</span>' in response.text
+    assert 'href="https://example.com/demo"' in response.text
+    assert "<h3>Done</h3>" in response.text and "<strong>Yes.</strong>" in response.text
+    assert 'class="task-list-item-checkbox"' in response.text
+    assert "<script>x()" not in response.text
+    # A preview saves nothing.
+    db_session.refresh(project)
+    assert project.title != "Unsaved Title"
+    assert "Done" not in (project.current_revision.write_up or "")
+
+
+def test_the_gallery_preview_without_a_form_shows_the_saved_draft(
+    client: TestClient, login_as, approved_project, db_session: Session
+) -> None:
+    """Some embedded browsers open the button's new tab as a plain GET; that shows the draft as saved."""
+    project = _completion_draft(db_session, login_as, approved_project)
+    project_service.update_draft(db_session, actor_for(login_as(MEMBER_SUB)), project=project, write_up="**Saved.**")
+
+    response = client.get(f"/projects/{project.id}/gallery-preview")
+
+    assert response.status_code == 200
+    assert "<strong>Saved.</strong>" in response.text
+    assert "as the draft is saved now" in response.text
+
+
+def test_the_gallery_preview_leaves_out_a_link_it_would_refuse(
+    client: TestClient, login_as, approved_project, db_session: Session
+) -> None:
+    project = _completion_draft(db_session, login_as, approved_project)
+    login_as(MEMBER_SUB)
+    csrf = get_csrf_token(client.get(f"/projects/{project.id}/edit").text)
 
     response = client.post(
-        f"/projects/{project.id}/write-up-preview",
-        data={"csrf_token": get_csrf_token(page.text), "write_up": "# Done\n\n**Yes.** <script>x()</script>"},
+        f"/projects/{project.id}/gallery-preview", data=_preview_form(csrf, demo_url="javascript:alert(1)")
     )
 
     assert response.status_code == 200
-    assert "<h2>Write-up</h2>" in response.text
-    assert "<h3>Done</h3>" in response.text and "<strong>Yes.</strong>" in response.text
-    assert "<script>" not in response.text
-    # A preview saves nothing.
-    db_session.refresh(project)
-    assert "Done" not in (project.current_revision.write_up or "")
+    assert "javascript:" not in response.text
+    assert "View demo" not in response.text
 
 
 def test_an_empty_write_up_previews_as_in_the_gallery(
@@ -733,42 +781,43 @@ def test_an_empty_write_up_previews_as_in_the_gallery(
     login_as(MEMBER_SUB)
     csrf = get_csrf_token(client.get(f"/projects/{project.id}/edit").text)
 
-    response = client.post(f"/projects/{project.id}/write-up-preview", data={"csrf_token": csrf, "write_up": "  "})
+    response = client.post(f"/projects/{project.id}/gallery-preview", data=_preview_form(csrf, write_up="  "))
 
     assert response.status_code == 200
     assert "No write-up." in response.text
 
 
-def test_only_the_team_can_preview_the_write_up(
+def test_only_the_team_can_preview_the_gallery_page(
     client: TestClient, login_as, approved_project, db_session: Session
 ) -> None:
     project = _completion_draft(db_session, login_as, approved_project)
     login_as(REVIEWER_SUB)
     csrf = get_csrf_token(client.get(f"/projects/{project.id}").text)
 
-    response = client.post(f"/projects/{project.id}/write-up-preview", data={"csrf_token": csrf, "write_up": "x"})
+    response = client.post(f"/projects/{project.id}/gallery-preview", data=_preview_form(csrf))
 
     assert response.status_code == 403
 
 
-def test_the_write_up_preview_needs_a_completion_draft(client: TestClient, login_as, approved_project) -> None:
+def test_the_gallery_preview_needs_a_completion_draft(client: TestClient, login_as, approved_project) -> None:
     member = login_as(MEMBER_SUB)
     reviewer = login_as(REVIEWER_SUB)
     project = approved_project(member, reviewer)
     login_as(MEMBER_SUB)
     csrf = get_csrf_token(client.get(f"/projects/{project.id}").text)
 
-    response = client.post(f"/projects/{project.id}/write-up-preview", data={"csrf_token": csrf, "write_up": "x"})
+    response = client.post(f"/projects/{project.id}/gallery-preview", data=_preview_form(csrf), follow_redirects=False)
 
-    assert response.status_code == 409
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/projects/{project.id}"
 
 
-def test_the_write_up_preview_needs_the_csrf_token(
+def test_the_gallery_preview_needs_the_csrf_token(
     client: TestClient, login_as, approved_project, db_session: Session
 ) -> None:
     project = _completion_draft(db_session, login_as, approved_project)
     login_as(MEMBER_SUB)
 
-    response = client.post(f"/projects/{project.id}/write-up-preview", data={"write_up": "x"})
+    response = client.post(f"/projects/{project.id}/gallery-preview", data={"title": "x"})
 
     assert response.status_code == 403

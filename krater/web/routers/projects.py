@@ -14,7 +14,7 @@ from typing import Annotated
 
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, Form, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
 from krater.config import get_settings
@@ -33,6 +33,7 @@ from krater.services import budget as budget_service
 from krater.services import demographics, guardian, people, residency, slack_membership, teams
 from krater.services import projects as project_service
 from krater.services import screenshots as screenshot_service
+from krater.services import users as user_service
 from krater.services.actor import Actor
 from krater.services.budget_alerts import current_budget_flag
 from krater.services.errors import (
@@ -40,6 +41,7 @@ from krater.services.errors import (
     DemographicsRequired,
     InvalidState,
     NotAllowed,
+    NotAMember,
     NotFound,
     ValidationFailed,
 )
@@ -50,10 +52,11 @@ from krater.weave import WeaveClient, WeaveUnavailableError, get_weave_client
 from krater.weave.links import demographics_form_url
 from krater.web import application_form, estimator_form
 from krater.web.csrf import verify_csrf_token
-from krater.web.deps import fresh_actor
+from krater.web.deps import current_user, fresh_actor
 from krater.web.flash import flash
 from krater.web.forms import parse_tags
 from krater.web.money import InvalidDollarAmount, cents_to_input, format_cents, parse_dollars
+from krater.web.routers.gallery import primary_image_url, public_team
 from krater.web.templates import templates
 from krater.worker.app import (
     kick_quilt_delivery,
@@ -270,9 +273,10 @@ def _require_editable_draft(project: Project) -> ProjectRevision | None:
     return draft
 
 
-def _screenshot_entries(store: ObjectStore, draft: ProjectRevision) -> list[dict[str, str]]:
-    """Short-lived presigned GET URLs for a draft's screenshots, for the edit page's thumbnails."""
-    return [{"key": key, "url": store.presign_download(key)} for key in draft.screenshot_keys]
+def _image_entry(store: ObjectStore, project: Project, key: str) -> dict[str, str]:
+    """An image for the edit page: its key (for Remove), a short-lived thumbnail URL, and the path the write-up's
+    Markdown names it by."""
+    return {"key": key, "url": store.presign_download(key), "path": screenshot_service.image_path(project.id, key)}
 
 
 def _completion_values(project: Project, draft: ProjectRevision) -> dict:
@@ -305,8 +309,9 @@ def _edit_context(
             "draft": draft,
             "values": values or _completion_values(project, draft),
             "errors": errors or {},
-            "screenshots": _screenshot_entries(store, draft),
-            "max_screenshots": screenshot_service.MAX_SCREENSHOTS,
+            "primary_image": next((_image_entry(store, project, key) for key in draft.screenshot_keys), None),
+            "inline_images": [_image_entry(store, project, key) for key in draft.image_keys],
+            "max_inline_images": screenshot_service.MAX_INLINE_IMAGES,
             "max_screenshot_bytes": screenshot_service.MAX_SCREENSHOT_BYTES,
         }
     return {
@@ -491,7 +496,7 @@ def _build_detail_context(
             warn_percents=get_settings().budget_warn_percents,
         )
 
-    screenshots = _screenshot_entries(get_object_store(), current) if current is not None else []
+    image_url = primary_image_url(get_object_store(), current)
 
     # Team members under 18 without a verified guardian in Weave block every budget grant (docs/SPEC.md
     # "Guardian verification"). A finished project gets no more budget, so it doesn't ask. `None` means Weave
@@ -535,7 +540,7 @@ def _build_detail_context(
         "project": project,
         "summary": summary,
         "budget_flag": budget_flag,
-        "screenshots": screenshots,
+        "primary_image_url": image_url,
         "guardian_pending": guardian_pending,
         "team_residency": team_residency,
         "show_residency": actor.is_reviewer or actor.is_admin,
@@ -1167,30 +1172,120 @@ def admin_set_hourly_cap(
     return _success_redirect(db_session, request, project_id, f"Hourly cap set to {described}.", after_commit=_notify)
 
 
-@router.post("/projects/{project_id}/write-up-preview", dependencies=[Depends(verify_csrf_token)])
-def preview_write_up(
+_COMPLETION_FIELDS = ("title", "repo_url", "write_up", "demo_url", "tags")
+
+
+def _gallery_preview(
+    request: Request,
+    db_session: Session,
+    weave_client: WeaveClient,
+    store: ObjectStore,
+    actor: Actor,
+    project_id: uuid.UUID,
+    values: dict[str, str] | None,
+):
+    """The gallery's list card and page for this project, from `values` (the form's unsaved fields) or, with
+    none, the draft as saved; the images are always the draft's. Saves nothing. The project's team only, while it
+    has a completion draft."""
+    project, draft = _editable(request, db_session, actor, project_id)
+    if draft is None or draft.kind is not RevisionKind.COMPLETION:
+        if draft is not None:
+            flash(request, "Only a completion has a gallery page to preview.", "error")
+        return _redirect_to_project(project_id)
+    unsaved = values is not None
+    values = values if unsaved else _completion_values(project, draft)
+    # The gallery only ever links to checked links, so the preview doesn't show one it would refuse to save.
+    bad_links = project_service.link_errors(repo_url=values["repo_url"], demo_url=values["demo_url"])
+    team, unnamed = public_team(db_session, weave_client, project)
+    return templates.TemplateResponse(
+        request,
+        "gallery/preview.html",
+        {
+            "project": project,
+            "unsaved": unsaved,
+            "title": values["title"].strip(),
+            "summary": draft.summary,
+            "tags": parse_tags(values["tags"]),
+            "demo_url": None if "demo_url" in bad_links else values["demo_url"].strip() or None,
+            "repo_url": None if "repo_url" in bad_links else values["repo_url"].strip() or None,
+            "image_url": primary_image_url(store, draft),
+            "write_up": values["write_up"],
+            "spend_cents": budget_service.latest_spend_cents(db_session, project),
+            "team": team,
+            "unnamed": unnamed,
+        },
+    )
+
+
+@router.post("/projects/{project_id}/gallery-preview", dependencies=[Depends(verify_csrf_token)])
+async def gallery_preview(
     request: Request,
     project_id: uuid.UUID,
     db_session: Annotated[Session, Depends(get_session)],
     actor: Annotated[Actor, Depends(fresh_actor)],
-    write_up: Annotated[str, Form()] = "",
+    weave_client: Weave,
+    store: Annotated[ObjectStore, Depends(get_object_store)],
 ):
-    """The completion form's Preview tab (`krater/web/static/js/write-up-preview.js`): the unsaved final
-    write-up rendered with the gallery's own write-up card, as an HTML fragment. Saves nothing. The
-    project's team only, while it has a completion draft."""
-    project = _get_visible_project(db_session, actor, project_id)
-    if not teams.on_team(project, actor.user.id):
-        raise NotAllowed("Only the project's team may edit it.")
-    draft = _require_editable_draft(project)
-    if draft is None or draft.kind is not RevisionKind.COMPLETION:
-        return HTMLResponse("This project has no final write-up to preview right now.", status_code=409)
-    return templates.TemplateResponse(request, "gallery/_write_up.html", {"write_up": write_up})
+    """The completion form's "Preview in the gallery" button, which posts the unsaved fields to a new tab."""
+    form = await request.form()
+    values = {key: str(form.get(key, "")) for key in _COMPLETION_FIELDS}
+    return _gallery_preview(request, db_session, weave_client, store, actor, project_id, values)
+
+
+@router.get("/projects/{project_id}/gallery-preview")
+def gallery_preview_saved(
+    request: Request,
+    project_id: uuid.UUID,
+    db_session: Annotated[Session, Depends(get_session)],
+    actor: Annotated[Actor, Depends(fresh_actor)],
+    weave_client: Weave,
+    store: Annotated[ObjectStore, Depends(get_object_store)],
+):
+    """The same preview of the draft as saved: for a browser that opens the button's new tab without its form
+    (some embedded browsers do), and for a link."""
+    return _gallery_preview(request, db_session, weave_client, store, actor, project_id, None)
+
+
+@router.get("/projects/{project_id}/images/{name}")
+def project_image(
+    request: Request,
+    project_id: uuid.UUID,
+    name: str,
+    db_session: Annotated[Session, Depends(get_session)],
+    weave_client: Weave,
+    store: Annotated[ObjectStore, Depends(get_object_store)],
+    user: Annotated[User | None, Depends(current_user)],
+):
+    """An image the final write-up shows (`krater.services.screenshots.HOSTED_IMAGE_PATH`): a redirect to a
+    short-lived storage URL. Anyone may see a completed project's, as the gallery is public; until then only
+    people who may see the project. Anything else is a 404, signed in or not, so an image's existence doesn't
+    leak."""
+    project = project_service.get_project(db_session, project_id=project_id)
+    revision = project.current_revision
+    key = screenshot_service.find_image_key(revision, name)
+    if key is None:
+        raise NotFound("No such image.")
+    if project.status is not ProjectStatus.COMPLETED:
+        if user is None:
+            raise NotFound("No such image.")
+        try:
+            actor = user_service.authorize(db_session, weave_client, user, fresh=False)
+        except (NotAMember, WeaveUnavailableError) as exc:
+            raise NotFound("No such image.") from exc
+        _get_visible_project(db_session, actor, project_id)
+    response = RedirectResponse(store.presign_download(key), status_code=307)
+    # Shorter than the storage URL lives, so a cached redirect never points at an expired one. Private: a
+    # draft's image must not sit in a shared cache.
+    response.headers["Cache-Control"] = "private, max-age=600"
+    return response
 
 
 # --------------------------------------------------------------------------------------------------
-# Screenshots (completion draft only): presign/confirm are called by the edit page's upload widget
+# Images (completion draft only): the primary image and the write-up's inline images
+# (`krater.services.screenshots`). Presign/confirm are called by the edit page's upload widgets
 # (krater/web/static/js/screenshot-upload.js) via `fetch`, and return JSON rather than a redirect.
-# Remove is a plain CSRF-protected form post, so it works with JavaScript disabled.
+# Remove is a plain CSRF-protected form post, so it works with JavaScript disabled; the widgets send it with
+# `Accept: application/json` to get JSON back instead, so the page (and its unsaved edits) stays.
 # --------------------------------------------------------------------------------------------------
 
 
@@ -1201,11 +1296,12 @@ def presign_screenshot(
     actor: Annotated[Actor, Depends(fresh_actor)],
     store: Annotated[ObjectStore, Depends(get_object_store)],
     content_type: Annotated[str, Form()] = "",
+    role: Annotated[str, Form()] = screenshot_service.PRIMARY,
 ):
     project = _get_visible_project(db_session, actor, project_id)
     try:
         upload = screenshot_service.presign_screenshot(
-            db_session, actor, project=project, content_type=content_type, store=store
+            db_session, actor, project=project, content_type=content_type, store=store, role=role
         )
     except ValidationFailed as exc:
         return JSONResponse({"errors": exc.errors}, status_code=422)
@@ -1221,10 +1317,11 @@ def confirm_screenshot(
     actor: Annotated[Actor, Depends(fresh_actor)],
     store: Annotated[ObjectStore, Depends(get_object_store)],
     key: Annotated[str, Form()] = "",
+    role: Annotated[str, Form()] = screenshot_service.PRIMARY,
 ):
     project = _get_visible_project(db_session, actor, project_id)
     try:
-        screenshot_service.confirm_screenshot(db_session, actor, project=project, key=key, store=store)
+        screenshot_service.confirm_screenshot(db_session, actor, project=project, key=key, store=store, role=role)
     except ValidationFailed as exc:
         db_session.rollback()
         return JSONResponse({"errors": exc.errors}, status_code=422)
@@ -1232,7 +1329,7 @@ def confirm_screenshot(
         db_session.rollback()
         return JSONResponse({"errors": {"screenshot": str(exc)}}, status_code=409)
     db_session.commit()
-    return JSONResponse({"key": key})
+    return JSONResponse(_image_entry(store, project, key))
 
 
 @router.post("/projects/{project_id}/screenshots/{key:path}/delete", dependencies=[Depends(verify_csrf_token)])
@@ -1245,12 +1342,18 @@ def delete_screenshot(
     store: Annotated[ObjectStore, Depends(get_object_store)],
 ):
     project = _get_visible_project(db_session, actor, project_id)
+    wants_json = request.headers.get("accept", "").startswith("application/json")
     try:
         screenshot_service.remove_screenshot(db_session, actor, project=project, key=key, store=store)
     except InvalidState as exc:
+        if wants_json:
+            db_session.rollback()
+            return JSONResponse({"errors": {"screenshot": str(exc)}}, status_code=409)
         return _invalid_state_redirect(db_session, request, project_id, exc)
     db_session.commit()
-    flash(request, "Screenshot removed.", "success")
+    if wants_json:
+        return JSONResponse({"removed": key})
+    flash(request, "Image removed.", "success")
     return RedirectResponse(f"/projects/{project_id}/edit", status_code=303)
 
 

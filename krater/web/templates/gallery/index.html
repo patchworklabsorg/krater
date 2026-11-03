@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "gallery/_parts.html" as gallery %}
 
 {% block title %}Gallery{% endblock %}
 
@@ -13,28 +14,14 @@
 {% if entries %}
   <ul class="gallery-list">
     {% for entry in entries %}
-      <li class="gallery-list__item">
-        {% if entry.thumbnail_url %}
-          <img
-            class="gallery-list__thumb"
-            src="{{ entry.thumbnail_url }}"
-            alt="{{ entry.project.title or 'Project' }} screenshot"
-            loading="lazy"
-          >
-        {% else %}
-          <div class="gallery-list__thumb gallery-list__thumb--empty" aria-hidden="true">{{ (entry.project.title or "?")[:1] }}</div>
-        {% endif %}
-        <div class="gallery-list__body">
-          <h2><a href="/gallery/{{ entry.project.id }}">{{ entry.project.title or "Untitled project" }}</a></h2>
-          {% if entry.revision and entry.revision.summary %}<p>{{ entry.revision.summary }}</p>{% endif %}
-          {% if entry.revision and entry.revision.tags %}
-            <p class="tag-list">
-              {% for tag in entry.revision.tags %}<span class="tag">{{ tag }}</span>{% endfor %}
-            </p>
-          {% endif %}
-          <p class="muted">&asymp; {{ entry.spend_cents | dollars }} estimated compute</p>
-        </div>
-      </li>
+      {{ gallery.card(
+        entry.project.title,
+        entry.revision.summary if entry.revision else "",
+        entry.revision.tags if entry.revision else [],
+        entry.spend_cents,
+        entry.thumbnail_url,
+        href="/gallery/" ~ entry.project.id,
+      ) }}
     {% endfor %}
   </ul>
 {% else %}

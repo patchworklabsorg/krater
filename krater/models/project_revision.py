@@ -55,9 +55,12 @@ class ProjectRevision(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
 
     # Completion-only fields; left empty/null for `proposal` and `amendment` revisions.
     demo_url: Mapped[str | None] = mapped_column(sa.String(2048), nullable=True)
+    # The primary image: at most one key, which the gallery shows on its list and at the top of the page
+    # (`krater.services.screenshots`). The images the write-up shows inline are `image_keys`.
     screenshot_keys: Mapped[list[str]] = mapped_column(
         ARRAY(sa.String), nullable=False, default=list, server_default="{}"
     )
+    image_keys: Mapped[list[str]] = mapped_column(ARRAY(sa.String), nullable=False, default=list, server_default="{}")
     tags: Mapped[list[str]] = mapped_column(ARRAY(sa.String), nullable=False, default=list, server_default="{}")
 
     # Null until the revision is actually submitted for review (vs. a draft edited in place).

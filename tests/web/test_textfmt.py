@@ -6,6 +6,8 @@ from markupsafe import Markup
 
 from krater.web.textfmt import LINK_REL, markdown, nl2br
 
+_HOSTED = "/projects/11111111-1111-4111-8111-111111111111/images/22222222-2222-4222-8222-222222222222.png"
+
 
 def test_markdown_renders_the_common_formatting() -> None:
     html = markdown("**bold** and *italic* and ~~gone~~ and `code`\n\n- one\n- two\n\n1. first")
@@ -65,6 +67,40 @@ def test_markdown_images_become_links() -> None:
     assert f'<a href="https://example.com/rover.png" rel="{LINK_REL}">A &quot;rover&quot;</a>' in html
     # No alt text: the link is named by its address.
     assert f'<a href="https://example.com/b.png" rel="{LINK_REL}">https://example.com/b.png</a>' in html
+
+
+def test_markdown_shows_an_image_krater_hosts() -> None:
+    html = markdown(f"![The <rover>]({_HOSTED})")
+
+    assert f'<img src="{_HOSTED}" alt="The &lt;rover&gt;" loading="lazy">' in html
+
+
+def test_markdown_only_trusts_the_whole_hosted_path() -> None:
+    """A hosted-looking path on another site, or with anything after it, is still someone else's image."""
+    for src in (f"https://evil.example{_HOSTED}", f"{_HOSTED}?track=1", f"//evil.example{_HOSTED}"):
+        assert "<img" not in markdown(f"![x]({src})"), src
+
+
+def test_markdown_renders_task_lists() -> None:
+    html = markdown("- [ ] todo\n- [x] done")
+
+    assert html.count('type="checkbox"') == 2
+    assert 'checked="checked"' in html
+    assert 'disabled="disabled"' in html
+
+
+def test_markdown_renders_footnotes_and_strikethrough() -> None:
+    html = markdown("Fast[^1] ~~slow~~\n\n[^1]: On an A100.")
+
+    assert 'class="footnote-ref"' in html and 'class="footnotes"' in html
+    assert "On an A100." in html
+    assert "<s>slow</s>" in html
+
+
+def test_markdown_turns_bare_addresses_into_links_with_the_rel() -> None:
+    html = markdown("See https://example.com/demo now.")
+
+    assert f'<a href="https://example.com/demo" rel="{LINK_REL}">https://example.com/demo</a>' in html
 
 
 def test_markdown_a_data_image_keeps_only_its_alt_text() -> None:

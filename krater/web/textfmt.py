@@ -5,6 +5,10 @@ from __future__ import annotations
 from markdown_it import MarkdownIt
 from markdown_it.common.utils import escapeHtml
 from markupsafe import Markup, escape
+from mdit_py_plugins.footnote import footnote_plugin
+from mdit_py_plugins.tasklists import tasklists_plugin
+
+from krater.services.screenshots import HOSTED_IMAGE_PATH
 
 #: Members' links lead off the site, and the gallery is public: no referrer, no ranking credit.
 LINK_REL = "nofollow ugc noopener noreferrer"
@@ -33,30 +37,42 @@ def _adjust_tokens(state) -> None:
                 child.attrSet("rel", LINK_REL)
 
 
-def _image_as_link(renderer, tokens, idx, options, env) -> str:
-    """An image becomes a link to it, named by its alt text. The page's Content-Security-Policy would block
+def _render_image(renderer, tokens, idx, options, env) -> str:
+    """An image Krater hosts (`HOSTED_IMAGE_PATH`: one the team uploaded for the write-up) shows inline. Any
+    other image becomes a link to it, named by its alt text: the page's Content-Security-Policy would block
     an image from another site anyway, and an embedded one could track the gallery's visitors. A `data:`
-    image (the only kind the link check lets through) has nowhere to link to, so only its alt text stays."""
+    image (the only kind the link check lets through) has nowhere to link to, so only its alt text stays.
+
+    `src` is checked after markdown-it has normalized it, which is what the browser would load."""
     token = tokens[idx]
     src = token.attrGet("src") or ""
     alt = escapeHtml(renderer.renderInlineAsText(token.children or [], options, env))
+    if HOSTED_IMAGE_PATH.fullmatch(src):
+        return f'<img src="{escapeHtml(src)}" alt="{alt}" loading="lazy">'
     if not src or src.lower().startswith("data:"):
         return alt
     return f'<a href="{escapeHtml(src)}" rel="{LINK_REL}">{alt or escapeHtml(src)}</a>'
 
 
-# CommonMark with raw HTML off, so anything that looks like a tag is shown as text, plus tables and
-# strikethrough. `breaks` keeps a single line break a line break, as the plain-text write-up always did.
-# markdown-it's own link check drops `javascript:`, `vbscript:`, `file:` and `data:` links.
-_markdown = MarkdownIt("commonmark", {"html": False, "breaks": True}).enable(["table", "strikethrough"])
+# CommonMark plus what GitHub adds (tables, strikethrough, task lists, bare links turned into links) and
+# footnotes. Raw HTML stays off, so anything that looks like a tag is shown as text. `breaks` keeps a single
+# line break a line break, as the plain-text write-up always did. markdown-it's own link check drops
+# `javascript:`, `vbscript:`, `file:` and `data:` links.
+_markdown = (
+    MarkdownIt("commonmark", {"html": False, "breaks": True, "linkify": True})
+    .enable(["table", "strikethrough", "linkify"])
+    .use(tasklists_plugin)
+    .use(footnote_plugin)
+)
 _markdown.core.ruler.push("krater_adjust_tokens", _adjust_tokens)
-_markdown.add_render_rule("image", _image_as_link)
+_markdown.add_render_rule("image", _render_image)
 
 
 def markdown(value: str | None) -> Markup:
     """Render a member's Markdown (the final write-up) to HTML that is safe to put in a page.
 
-    Raw HTML is never passed through, links get `LINK_REL`, images become links and headings start at h3.
+    Raw HTML is never passed through, links get `LINK_REL`, headings start at h3, and only images Krater
+    hosts show inline (others become links).
     """
     return Markup(_markdown.render(value or ""))
 

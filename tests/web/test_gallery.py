@@ -39,13 +39,14 @@ def _completed_project(
     )
     if with_screenshot:
         store = get_object_store()
-        upload = screenshot_service.presign_screenshot(
-            db_session, actor_for(member), project=project, content_type="image/png", store=store
-        )
-        store.put(upload.key, content_type="image/png", size_bytes=1024, content=PNG_SIGNATURE)
-        screenshot_service.confirm_screenshot(
-            db_session, actor_for(member), project=project, key=upload.key, store=store
-        )
+        for role in screenshot_service.IMAGE_ROLES:
+            upload = screenshot_service.presign_screenshot(
+                db_session, actor_for(member), project=project, content_type="image/png", store=store, role=role
+            )
+            store.put(upload.key, content_type="image/png", size_bytes=1024, content=PNG_SIGNATURE)
+            screenshot_service.confirm_screenshot(
+                db_session, actor_for(member), project=project, key=upload.key, store=store, role=role
+            )
     project_service.submit_completion(db_session, actor_for(member), project=project)
     project_service.record_review(
         db_session,
@@ -137,7 +138,7 @@ def test_gallery_detail_404s_for_an_unknown_project(client: TestClient) -> None:
     assert response.status_code == 404
 
 
-def test_gallery_shows_screenshots_as_presigned_urls(
+def test_gallery_shows_the_primary_image_as_a_presigned_url(
     client: TestClient, login_as, approved_project, db_session: Session, weave_stub
 ) -> None:
     member = login_as(MEMBER_SUB)
@@ -153,9 +154,31 @@ def test_gallery_shows_screenshots_as_presigned_urls(
 
     detail_response = client.get(f"/gallery/{project.id}")
     assert detail_response.status_code == 200
-    assert "gallery-screenshots" in detail_response.text
+    assert 'class="gallery-hero"' in detail_response.text
     assert key in detail_response.text
-    assert 'alt="Gallery Project screenshot"' in detail_response.text
+    # Only the primary image: the inline one shows only where the write-up puts it.
+    assert project.current_revision.image_keys[0] not in detail_response.text
+
+
+def test_a_completed_projects_inline_image_is_public(
+    client: TestClient, login_as, approved_project, db_session: Session, weave_stub
+) -> None:
+    member = login_as(MEMBER_SUB)
+    reviewer = login_as(REVIEWER_SUB)
+    project = _completed_project(
+        db_session, approved_project, member, reviewer, with_screenshot=True, weave_stub=weave_stub
+    )
+    key = project.current_revision.image_keys[0]
+    client.cookies.clear()  # signed out
+
+    response = client.get(screenshot_service.image_path(project.id, key), follow_redirects=False)
+
+    assert response.status_code == 307
+    assert key in response.headers["location"]
+    assert response.headers["cache-control"] == "private, max-age=600"
+    # The primary image isn't served by name: it isn't one of the write-up's.
+    primary = project.current_revision.screenshot_keys[0]
+    assert client.get(screenshot_service.image_path(project.id, primary), follow_redirects=False).status_code == 404
 
 
 @pytest.mark.parametrize(

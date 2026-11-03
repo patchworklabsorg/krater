@@ -6,6 +6,8 @@ simulate "the browser uploaded to the presigned URL", since `TestClient` can't a
 
 from __future__ import annotations
 
+import uuid
+
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -58,11 +60,97 @@ def test_presign_confirm_and_display_happy_path(
     db_session.refresh(project)
     assert key in project.current_revision.screenshot_keys
 
+    assert confirm_response.json()["key"] == key
+    assert key in confirm_response.json()["url"]
+
     edit_page_after = client.get(f"/projects/{project.id}/edit")
-    assert "screenshot-list__thumb" in edit_page_after.text
+    assert "primary-image__img" in edit_page_after.text
 
     detail_page = client.get(f"/projects/{project.id}")
-    assert "Screenshots" in detail_page.text
+    assert "Primary image" in detail_page.text
+
+
+def _upload_inline(client: TestClient, project, csrf: str) -> dict:
+    presign = client.post(
+        f"/projects/{project.id}/screenshots/presign",
+        data={"csrf_token": csrf, "content_type": "image/png", "role": "inline"},
+    ).json()
+    get_object_store().put(presign["key"], content_type="image/png", size_bytes=100, content=PNG_SIGNATURE)
+    confirm = client.post(
+        f"/projects/{project.id}/screenshots/confirm",
+        data={"csrf_token": csrf, "key": presign["key"], "role": "inline"},
+    )
+    assert confirm.status_code == 200, confirm.text
+    return confirm.json()
+
+
+def test_an_inline_image_comes_back_with_its_markdown_path(
+    client: TestClient, login_as, approved_project, db_session: Session
+) -> None:
+    member = login_as(MEMBER_SUB)
+    reviewer_user = login_as(REVIEWER_SUB)
+    login_as(MEMBER_SUB)
+    project = _completion_draft(db_session, approved_project, member, reviewer_user)
+    csrf = get_csrf_token(client.get(f"/projects/{project.id}/edit").text)
+
+    image = _upload_inline(client, project, csrf)
+
+    assert image["path"] == f"/projects/{project.id}/images/{image['key'].rsplit('/', 1)[1]}"
+    db_session.refresh(project)
+    assert project.current_revision.image_keys == [image["key"]]
+    assert project.current_revision.screenshot_keys == []
+    edit_page = client.get(f"/projects/{project.id}/edit")
+    assert f"![Describe the image]({image['path']})" in edit_page.text
+
+
+def test_a_drafts_inline_image_is_served_to_the_team_only(
+    client: TestClient, login_as, approved_project, db_session: Session
+) -> None:
+    member = login_as(MEMBER_SUB)
+    reviewer_user = login_as(REVIEWER_SUB)
+    login_as(MEMBER_SUB)
+    project = _completion_draft(db_session, approved_project, member, reviewer_user)
+    csrf = get_csrf_token(client.get(f"/projects/{project.id}/edit").text)
+    image = _upload_inline(client, project, csrf)
+
+    team = client.get(image["path"], follow_redirects=False)
+    assert team.status_code == 307
+    assert image["key"] in team.headers["location"]
+
+    login_as(OTHER_MEMBER_SUB)
+    assert client.get(image["path"], follow_redirects=False).status_code == 404
+
+    client.cookies.clear()  # signed out
+    assert client.get(image["path"], follow_redirects=False).status_code == 404
+
+
+def test_an_unknown_image_name_is_a_404(client: TestClient, login_as, approved_project, db_session: Session) -> None:
+    member = login_as(MEMBER_SUB)
+    reviewer_user = login_as(REVIEWER_SUB)
+    login_as(MEMBER_SUB)
+    project = _completion_draft(db_session, approved_project, member, reviewer_user)
+
+    response = client.get(f"/projects/{project.id}/images/{uuid.uuid4()}.png", follow_redirects=False)
+
+    assert response.status_code == 404
+
+
+def test_delete_answers_json_when_asked(client: TestClient, login_as, approved_project, db_session: Session) -> None:
+    member = login_as(MEMBER_SUB)
+    reviewer_user = login_as(REVIEWER_SUB)
+    login_as(MEMBER_SUB)
+    project = _completion_draft(db_session, approved_project, member, reviewer_user)
+    csrf = get_csrf_token(client.get(f"/projects/{project.id}/edit").text)
+    image = _upload_inline(client, project, csrf)
+    url = f"/projects/{project.id}/screenshots/{image['key']}/delete"
+
+    removed = client.post(url, data={"csrf_token": csrf}, headers={"Accept": "application/json"})
+    again = client.post(url, data={"csrf_token": csrf}, headers={"Accept": "application/json"})
+
+    assert removed.status_code == 200 and removed.json() == {"removed": image["key"]}
+    assert again.status_code == 409
+    db_session.refresh(project)
+    assert project.current_revision.image_keys == []
 
 
 def test_presign_rejects_a_disallowed_content_type(

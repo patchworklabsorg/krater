@@ -22,6 +22,8 @@ dependencies = [
     "cryptography>=44",
     "reportlab>=4.2",
     "markdown-it-py>=3.0",
+    "mdit-py-plugins>=0.5",
+    "linkify-it-py>=2.0",
 ]
 
 [dependency-groups]

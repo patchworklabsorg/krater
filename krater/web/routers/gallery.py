@@ -22,13 +22,24 @@ from krater.web.templates import templates
 router = APIRouter()
 
 
-def _screenshot_urls(store: ObjectStore, revision: ProjectRevision | None) -> list[str]:
-    """Short-lived presigned GET URLs for `revision`'s screenshots. Only ever called for a `completed`
-    project's revision, per docs/SPEC.md: "only objects from approved completion revisions are served
-    publicly"."""
-    if revision is None:
-        return []
-    return [store.presign_download(key) for key in revision.screenshot_keys]
+def primary_image_url(store: ObjectStore, revision: ProjectRevision | None) -> str | None:
+    """A short-lived presigned GET URL for `revision`'s primary image, if it has one. The gallery only calls this
+    for a `completed` project's revision, per docs/SPEC.md: "only objects from approved completion revisions are
+    served publicly" (the completion form's preview calls it for the team's own draft)."""
+    if revision is None or not revision.screenshot_keys:
+        return None
+    return store.presign_download(revision.screenshot_keys[0])
+
+
+def public_team(db_session: Session, weave_client: WeaveClient, project: Project) -> tuple[list[str], int]:
+    """How the gallery names `project`'s team: `krater.services.people.public_names`."""
+    team_ids = teams.team_user_ids(project)
+    by_id = {user.id: user for user in db_session.scalars(sa.select(User).where(User.id.in_(team_ids)))}
+    return people.public_names(
+        weave_client,
+        [by_id[user_id] for user_id in team_ids if user_id in by_id],
+        minors=site_settings.current(db_session).gallery_minor_names,
+    )
 
 
 @router.get("/gallery")
@@ -44,8 +55,7 @@ def gallery_index(request: Request, db_session: Annotated[Session, Depends(get_s
             "project": project,
             "revision": project.current_revision,
             "spend_cents": budget.latest_spend_cents(db_session, project),
-            # Just the first, as a card thumbnail -- the full set shows on the entry's own detail page.
-            "thumbnail_url": next(iter(_screenshot_urls(store, project.current_revision)), None),
+            "thumbnail_url": primary_image_url(store, project.current_revision),
         }
         for project in completed
     ]
@@ -66,16 +76,7 @@ def gallery_detail(
     # A completed project's `current_revision` is its approved completion revision: approving a
     # completion moves the project straight to `completed` without opening another draft.
     revision = project.current_revision
-    team_ids = teams.team_user_ids(project)
-    by_id = {user.id: user for user in db_session.scalars(sa.select(User).where(User.id.in_(team_ids)))}
-    team, unnamed = people.public_names(
-        weave_client,
-        [by_id[user_id] for user_id in team_ids if user_id in by_id],
-        minors=site_settings.current(db_session).gallery_minor_names,
-    )
-
-    spend_cents = budget.latest_spend_cents(db_session, project)
-    screenshot_urls = _screenshot_urls(get_object_store(), revision)
+    team, unnamed = public_team(db_session, weave_client, project)
     return templates.TemplateResponse(
         request,
         "gallery/detail.html",
@@ -84,10 +85,10 @@ def gallery_detail(
             "revision": revision,
             "team": team,
             "unnamed": unnamed,
-            "spend_cents": spend_cents,
-            "screenshot_urls": screenshot_urls,
+            "spend_cents": budget.latest_spend_cents(db_session, project),
+            "image_url": primary_image_url(get_object_store(), revision),
         },
     )
 
 
-__all__ = ["router"]
+__all__ = ["primary_image_url", "public_team", "router"]

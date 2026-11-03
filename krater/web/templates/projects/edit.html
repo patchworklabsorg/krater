@@ -40,28 +40,55 @@
 
       <div class="field">
         <label for="write_up">Final write-up</label>
-        {# Shown by write-up-preview.js; without JavaScript the box works as a plain text field. #}
-        <div
-          class="tabs"
-          role="tablist"
-          aria-label="Final write-up"
-          id="write-up-tabs"
-          data-preview-url="/projects/{{ project.id }}/write-up-preview"
-          data-csrf-token="{{ csrf_token() }}"
-          hidden
-        >
-          <button type="button" class="tabs__tab" role="tab" id="write-up-tab-write" aria-controls="write_up" aria-selected="true">Write</button>
-          <button type="button" class="tabs__tab" role="tab" id="write-up-tab-preview" aria-controls="write-up-preview" aria-selected="false" tabindex="-1">Preview</button>
-        </div>
-        <textarea id="write_up" name="write_up" rows="10">{{ values.write_up }}</textarea>
-        <div id="write-up-preview" class="write-up-preview" role="tabpanel" aria-labelledby="write-up-tab-preview" aria-live="polite" hidden></div>
+        <textarea id="write_up" name="write_up" rows="14">{{ values.write_up }}</textarea>
         <p class="field-hint">
-          What you built and how it went. The gallery shows it. You can use Markdown: <code>**bold**</code>,
-          <code>*italic*</code>, <code>#</code> headings, <code>-</code> lists, <code>[links](https://...)</code>,
-          <code>`code`</code> and tables. HTML isn't allowed, and images show as links. Preview shows it as
-          the gallery will.
+          What you built and how it went. The gallery shows it. Write it in Markdown: <code>**bold**</code>,
+          <code>*italic*</code>, <code>#</code> headings, lists and <code>- [ ]</code> task lists,
+          <code>[links](https://...)</code>, <code>`code`</code> and code blocks, quotes, tables,
+          <code>~~strikethrough~~</code> and footnotes (<code>[^1]</code>). HTML isn't allowed. Images
+          show only if you upload them below; any other image becomes a link.
         </p>
         {% if errors.write_up %}<p class="field-error">{{ errors.write_up }}</p>{% endif %}
+
+        {% set inline = inline_images|default([]) %}
+        {% set max_inline = max_inline_images|default(20) %}
+        <div
+          class="image-widget image-widget--inline"
+          data-image-widget="inline"
+          data-presign-url="/projects/{{ project.id }}/screenshots/presign"
+          data-confirm-url="/projects/{{ project.id }}/screenshots/confirm"
+          data-delete-url="/projects/{{ project.id }}/screenshots/"
+          data-csrf-token="{{ csrf_token() }}"
+          data-max-bytes="{{ max_screenshot_bytes|default(5242880) }}"
+          data-max-count="{{ max_inline }}"
+          data-textarea="write_up"
+        >
+          <p class="image-widget__label" id="inline-images-label">Images in the write-up</p>
+          <ul class="image-list" data-role="list" aria-labelledby="inline-images-label">
+            {% for image in inline %}
+              <li class="image-list__item" data-key="{{ image.key }}" data-path="{{ image.path }}">
+                <img class="image-list__thumb" src="{{ image.url }}" alt="" loading="lazy">
+                <code class="image-list__snippet">![Describe the image]({{ image.path }})</code>
+                <span class="image-list__actions">
+                  <button type="button" class="button button--small" data-role="insert" hidden>Insert</button>
+                  <button type="submit" class="button button--small button--danger" form="remove-image-{{ loop.index }}">Remove</button>
+                </span>
+              </li>
+            {% endfor %}
+          </ul>
+          <noscript>
+            <p class="field-hint">Uploading images needs JavaScript. Without it, copy an image's Markdown above into the text.</p>
+          </noscript>
+          <div data-role="controls" hidden>
+            <label class="button button--small" for="inline-image-input">Upload images</label>
+            <input type="file" id="inline-image-input" class="visually-hidden" accept="image/png,image/jpeg,image/webp" multiple data-role="file-input">
+            <p class="field-hint">
+              PNG, JPEG or WebP, up to 5 MB each, {{ max_inline }} at most. Each goes in where the cursor is.
+              Krater hosts them, and they go public with the write-up.
+            </p>
+          </div>
+          <p class="field-hint" data-role="status" role="status"></p>
+        </div>
       </div>
     {% else %}
       {{ application.application_fields(values, errors, summaries, gpu_options, applicant, word_limits, summary_max, other_gpu, kind=draft.kind.value, team=team, base_cents=base_cents) }}
@@ -84,56 +111,57 @@
 
     <div class="form-actions">
       <button type="submit" name="form_action" value="save" class="button button--primary">Save draft</button>
+      {% if draft.kind.value == "completion" %}
+        <button
+          type="submit"
+          class="button"
+          formaction="/projects/{{ project.id }}/gallery-preview"
+          formtarget="_blank"
+        >Preview in the gallery</button>
+      {% endif %}
     </div>
   </form>
 
   {% if draft.kind.value == "completion" %}
-    {% set current_screenshots = screenshots|default([]) %}
-    {% set max_shots = max_screenshots|default(6) %}
+    {# The inline images' Remove buttons sit inside the form above and point here (form=...): a form can't hold a form. #}
+    {% for image in inline_images|default([]) %}
+      <form id="remove-image-{{ loop.index }}" method="post" action="/projects/{{ project.id }}/screenshots/{{ image.key }}/delete" hidden>
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      </form>
+    {% endfor %}
+  {% endif %}
+
+  {% if draft.kind.value == "completion" %}
     <div class="field edit-section">
-      <label for="screenshot-input">Screenshots</label>
-
-      {% if current_screenshots %}
-        <ul class="screenshot-list">
-          {% for shot in current_screenshots %}
-            <li class="screenshot-list__item">
-              <img
-                class="screenshot-list__thumb"
-                src="{{ shot.url }}"
-                alt="{{ project.title or 'Project' }} screenshot"
-                loading="lazy"
-              >
-              <form method="post" action="/projects/{{ project.id }}/screenshots/{{ shot.key }}/delete">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <button type="submit" class="button button--danger">Remove</button>
-              </form>
-            </li>
-          {% endfor %}
-        </ul>
-      {% endif %}
-
-      <noscript>
-        <p class="field-hint">
-          Uploading screenshots needs JavaScript enabled. You can still remove existing ones above.
-        </p>
-      </noscript>
-
+      <label for="primary-image-input">Primary image</label>
+      <p class="field-hint">
+        The one picture the gallery shows on its list and at the top of the project's page. It's saved as soon as
+        it uploads, and a new one replaces it.
+      </p>
       <div
-        id="screenshot-widget"
+        class="image-widget"
+        data-image-widget="primary"
         data-presign-url="/projects/{{ project.id }}/screenshots/presign"
         data-confirm-url="/projects/{{ project.id }}/screenshots/confirm"
+        data-delete-url="/projects/{{ project.id }}/screenshots/"
         data-csrf-token="{{ csrf_token() }}"
-        data-max-screenshots="{{ max_shots }}"
         data-max-bytes="{{ max_screenshot_bytes|default(5242880) }}"
-        data-remaining="{{ max_shots - current_screenshots|length }}"
       >
-        {% if current_screenshots|length < max_shots %}
-          <input type="file" id="screenshot-input" accept="image/png,image/jpeg,image/webp" multiple data-role="file-input">
-          <p class="field-hint">PNG, JPEG or WebP, up to 5 MB each. Up to {{ max_shots }} total.</p>
-        {% else %}
-          <p class="field-hint">Maximum of {{ max_shots }} screenshots reached. Remove one to add another.</p>
-        {% endif %}
-        <p class="field-error" data-role="status" role="status"></p>
+        <div class="primary-image" data-role="current"{% if not primary_image %} hidden{% endif %}>
+          <img class="primary-image__img" src="{{ primary_image.url if primary_image else '' }}" alt="{{ project.title or 'Project' }}" data-role="thumb">
+          <form method="post" action="/projects/{{ project.id }}/screenshots/{{ primary_image.key if primary_image else '' }}/delete" data-role="remove-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="button button--small button--danger">Remove</button>
+          </form>
+        </div>
+        <noscript>
+          <p class="field-hint">Uploading an image needs JavaScript. You can still remove the one above.</p>
+        </noscript>
+        <div data-role="controls" hidden>
+          <input type="file" id="primary-image-input" accept="image/png,image/jpeg,image/webp" data-role="file-input">
+          <p class="field-hint">PNG, JPEG or WebP, up to 5 MB. Wide images (about 16:9) look best.</p>
+        </div>
+        <p class="field-hint" data-role="status" role="status"></p>
       </div>
     </div>
   {% endif %}
@@ -158,7 +186,6 @@
 {% block scripts %}
   {% if draft.kind.value == "completion" %}
     <script src="/static/js/screenshot-upload.js" defer></script>
-    <script src="/static/js/write-up-preview.js" defer></script>
   {% else %}
     <script src="/static/js/budget-estimator.js" defer></script>
     <script src="/static/js/application-form.js" defer></script>

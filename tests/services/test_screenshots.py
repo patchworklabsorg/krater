@@ -1,7 +1,10 @@
-"""Screenshot upload rules: submitter-only, completion-draft-only, the 6-screenshot limit, allowed
-content types/sizes, and confirm re-validating against storage rather than trusting the client."""
+"""Image upload rules: team-only, completion-draft-only, one primary image (a new one replaces it), the inline
+image limit, allowed content types/sizes, and confirm re-validating against storage rather than trusting the
+client."""
 
 from __future__ import annotations
+
+import uuid
 
 import pytest
 from sqlalchemy.orm import Session
@@ -55,12 +58,15 @@ def _confirm_upload(
     store: FakeObjectStore,
     content_type: str = "image/png",
     size_bytes: int = 1024,
+    role: str = screenshots.PRIMARY,
 ) -> str:
     """Presign, simulate the browser's upload (with a real signature for `content_type`), then confirm.
     Returns the confirmed key."""
-    upload = screenshots.presign_screenshot(db_session, member, project=project, content_type=content_type, store=store)
+    upload = screenshots.presign_screenshot(
+        db_session, member, project=project, content_type=content_type, store=store, role=role
+    )
     store.put(upload.key, content_type=content_type, size_bytes=size_bytes, content=_VALID_SIGNATURES[content_type])
-    screenshots.confirm_screenshot(db_session, member, project=project, key=upload.key, store=store)
+    screenshots.confirm_screenshot(db_session, member, project=project, key=upload.key, store=store, role=role)
     return upload.key
 
 
@@ -123,39 +129,101 @@ def test_cannot_presign_once_completion_is_submitted(
 # --------------------------------------------------------------------------------------------------
 
 
-def test_at_most_six_screenshots(
+def test_a_new_primary_image_replaces_the_last(
+    db_session: Session, member: Actor, reviewer: Actor, store: FakeObjectStore, weave
+) -> None:
+    project, draft = _completion_draft(db_session, member, reviewer, weave=weave)
+    first = _confirm_upload(db_session, member, project=project, store=store)
+
+    second = _confirm_upload(db_session, member, project=project, store=store)
+
+    assert draft.screenshot_keys == [second]
+    assert store.head(first) is None  # best-effort deleted
+    assert draft.image_keys == []
+
+
+def test_inline_images_go_beside_the_primary_image(
+    db_session: Session, member: Actor, reviewer: Actor, store: FakeObjectStore, weave
+) -> None:
+    project, draft = _completion_draft(db_session, member, reviewer, weave=weave)
+    primary = _confirm_upload(db_session, member, project=project, store=store)
+
+    inline = [_confirm_upload(db_session, member, project=project, store=store, role=screenshots.INLINE) for _ in "ab"]
+
+    assert draft.screenshot_keys == [primary]
+    assert draft.image_keys == inline
+    assert screenshots.find_image_key(draft, screenshots.image_name(inline[1])) == inline[1]
+    assert screenshots.find_image_key(draft, screenshots.image_name(primary)) is None
+    path = screenshots.image_path(project.id, inline[0])
+    assert screenshots.HOSTED_IMAGE_PATH.fullmatch(path)
+
+
+def test_at_most_max_inline_images(
     db_session: Session, member: Actor, reviewer: Actor, store: FakeObjectStore, weave
 ) -> None:
     project, _draft = _completion_draft(db_session, member, reviewer, weave=weave)
-    for _ in range(screenshots.MAX_SCREENSHOTS):
-        _confirm_upload(db_session, member, project=project, store=store)
+    for _ in range(screenshots.MAX_INLINE_IMAGES):
+        _confirm_upload(db_session, member, project=project, store=store, role=screenshots.INLINE)
 
     with pytest.raises(ValidationFailed):
-        screenshots.presign_screenshot(db_session, member, project=project, content_type="image/png", store=store)
+        screenshots.presign_screenshot(
+            db_session, member, project=project, content_type="image/png", store=store, role=screenshots.INLINE
+        )
+    # The primary image doesn't count toward the write-up's.
+    _confirm_upload(db_session, member, project=project, store=store)
 
 
-def test_confirm_also_enforces_the_limit(
+def test_confirm_also_enforces_the_inline_limit(
     db_session: Session, member: Actor, reviewer: Actor, store: FakeObjectStore, weave
 ) -> None:
     """Two presigns can be issued before either confirms; confirm re-checks the limit, not just presign."""
     project, draft = _completion_draft(db_session, member, reviewer, weave=weave)
-    for _ in range(screenshots.MAX_SCREENSHOTS - 1):
-        _confirm_upload(db_session, member, project=project, store=store)
+    for _ in range(screenshots.MAX_INLINE_IMAGES - 1):
+        _confirm_upload(db_session, member, project=project, store=store, role=screenshots.INLINE)
 
-    upload_a = screenshots.presign_screenshot(
-        db_session, member, project=project, content_type="image/png", store=store
-    )
-    upload_b = screenshots.presign_screenshot(
-        db_session, member, project=project, content_type="image/png", store=store
+    upload_a, upload_b = (
+        screenshots.presign_screenshot(
+            db_session, member, project=project, content_type="image/png", store=store, role=screenshots.INLINE
+        )
+        for _ in "ab"
     )
     store.put(upload_a.key, content_type="image/png", size_bytes=100, content=_VALID_SIGNATURES["image/png"])
     store.put(upload_b.key, content_type="image/png", size_bytes=100, content=_VALID_SIGNATURES["image/png"])
 
-    screenshots.confirm_screenshot(db_session, member, project=project, key=upload_a.key, store=store)
-    assert len(draft.screenshot_keys) == screenshots.MAX_SCREENSHOTS
+    screenshots.confirm_screenshot(
+        db_session, member, project=project, key=upload_a.key, store=store, role=screenshots.INLINE
+    )
+    assert len(draft.image_keys) == screenshots.MAX_INLINE_IMAGES
 
     with pytest.raises(ValidationFailed):
-        screenshots.confirm_screenshot(db_session, member, project=project, key=upload_b.key, store=store)
+        screenshots.confirm_screenshot(
+            db_session, member, project=project, key=upload_b.key, store=store, role=screenshots.INLINE
+        )
+
+
+def test_an_unknown_role_is_refused(
+    db_session: Session, member: Actor, reviewer: Actor, store: FakeObjectStore, weave
+) -> None:
+    project, _draft = _completion_draft(db_session, member, reviewer, weave=weave)
+
+    with pytest.raises(ValidationFailed):
+        screenshots.presign_screenshot(
+            db_session, member, project=project, content_type="image/png", store=store, role="banner"
+        )
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/projects/{p}/images/{n}.png?x=1",
+        "/projects/{p}/images/../{n}.png",
+        "https://evil.example/projects/{p}/images/{n}.png",
+        "/projects/{p}/images/{n}.gif",
+        "/projects/{p}/images/{n}.png/extra",
+    ],
+)
+def test_the_hosted_image_path_is_matched_whole(path: str) -> None:
+    assert not screenshots.HOSTED_IMAGE_PATH.fullmatch(path.format(p=uuid.uuid4(), n=uuid.uuid4()))
 
 
 def test_presign_rejects_a_disallowed_content_type(
@@ -174,7 +242,7 @@ def test_confirm_rejects_a_missing_object(
 
     with pytest.raises(ValidationFailed):
         screenshots.confirm_screenshot(
-            db_session, member, project=project, key=f"projects/{project.id}/{draft.id}/never-uploaded.png", store=store
+            db_session, member, project=project, key=f"projects/{project.id}/{draft.id}/{uuid.uuid4()}.png", store=store
         )
 
 
@@ -251,6 +319,16 @@ def test_confirm_rejects_a_key_outside_this_draft(
         )
 
 
+def test_confirm_rejects_a_key_this_module_would_never_issue(
+    db_session: Session, member: Actor, reviewer: Actor, store: FakeObjectStore, weave
+) -> None:
+    project, draft = _completion_draft(db_session, member, reviewer, weave=weave)
+    key = f"projects/{project.id}/{draft.id}/../other/{uuid.uuid4()}.png"
+
+    with pytest.raises(NotAllowed):
+        screenshots.confirm_screenshot(db_session, member, project=project, key=key, store=store)
+
+
 def test_confirm_is_idempotent(
     db_session: Session, member: Actor, reviewer: Actor, store: FakeObjectStore, weave
 ) -> None:
@@ -277,6 +355,20 @@ def test_remove_deletes_from_the_draft_and_storage(
 
     assert key not in draft.screenshot_keys
     assert store.head(key) is None
+
+
+def test_remove_takes_an_inline_image_too(
+    db_session: Session, member: Actor, reviewer: Actor, store: FakeObjectStore, weave
+) -> None:
+    project, draft = _completion_draft(db_session, member, reviewer, weave=weave)
+    primary = _confirm_upload(db_session, member, project=project, store=store)
+    inline = _confirm_upload(db_session, member, project=project, store=store, role=screenshots.INLINE)
+
+    screenshots.remove_screenshot(db_session, member, project=project, key=inline, store=store)
+
+    assert draft.image_keys == []
+    assert draft.screenshot_keys == [primary]
+    assert store.head(inline) is None
 
 
 def test_remove_is_best_effort_against_storage_failures(
@@ -306,3 +398,32 @@ def test_cannot_remove_a_key_not_on_the_draft(
         screenshots.remove_screenshot(
             db_session, member, project=project, key=f"projects/{project.id}/{draft.id}/nope.png", store=store
         )
+
+
+def test_a_rejected_completions_next_draft_keeps_its_images(
+    db_session: Session, member: Actor, reviewer: Actor, store: FakeObjectStore, weave
+) -> None:
+    """The write-up names its images by path, so the draft a rejection opens must still have them."""
+    project, _draft = _completion_draft(db_session, member, reviewer, weave=weave)
+    primary = _confirm_upload(db_session, member, project=project, store=store)
+    inline = _confirm_upload(db_session, member, project=project, store=store, role=screenshots.INLINE)
+    write_up = f"![a]({screenshots.image_path(project.id, inline)})"
+    projects.update_draft(db_session, member, project=project, write_up=write_up)
+    projects.submit_completion(db_session, member, project=project)
+
+    projects.record_review(
+        db_session,
+        reviewer,
+        revision=project.current_revision,
+        decision=ReviewDecision.REJECT,
+        reason="Say more.",
+        source=ReviewSource.WEB,
+        weave_client=weave,
+    )
+
+    db_session.refresh(project)
+    next_draft = project.current_revision
+    assert next_draft.submitted_at is None
+    assert next_draft.screenshot_keys == [primary]
+    assert next_draft.image_keys == [inline]
+    assert screenshots.find_image_key(next_draft, screenshots.image_name(inline)) == inline

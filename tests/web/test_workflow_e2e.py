@@ -133,7 +133,7 @@ def test_full_workflow_through_http(client: TestClient, login_as) -> None:
     assert complete_start.status_code == 303
 
     completion_edit_page = client.get(complete_start.headers["location"])
-    assert "screenshot-widget" in completion_edit_page.text  # screenshot upload widget
+    assert 'data-image-widget="primary"' in completion_edit_page.text  # image upload widgets
     csrf = get_csrf_token(completion_edit_page.text)
     completion_save = client.post(
         f"{project_url}/edit",

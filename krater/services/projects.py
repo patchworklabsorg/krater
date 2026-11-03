@@ -442,7 +442,7 @@ def start_completion(session: Session, actor: Actor, *, project: Project) -> Pro
     """Open a new draft `completion` revision on an `approved` project. Submitter only.
 
     The application's answers start out copied from the approved revision; the
-    completion-only fields (`demo_url`, `screenshot_keys`, `tags`) start empty
+    completion-only fields (`demo_url`, `screenshot_keys`, `image_keys`, `tags`) start empty
     for the submitter to fill in via `update_draft` before calling `submit_completion`. Raises
     `InvalidState` if the project isn't `approved`, or already has an unsubmitted draft in progress.
     """
@@ -718,6 +718,8 @@ def _open_next_draft(session: Session, rejected: ProjectRevision) -> ProjectRevi
         **_answers_of(rejected),
         demo_url=rejected.demo_url,
         screenshot_keys=list(rejected.screenshot_keys),
+        # The write-up names these by path, so the next draft keeps them or its images would 404.
+        image_keys=list(rejected.image_keys),
         tags=list(rejected.tags),
         submitted_at=None,
         outcome=RevisionOutcome.PENDING,

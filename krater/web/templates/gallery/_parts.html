@@ -1,0 +1,84 @@
+{#
+  The gallery's two views of a project, shared by the gallery itself and the completion form's preview
+  (gallery/preview.html), so the preview is the real thing. Every value comes in as an argument: the preview
+  passes the team's unsaved edits, the gallery passes the approved completion revision.
+#}
+
+{# One entry in the gallery list. `href` is the entry's page; the preview passes none, so its card links nowhere. #}
+{% macro card(title, summary, tags, spend_cents, image_url, href=None) %}
+  <li class="gallery-list__item">
+    {% if image_url %}
+      <img class="gallery-list__thumb" src="{{ image_url }}" alt="{{ title or 'Project' }}" loading="lazy">
+    {% else %}
+      <div class="gallery-list__thumb gallery-list__thumb--empty" aria-hidden="true">{{ (title or "?")[:1] }}</div>
+    {% endif %}
+    <div class="gallery-list__body">
+      <h2>
+        {%- if href %}<a href="{{ href }}">{{ title or "Untitled project" }}</a>
+        {%- else %}<span>{{ title or "Untitled project" }}</span>{% endif -%}
+      </h2>
+      {% if summary %}<p>{{ summary }}</p>{% endif %}
+      {% if tags %}
+        <p class="tag-list">
+          {% for tag in tags %}<span class="tag">{{ tag }}</span>{% endfor %}
+        </p>
+      {% endif %}
+      <p class="muted">&asymp; {{ spend_cents | dollars }} estimated compute</p>
+    </div>
+  </li>
+{% endmacro %}
+
+{# A project's own gallery page, below the site header. #}
+{% macro page(title, summary, tags, demo_url, repo_url, image_url, write_up, spend_cents, team, unnamed) %}
+  <div class="page-head">
+    <div>
+      <a class="back-link" href="/gallery">&larr; Gallery</a>
+      <h1>{{ title or "Untitled project" }}</h1>
+      {% if summary %}<p class="page-subtitle">{{ summary }}</p>{% endif %}
+      {% if tags %}
+        <p class="tag-list page-subtitle">
+          {% for tag in tags %}<span class="tag">{{ tag }}</span>{% endfor %}
+        </p>
+      {% endif %}
+    </div>
+    {% if demo_url or repo_url %}
+      <div class="page-actions">
+        {% if demo_url %}<a class="button button--primary" href="{{ demo_url }}">View demo</a>{% endif %}
+        {% if repo_url %}<a class="button" href="{{ repo_url }}">View repo</a>{% endif %}
+      </div>
+    {% endif %}
+  </div>
+
+  {% if image_url %}
+    <img class="gallery-hero" src="{{ image_url }}" alt="{{ title or 'Project' }}">
+  {% endif %}
+
+  <div class="layout-split">
+    <section class="card">
+      <h2>Write-up</h2>
+      {% if write_up and write_up.strip() %}
+        <div class="write-up prose">{{ write_up | markdown }}</div>
+      {% else %}
+        <p class="muted">No write-up.</p>
+      {% endif %}
+    </section>
+
+    <aside class="stack">
+      <dl class="stats">
+        <div class="stat">
+          <dt>Compute spend</dt>
+          <dd>&asymp; {{ spend_cents | dollars }}</dd>
+        </div>
+      </dl>
+      {% if team or unnamed %}
+        <section class="card">
+          <h2>Built by</h2>
+          <ul class="link-list">
+            {% for name in team %}<li>{{ name }}</li>{% endfor %}
+            {% if unnamed %}<li>{{ "and " if team }}{{ unnamed }} {{ "more " if team }}team member{{ "s" if unnamed != 1 }}</li>{% endif %}
+          </ul>
+        </section>
+      {% endif %}
+    </aside>
+  </div>
+{% endmacro %}

@@ -166,14 +166,10 @@
   {% endif %}
 </section>
 
-{% if screenshots %}
+{% if primary_image_url %}
 <section class="card">
-  <h2>Screenshots</h2>
-  <ul class="gallery-screenshots">
-    {% for shot in screenshots %}
-      <li><img src="{{ shot.url }}" alt="{{ project.title or 'Project' }} screenshot" loading="lazy"></li>
-    {% endfor %}
-  </ul>
+  <h2>Primary image</h2>
+  <img class="gallery-hero" src="{{ primary_image_url }}" alt="{{ project.title or 'Project' }}" loading="lazy">
 </section>
 {% endif %}
 

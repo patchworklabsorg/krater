@@ -1,58 +1,19 @@
 {% extends "base.html" %}
+{% import "gallery/_parts.html" as gallery %}
 
 {% block title %}{{ project.title or "Untitled project" }}{% endblock %}
 
 {% block content %}
-<div class="page-head">
-  <div>
-    <a class="back-link" href="/gallery">&larr; Gallery</a>
-    <h1>{{ project.title or "Untitled project" }}</h1>
-    {% if revision and revision.summary %}<p class="page-subtitle">{{ revision.summary }}</p>{% endif %}
-    {% if revision and revision.tags %}
-      <p class="tag-list page-subtitle">
-        {% for tag in revision.tags %}<span class="tag">{{ tag }}</span>{% endfor %}
-      </p>
-    {% endif %}
-  </div>
-  {% if (revision and revision.demo_url) or project.repo_url %}
-    <div class="page-actions">
-      {% if revision and revision.demo_url %}
-        <a class="button button--primary" href="{{ revision.demo_url }}">View demo</a>
-      {% endif %}
-      {% if project.repo_url %}
-        <a class="button" href="{{ project.repo_url }}">View repo</a>
-      {% endif %}
-    </div>
-  {% endif %}
-</div>
-
-{% if screenshot_urls %}
-  <ul class="gallery-screenshots" aria-label="Screenshots">
-    {% for url in screenshot_urls %}
-      <li><img src="{{ url }}" alt="{{ project.title or 'Project' }} screenshot" loading="lazy"></li>
-    {% endfor %}
-  </ul>
-{% endif %}
-
-<div class="layout-split">
-  {% with write_up = revision.write_up if revision else None %}{% include "gallery/_write_up.html" %}{% endwith %}
-
-  <aside class="stack">
-    <dl class="stats">
-      <div class="stat">
-        <dt>Compute spend</dt>
-        <dd>&asymp; {{ spend_cents | dollars }}</dd>
-      </div>
-    </dl>
-    {% if team or unnamed %}
-      <section class="card">
-        <h2>Built by</h2>
-        <ul class="link-list">
-          {% for name in team %}<li>{{ name }}</li>{% endfor %}
-          {% if unnamed %}<li>{{ "and " if team }}{{ unnamed }} {{ "more " if team }}team member{{ "s" if unnamed != 1 }}</li>{% endif %}
-        </ul>
-      </section>
-    {% endif %}
-  </aside>
-</div>
+{{ gallery.page(
+  project.title,
+  revision.summary if revision else "",
+  revision.tags if revision else [],
+  revision.demo_url if revision else None,
+  project.repo_url,
+  image_url,
+  revision.write_up if revision else None,
+  spend_cents,
+  team,
+  unnamed,
+) }}
 {% endblock %}
