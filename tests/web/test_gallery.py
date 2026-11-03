@@ -18,7 +18,14 @@ from tests.web.conftest import PNG_SIGNATURE, actor_for
 
 
 def _completed_project(
-    db_session: Session, approved_project, member, reviewer, weave_stub, *, with_screenshot: bool = False
+    db_session: Session,
+    approved_project,
+    member,
+    reviewer,
+    weave_stub,
+    *,
+    with_screenshot: bool = False,
+    write_up: str | None = None,
 ):
     project = approved_project(member, reviewer, title="Gallery Project")
     project_service.start_completion(db_session, actor_for(member), project=project)
@@ -28,6 +35,7 @@ def _completed_project(
         project=project,
         demo_url="https://example.com/demo",
         tags=["ganymede", "rover"],
+        **({"write_up": write_up} if write_up is not None else {}),
     )
     if with_screenshot:
         store = get_object_store()
@@ -88,6 +96,30 @@ def test_gallery_detail_shows_a_completed_project(
     assert "example.com/demo" in detail_response.text
     # The team, by the names Weave has for them now.
     assert "Built by" in detail_response.text and "Mia Member" in detail_response.text
+
+
+def test_gallery_detail_renders_the_write_up_as_markdown(
+    client: TestClient, login_as, approved_project, db_session: Session, weave_stub
+) -> None:
+    member = login_as(MEMBER_SUB)
+    reviewer = login_as(REVIEWER_SUB)
+    project = _completed_project(
+        db_session,
+        approved_project,
+        member,
+        reviewer,
+        weave_stub=weave_stub,
+        write_up="# Results\n\nThe rover **drove**.\n\n- [code](https://example.com/repo)\n\n<script>alert(1)</script>",
+    )
+
+    response = client.get(f"/gallery/{project.id}")
+
+    assert response.status_code == 200
+    assert "<h3>Results</h3>" in response.text
+    assert "The rover <strong>drove</strong>." in response.text
+    assert 'href="https://example.com/repo" rel="nofollow ugc noopener noreferrer"' in response.text
+    assert "<script>alert(1)</script>" not in response.text
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in response.text
 
 
 def test_gallery_detail_404s_for_a_non_completed_project(client: TestClient, login_as, submitted_project) -> None:

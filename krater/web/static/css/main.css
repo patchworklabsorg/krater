@@ -1406,6 +1406,137 @@ h1 .badge {
   overflow-wrap: anywhere;
 }
 
+/* A member's Markdown (the final write-up). Headings start at h3 (krater.web.textfmt.markdown). Code
+   blocks and tables scroll on their own, so a wide one never scrolls the page at 360px. */
+.prose > :first-child {
+  margin-top: 0;
+}
+
+.prose > :last-child {
+  margin-bottom: 0;
+}
+
+.prose p,
+.prose ul,
+.prose ol,
+.prose blockquote,
+.prose pre,
+.prose table {
+  margin: 0 0 var(--space-3);
+}
+
+.prose h3,
+.prose h4,
+.prose h5,
+.prose h6 {
+  margin: var(--space-4) 0 var(--space-2);
+}
+
+.prose h4,
+.prose h5,
+.prose h6 {
+  font-size: var(--text-base);
+}
+
+.prose ul,
+.prose ol {
+  padding-left: 1.5em;
+}
+
+.prose blockquote {
+  padding-left: 0.85em;
+  border-left: 3px solid var(--border-strong);
+  color: var(--text-muted);
+}
+
+.prose pre {
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 0.75em 0.9em;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  line-height: 1.5;
+}
+
+.prose pre code {
+  overflow-wrap: normal;
+}
+
+.prose :not(pre) > code {
+  padding: 0.1em 0.3em;
+  background: var(--surface-sunken);
+  border-radius: 4px;
+}
+
+.prose table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  /* Words stay whole in cells; a wide table scrolls instead of breaking them letter by letter. */
+  overflow-wrap: normal;
+}
+
+.prose th,
+.prose td {
+  padding: 0.4em 0.7em;
+  border: 1px solid var(--border);
+  text-align: left;
+}
+
+.prose hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: var(--space-4) 0;
+}
+
+/* Write / Preview tabs over a text box (write-up-preview.js). */
+.tabs {
+  display: flex;
+  gap: var(--space-1);
+  margin-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.tabs[hidden] {
+  display: none;
+}
+
+.tabs__tab {
+  margin-bottom: -1px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid transparent;
+  border-radius: 6px 6px 0 0;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.tabs__tab:hover {
+  color: var(--text);
+}
+
+.tabs__tab[aria-selected="true"] {
+  border-color: var(--border);
+  border-bottom-color: var(--surface);
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* The preview is the gallery's own write-up card, on the page's background so the card shows. */
+.write-up-preview {
+  /* A grid item in `.field`: without this a wide table or code block widens the form past the screen. */
+  min-width: 0;
+  padding: var(--space-3);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
 .project-link {
   overflow-wrap: anywhere;
 }

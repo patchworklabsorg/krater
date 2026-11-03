@@ -318,6 +318,15 @@ The submitter fills in the completion fields (final write-up, screenshots, demo 
 tags) and submits them as a `completion` revision. The project moves to `pending_completion_review`. Review happens in
 the same channel, under the `completion` stage policy.
 
+**The final write-up is Markdown** (CommonMark, plus tables and strikethrough; a single line break stays a line break).
+The project page and the gallery render it with `krater.web.textfmt.markdown`: raw HTML is shown as text, never passed
+through; `javascript:`, `vbscript:`, `file:` and `data:` links are dropped; every link gets
+`rel="nofollow ugc noopener noreferrer"`; an image becomes a link to it, since the Content-Security-Policy blocks
+images from other sites and an embedded one could track gallery visitors; and headings start at h3, under the page's
+own. The completion form has Write and Preview tabs. Preview posts the unsaved text to
+`POST /projects/{id}/write-up-preview` (team only, CSRF, saves nothing), which renders it with the gallery's own
+write-up card. The application's answers stay plain text with line breaks.
+
 - **Approved:** the project becomes `completed`. It's published to the gallery, spend is frozen at its final value,
   unspent budget is reclaimed to the ledger, and its machines are destroyed.
 - **Rejected:** the project moves to `completion_changes_requested`. The submitter revises and resubmits.

@@ -1,0 +1,10 @@
+{#- The write-up card on a gallery page. The completion form's Preview tab renders this same partial
+    (POST /projects/{id}/write-up-preview), so the preview is exactly what the gallery will show. -#}
+<section class="card">
+  <h2>Write-up</h2>
+  {% if write_up and write_up.strip() %}
+    <div class="write-up prose">{{ write_up | markdown }}</div>
+  {% else %}
+    <p class="muted">No write-up.</p>
+  {% endif %}
+</section>

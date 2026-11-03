@@ -40,8 +40,27 @@
 
       <div class="field">
         <label for="write_up">Final write-up</label>
+        {# Shown by write-up-preview.js; without JavaScript the box works as a plain text field. #}
+        <div
+          class="tabs"
+          role="tablist"
+          aria-label="Final write-up"
+          id="write-up-tabs"
+          data-preview-url="/projects/{{ project.id }}/write-up-preview"
+          data-csrf-token="{{ csrf_token() }}"
+          hidden
+        >
+          <button type="button" class="tabs__tab" role="tab" id="write-up-tab-write" aria-controls="write_up" aria-selected="true">Write</button>
+          <button type="button" class="tabs__tab" role="tab" id="write-up-tab-preview" aria-controls="write-up-preview" aria-selected="false" tabindex="-1">Preview</button>
+        </div>
         <textarea id="write_up" name="write_up" rows="10">{{ values.write_up }}</textarea>
-        <p class="field-hint">What you built and how it went. The gallery shows it.</p>
+        <div id="write-up-preview" class="write-up-preview" role="tabpanel" aria-labelledby="write-up-tab-preview" aria-live="polite" hidden></div>
+        <p class="field-hint">
+          What you built and how it went. The gallery shows it. You can use Markdown: <code>**bold**</code>,
+          <code>*italic*</code>, <code>#</code> headings, <code>-</code> lists, <code>[links](https://...)</code>,
+          <code>`code`</code> and tables. HTML isn't allowed, and images show as links. Preview shows it as
+          the gallery will.
+        </p>
         {% if errors.write_up %}<p class="field-error">{{ errors.write_up }}</p>{% endif %}
       </div>
     {% else %}
@@ -139,6 +158,7 @@
 {% block scripts %}
   {% if draft.kind.value == "completion" %}
     <script src="/static/js/screenshot-upload.js" defer></script>
+    <script src="/static/js/write-up-preview.js" defer></script>
   {% else %}
     <script src="/static/js/budget-estimator.js" defer></script>
     <script src="/static/js/application-form.js" defer></script>

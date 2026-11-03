@@ -35,14 +35,7 @@
 {% endif %}
 
 <div class="layout-split">
-  <section class="card">
-    <h2>Write-up</h2>
-    {% if revision %}
-      <p class="write-up">{{ revision.write_up | nl2br }}</p>
-    {% else %}
-      <p class="muted">No write-up.</p>
-    {% endif %}
-  </section>
+  {% with write_up = revision.write_up if revision else None %}{% include "gallery/_write_up.html" %}{% endwith %}
 
   <aside class="stack">
     <dl class="stats">

@@ -14,7 +14,7 @@ from typing import Annotated
 
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, Form, Request
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
 from krater.config import get_settings
@@ -1165,6 +1165,26 @@ def admin_set_hourly_cap(
         )
 
     return _success_redirect(db_session, request, project_id, f"Hourly cap set to {described}.", after_commit=_notify)
+
+
+@router.post("/projects/{project_id}/write-up-preview", dependencies=[Depends(verify_csrf_token)])
+def preview_write_up(
+    request: Request,
+    project_id: uuid.UUID,
+    db_session: Annotated[Session, Depends(get_session)],
+    actor: Annotated[Actor, Depends(fresh_actor)],
+    write_up: Annotated[str, Form()] = "",
+):
+    """The completion form's Preview tab (`krater/web/static/js/write-up-preview.js`): the unsaved final
+    write-up rendered with the gallery's own write-up card, as an HTML fragment. Saves nothing. The
+    project's team only, while it has a completion draft."""
+    project = _get_visible_project(db_session, actor, project_id)
+    if not teams.on_team(project, actor.user.id):
+        raise NotAllowed("Only the project's team may edit it.")
+    draft = _require_editable_draft(project)
+    if draft is None or draft.kind is not RevisionKind.COMPLETION:
+        return HTMLResponse("This project has no final write-up to preview right now.", status_code=409)
+    return templates.TemplateResponse(request, "gallery/_write_up.html", {"write_up": write_up})
 
 
 # --------------------------------------------------------------------------------------------------

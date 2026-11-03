@@ -21,6 +21,7 @@ dependencies = [
     "boto3>=1.43.103",
     "cryptography>=44",
     "reportlab>=4.2",
+    "markdown-it-py>=3.0",
 ]
 
 [dependency-groups]

@@ -16,6 +16,7 @@ from krater.config import get_settings
 from krater.models import ProjectStatus
 from krater.services import projects as project_service
 from tests.conftest import ADMIN_SUB, MEMBER_SUB, OTHER_MEMBER_SUB, REVIEWER_SUB, get_csrf_token
+from tests.web.conftest import actor_for
 
 # --------------------------------------------------------------------------------------------------
 # /projects/new
@@ -655,5 +656,119 @@ def test_a_non_admin_cannot_set_the_hourly_cap(client: TestClient, login_as, app
         f"/projects/{project.id}/admin-hourly-cap",
         data={"csrf_token": get_csrf_token(page.text), "amount": "50", "reason": "x"},
     )
+
+    assert response.status_code == 403
+
+
+def test_the_final_write_up_is_rendered_as_markdown(
+    client: TestClient, login_as, approved_project, db_session: Session
+) -> None:
+    member = login_as(MEMBER_SUB)
+    reviewer = login_as(REVIEWER_SUB)
+    project = approved_project(member, reviewer)
+    project_service.start_completion(db_session, actor_for(member), project=project)
+    project_service.update_draft(
+        db_session, actor_for(member), project=project, write_up="## What we built\n\n*It works.*\n\n<b>raw</b>"
+    )
+    login_as(MEMBER_SUB)
+
+    response = client.get(f"/projects/{project.id}")
+
+    assert response.status_code == 200
+    assert "Final write-up (draft)" in response.text
+    assert "<h4>What we built</h4>" in response.text
+    assert "<em>It works.</em>" in response.text
+    assert "&lt;b&gt;raw&lt;/b&gt;" in response.text
+
+
+def test_the_final_write_up_form_says_markdown_works(
+    client: TestClient, login_as, approved_project, db_session: Session
+) -> None:
+    member = login_as(MEMBER_SUB)
+    reviewer = login_as(REVIEWER_SUB)
+    project = approved_project(member, reviewer)
+    project_service.start_completion(db_session, actor_for(member), project=project)
+    login_as(MEMBER_SUB)
+
+    response = client.get(f"/projects/{project.id}/edit")
+
+    assert response.status_code == 200
+    assert "You can use Markdown" in response.text
+
+
+def _completion_draft(db_session: Session, login_as, approved_project):
+    member = login_as(MEMBER_SUB)
+    reviewer = login_as(REVIEWER_SUB)
+    project = approved_project(member, reviewer)
+    project_service.start_completion(db_session, actor_for(member), project=project)
+    return project
+
+
+def test_the_write_up_preview_renders_the_gallery_card(
+    client: TestClient, login_as, approved_project, db_session: Session
+) -> None:
+    project = _completion_draft(db_session, login_as, approved_project)
+    login_as(MEMBER_SUB)
+    page = client.get(f"/projects/{project.id}/edit")
+    assert 'id="write-up-tabs"' in page.text
+
+    response = client.post(
+        f"/projects/{project.id}/write-up-preview",
+        data={"csrf_token": get_csrf_token(page.text), "write_up": "# Done\n\n**Yes.** <script>x()</script>"},
+    )
+
+    assert response.status_code == 200
+    assert "<h2>Write-up</h2>" in response.text
+    assert "<h3>Done</h3>" in response.text and "<strong>Yes.</strong>" in response.text
+    assert "<script>" not in response.text
+    # A preview saves nothing.
+    db_session.refresh(project)
+    assert "Done" not in (project.current_revision.write_up or "")
+
+
+def test_an_empty_write_up_previews_as_in_the_gallery(
+    client: TestClient, login_as, approved_project, db_session: Session
+) -> None:
+    project = _completion_draft(db_session, login_as, approved_project)
+    login_as(MEMBER_SUB)
+    csrf = get_csrf_token(client.get(f"/projects/{project.id}/edit").text)
+
+    response = client.post(f"/projects/{project.id}/write-up-preview", data={"csrf_token": csrf, "write_up": "  "})
+
+    assert response.status_code == 200
+    assert "No write-up." in response.text
+
+
+def test_only_the_team_can_preview_the_write_up(
+    client: TestClient, login_as, approved_project, db_session: Session
+) -> None:
+    project = _completion_draft(db_session, login_as, approved_project)
+    login_as(REVIEWER_SUB)
+    csrf = get_csrf_token(client.get(f"/projects/{project.id}").text)
+
+    response = client.post(f"/projects/{project.id}/write-up-preview", data={"csrf_token": csrf, "write_up": "x"})
+
+    assert response.status_code == 403
+
+
+def test_the_write_up_preview_needs_a_completion_draft(client: TestClient, login_as, approved_project) -> None:
+    member = login_as(MEMBER_SUB)
+    reviewer = login_as(REVIEWER_SUB)
+    project = approved_project(member, reviewer)
+    login_as(MEMBER_SUB)
+    csrf = get_csrf_token(client.get(f"/projects/{project.id}").text)
+
+    response = client.post(f"/projects/{project.id}/write-up-preview", data={"csrf_token": csrf, "write_up": "x"})
+
+    assert response.status_code == 409
+
+
+def test_the_write_up_preview_needs_the_csrf_token(
+    client: TestClient, login_as, approved_project, db_session: Session
+) -> None:
+    project = _completion_draft(db_session, login_as, approved_project)
+    login_as(MEMBER_SUB)
+
+    response = client.post(f"/projects/{project.id}/write-up-preview", data={"write_up": "x"})
 
     assert response.status_code == 403

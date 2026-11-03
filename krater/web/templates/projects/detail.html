@@ -113,7 +113,7 @@
   {% set rev = project.approved_revision if current and current.kind.value == "completion" else current %}
   {% if current and current.kind.value == "completion" %}
     <h2>{{ "Final write-up (draft)" if not current.submitted_at else "Final write-up" }}</h2>
-    <p class="write-up">{{ current.write_up | nl2br }}</p>
+    <div class="write-up prose">{{ current.write_up | markdown }}</div>
     {% if current.demo_url %}<p><a href="{{ current.demo_url }}">Demo</a></p>{% endif %}
   {% endif %}
   {% if rev %}
