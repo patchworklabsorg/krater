@@ -52,6 +52,8 @@ class Fake:
         self.jobs: list[dict] = []
         self.secrets: dict[str, str] = {}
         self.jobs_422 = False
+        # Krater asks before queuing a job whose data transfer could cost a lot (409 with `confirm`).
+        self.transfer_confirm = False
         self.projects = [
             {"id": PROJECT, "title": "Vision Lab", "status": "approved", "can_launch": True},
             {"id": PROJECT_B, "title": "Audio Lab", "status": "pending_review", "can_launch": False},
@@ -162,6 +164,15 @@ class Fake:
             )
         if path == f"/projects/{PROJECT}/jobs" and request.method == "POST":
             body = json.loads(request.content)
+            if self.transfer_confirm and body.get("confirm_transfer_cost") is not True:
+                self.jobs.append({"refused": body})
+                return httpx.Response(
+                    409,
+                    json={
+                        "error": "This job's data transfer could cost up to $10.00.",
+                        "confirm": "confirm_transfer_cost",
+                    },
+                )
             job = {"id": JOB, "kind": body["kind"], "state": "queued", "state_reason": "Queued.", "body": body}
             self.jobs.append(job)
             return httpx.Response(201, json=job)
@@ -1449,3 +1460,83 @@ def test_logout_when_not_signed_in_asks_weave_nothing(http, fake) -> None:
     run(["logout"], http=http, say=said.append)
 
     assert said == ["Not signed in."] and fake.requests == []
+
+
+SUBMIT_4090 = [
+    "submit",
+    PROJECT,
+    "--name",
+    "train",
+    "--image",
+    "ghcr.io/me/train:v3",
+    "--command",
+    "python train.py",
+    "--gpu",
+    "RTX 4090",
+    "--target",
+    "0.30",
+    "--max",
+    "0.45",
+]
+
+
+def test_submit_sends_the_data_estimate(http, fake) -> None:
+    _login(http, [])
+
+    run([*SUBMIT_4090, "--data-in", "400", "--data-out", "100"], http=http, say=lambda _: None)
+
+    body = fake.jobs[0]["body"]
+    assert (body["data_in_gb"], body["data_out_gb"]) == (400, 100)
+    assert "confirm_transfer_cost" not in body
+
+
+def test_submit_asks_before_a_costly_transfer_and_sends_again_on_yes(http, fake) -> None:
+    _login(http, [])
+    fake.transfer_confirm = True
+    said: list[str] = []
+    asked: list[str] = []
+
+    code = run([*SUBMIT_4090, "--data-in", "500"], http=http, say=said.append, prompt=lambda q: asked.append(q) or "y")
+
+    assert code == 0
+    assert asked == ["Queue it anyway? [y/N] "]
+    assert said[0] == "This job's data transfer could cost up to $10.00."
+    assert fake.jobs[-1]["body"]["confirm_transfer_cost"] is True
+    assert said[-1] == f"Queued job {JOB}: Queued."
+
+
+def test_submit_queues_nothing_when_the_member_says_no(http, fake) -> None:
+    _login(http, [])
+    fake.transfer_confirm = True
+    said: list[str] = []
+
+    code = run([*SUBMIT_4090, "--data-in", "500"], http=http, say=said.append, prompt=lambda _: "")
+
+    assert code == 1
+    assert [job for job in fake.jobs if "body" in job] == []
+    assert said[-1] == "Not queued. --confirm-transfer-cost queues it without asking."
+
+
+def test_submit_without_a_terminal_reads_no_as_no(http, fake) -> None:
+    _login(http, [])
+    fake.transfer_confirm = True
+
+    def no_terminal(_: str) -> str:
+        raise EOFError
+
+    assert run([*SUBMIT_4090, "--data-in", "500"], http=http, say=lambda _: None, prompt=no_terminal) == 1
+
+
+def test_confirm_transfer_cost_skips_the_question(http, fake) -> None:
+    _login(http, [])
+    fake.transfer_confirm = True
+
+    def never(_: str) -> str:
+        raise AssertionError("asked")
+
+    code = run(
+        [*SUBMIT_4090, "--data-in", "500", "--confirm-transfer-cost"], http=http, say=lambda _: None, prompt=never
+    )
+
+    assert code == 0
+    assert len(fake.jobs) == 1 and fake.jobs[0]["body"]["confirm_transfer_cost"] is True

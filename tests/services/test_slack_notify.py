@@ -705,3 +705,39 @@ def test_someone_back_on_the_team_is_not_taken_out(
     )
 
     assert not removed and "U_TEAMMATE" in slack_client.channels[channel_id]["members"]
+
+
+def test_a_transfer_warning_mentions_the_jobs_owner_once(db_session: Session, member: Actor) -> None:
+    from krater.services.compute_jobs import AUDIT_TRANSFER_WARNING
+
+    project = new_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=10_000)
+    member.user.slack_user_id = "U_OWNER"
+    slack_client = FakeSlackClient()
+    project.slack_channel_id = slack_client.create_channel("ganymede-rover-test")
+    db_session.add(
+        AuditEvent(
+            actor_id=None,
+            action=AUDIT_TRANSFER_WARNING,
+            project_id=project.id,
+            payload={
+                "job_id": "00000000-0000-0000-0000-000000000002",
+                "job_name": "train",
+                "owner_id": str(member.user.id),
+                "level": 1,
+                "transfer_cents": 1_100,
+                "budget_cents": 10_000,
+                "percent": 11,
+            },
+        )
+    )
+    db_session.flush()
+
+    slack_notify.sync_box_notifications(db_session, slack_client)
+    slack_notify.sync_box_notifications(db_session, slack_client)
+
+    assert len(slack_client.messages) == 1
+    (message,) = slack_client.messages.values()
+    text = message["blocks"][0]["text"]["text"]
+    assert "*Data transfer cost*: <@U_OWNER>" in text
+    assert "has cost $11.00 so far, 11% of this project's $100.00 budget" in text
+    assert "/compute/00000000-0000-0000-0000-000000000002|Check the job>" in text

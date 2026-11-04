@@ -51,6 +51,12 @@ class ComputeSettings(Base):
     storage_quota_gb: Mapped[int] = mapped_column(sa.Integer, nullable=False)
     box_sync_deadline_minutes: Mapped[int] = mapped_column(sa.Integer, nullable=False)
     box_resume_timeout_minutes: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    # Krater rents no host charging more than this per GB of data into or out of the machine (each way), in
+    # micro-dollars per GB (20000 = $0.02/GB = $20 per TB). Vast bills transfer per GB on top of the hourly cost.
+    transfer_cap_microusd_per_gb: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    # Members are warned when a job's transfer could cost (their estimate at the cap) or has cost (Vast's charges)
+    # this percent of the project's budget.
+    transfer_warn_percent: Mapped[int] = mapped_column(sa.Integer, nullable=False)
 
     updated_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now(), onupdate=sa.func.now()
@@ -82,6 +88,8 @@ class ProjectComputeSettings(Base):
     storage_quota_gb: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
     box_sync_deadline_minutes: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
     box_resume_timeout_minutes: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
+    transfer_cap_microusd_per_gb: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
+    transfer_warn_percent: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
 
     updated_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now(), onupdate=sa.func.now()

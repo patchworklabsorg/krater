@@ -116,6 +116,15 @@ def _dollars(microusd: int) -> str:
     return f"${microusd_to_usd(microusd).quantize(Decimal('0.0001'))}/h"
 
 
+def _transfer(job: ComputeJob) -> offers.Transfer:
+    """The data the member expects `job` to move, spread over its max runtime, for ranking hosts."""
+    return offers.Transfer(
+        in_gb=job.data_in_gb or 0,
+        out_gb=job.data_out_gb or 0,
+        runtime_hours=Decimal(job.max_runtime_minutes) / 60,
+    )
+
+
 def _span(minutes: int) -> str:
     """`minutes` as members read it: "30 minutes", "1.5 hours", "3 hours"."""
     if minutes < 90:
@@ -950,6 +959,8 @@ class Scheduler:
             limit_microusd=limit,
             max_microusd=limit,
             several_models=len(job.gpu_names) != 1,
+            transfer_cap_microusd_per_gb=policy.transfer_cap_microusd_per_gb,
+            transfer=_transfer(job),
         )
         paused_minutes = int((self.now - row.paused_since).total_seconds() // 60)
         if choice is None:
@@ -1080,6 +1091,8 @@ class Scheduler:
             max_microusd=min(job.max_microusd, cap_microusd),
             several_models=len(job.gpu_names) != 1,
             exclude=taken,
+            transfer_cap_microusd_per_gb=policy.transfer_cap_microusd_per_gb,
+            transfer=_transfer(job),
         )
         if choice is None:
             low = offers.cheapest(
@@ -1087,6 +1100,7 @@ class Scheduler:
                 rental_type=rental_type,
                 disk_gb=job.disk_gb,
                 margin_percent=policy.bid_margin_percent,
+                transfer_cap_microusd_per_gb=policy.transfer_cap_microusd_per_gb,
             )
             kind = "bid" if rental_type == "bid" else "on-demand"
             job.state_reason = f"Waiting for a {kind} offer at or under {_dollars(limit)}" + (
@@ -1124,6 +1138,7 @@ class Scheduler:
             min_direct_ports=1 if job.kind is ComputeJobKind.BOX else 0,
             limit=SEARCH_LIMIT,
             max_price_microusd=limit,
+            max_transfer_microusd_per_gb=policy.transfer_cap_microusd_per_gb,
         )
         key = json.dumps(query.to_body(), sort_keys=True)
         # The price is part of what's paced: an escalated job (a higher limit) searches at once.
@@ -1173,6 +1188,8 @@ class Scheduler:
             interruptible=choice.rental_type == "bid",
             gpu_microusd=choice.gpu_microusd,
             disk_microusd=choice.disk_microusd,
+            transfer_in_microusd_per_gb=choice.offer.transfer_in_microusd_per_gb,
+            transfer_out_microusd_per_gb=choice.offer.transfer_out_microusd_per_gb,
             runner_token_hash=token_hash,
             # The pass's clock, not the database's: the settle and provision timeouts compare with it.
             created_at=self.now,

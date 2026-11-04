@@ -40,6 +40,11 @@ class NotFound(DomainError):
     """The requested record doesn't exist (or isn't visible to this actor)."""
 
 
+class ConfirmationRequired(DomainError):
+    """The action is allowed, but costly enough that the member must confirm it first (the message says why). The
+    caller shows the message and asks again with the confirmation set."""
+
+
 class GuardianVerificationRequired(InvalidState):
     """Krater can't grant budget: a team member is under 18 without a verified guardian in Weave, or Weave's
     directory doesn't return them.

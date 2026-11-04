@@ -37,6 +37,11 @@
       {% endif %}; after {{ job.max_wait_minutes }} minutes waiting to start: {{ escalations[job.on_max_wait] | lower }}
     </dd>
     <dt>Spent</dt><dd>{{ job.spend_cents | dollars }}{% if job.exit_code is not none %}; exit code {{ job.exit_code }}{% endif %}</dd>
+    <dt>Data transfer</dt>
+    <dd>
+      {% if transfer_charged_cents is not none %}{{ transfer_charged_cents | dollars }} charged by Vast so far{% else %}nothing charged yet{% endif %}{% if job.data_in_gb is not none or job.data_out_gb is not none %};
+        estimated {{ "{:,}".format(job.data_in_gb or 0) }} GB in, {{ "{:,}".format(job.data_out_gb or 0) }} GB out{% endif %}
+    </dd>
   </dl>
 </section>
 
@@ -117,6 +122,10 @@
       <dl class="details">
         <dt>GPU</dt><dd>{{ instance.gpu_name }}</dd>
         <dt>Price</dt><dd>{{ instance.full_microusd | rate }} ({{ "bid" if instance.interruptible else "on demand" }})</dd>
+        {% if instance.transfer_in_microusd_per_gb is not none %}
+          <dt>Data transfer</dt>
+          <dd>{{ instance.transfer_in_microusd_per_gb | per_tb }} in, {{ instance.transfer_out_microusd_per_gb | per_tb }} out, billed per GB on top</dd>
+        {% endif %}
         <dt>State</dt><dd>{{ instance.state.value }}</dd>
         {% if instance.last_synced_at %}<dt>Workspace saved</dt><dd>{{ instance.last_synced_at.strftime("%Y-%m-%d %H:%M UTC") }}</dd>{% endif %}
       </dl>

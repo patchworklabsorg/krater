@@ -30,7 +30,15 @@ from krater.services import projects as project_service
 from krater.services import users as user_service
 from krater.services.actor import Actor
 from krater.services.compute_jobs import JobSpec
-from krater.services.errors import DomainError, InvalidState, NotAllowed, NotAMember, NotFound, ValidationFailed
+from krater.services.errors import (
+    ConfirmationRequired,
+    DomainError,
+    InvalidState,
+    NotAllowed,
+    NotAMember,
+    NotFound,
+    ValidationFailed,
+)
 from krater.services.launch_rules import LAUNCHABLE_STATUSES, hourly_cap_cents
 from krater.storage import StorageError, get_compute_store
 from krater.vast import microusd_to_usd, usd_to_microusd
@@ -138,6 +146,8 @@ def _job_json(job: ComputeJob, *, detail: bool = False, session: Session | None 
         "gpu_names": list(job.gpu_names),
         "num_gpus": job.num_gpus,
         "disk_gb": job.disk_gb,
+        "data_in_gb": job.data_in_gb,
+        "data_out_gb": job.data_out_gb,
         "target_usd_per_hour": _rate(job.target_microusd),
         "max_usd_per_hour": _rate(job.max_microusd),
         "limit_order": job.is_limit_order,
@@ -295,6 +305,8 @@ async def submit(project_id: uuid.UUID, request: Request, actor: Me, db_session:
             on_max_wait=_choice(body, "on_max_wait", ComputeEscalation, "keep_waiting"),
             max_runtime_minutes=_int(body, "max_runtime_minutes", 8 * 60),
             on_outbid=_choice(body, "on_outbid", ComputeOutbid, outbid_default),
+            data_in_gb=_int(body, "data_in_gb", None),
+            data_out_gb=_int(body, "data_out_gb", None),
         )
         job = compute_jobs.submit_job(
             db_session,
@@ -303,7 +315,12 @@ async def submit(project_id: uuid.UUID, request: Request, actor: Me, db_session:
             spec=spec,
             cap_cents=hourly_cap_cents(project, get_settings()),
             now=datetime.now(UTC),
+            confirm_transfer_cost=body.get("confirm_transfer_cost") is True,
         )
+    except ConfirmationRequired as exc:
+        db_session.rollback()
+        # Sent again with `"confirm_transfer_cost": true`, the job is queued.
+        return _error(409, str(exc), confirm="confirm_transfer_cost")
     except ValidationFailed as exc:
         db_session.rollback()
         return _error(422, "Check the job's fields.", fields=exc.errors)

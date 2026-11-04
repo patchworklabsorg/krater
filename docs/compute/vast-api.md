@@ -34,6 +34,12 @@ each behavior that would cost money to get wrong, and `tests/vast/test_client.py
 - **Billing.** The GPU is billed only while the instance is `running`; during the image pull only disk is billed
   (spike: 0.194 h of GPU against 0.252 h of disk). Charges appear within a minute and are rounded to $0.001; a row can
   span several days, so reconcile on an instance's cumulative total.
+- **Data transfer is billed per GB** on top of the hourly price, at the host's own `inet_down_cost` (into the
+  machine: the image pull, downloads, checkpoint restores) and `inet_up_cost` (out of it), in dollars per GB; Vast's
+  console shows them per TB (1 TB = 1000 GB). Charges list them as items `bwd` and `bwu` next to `gpu` and `disk`.
+  On 2026-11-04 the verified offers at reliability 0.95 or more had a median of $3.91/TB each way, a p90 of $39/TB and
+  a top of $52–80/TB, so a host can make a data-heavy job cost more in transfer than in GPU time. Search filters
+  both with `{"lte": ...}`.
 - **`gpu_util` is slow**: it rose 50–105 s after a GPU burst and flickered when idle. Use the runner's own `nvidia-smi`
   sample; Vast's figure is the fallback.
 - **The instance's own key.** Vast injects `CONTAINER_API_KEY` into the container (it can start, stop or destroy that

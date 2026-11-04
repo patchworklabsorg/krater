@@ -761,6 +761,16 @@ a.stat .stat__value {
   font-size: var(--text-sm);
 }
 
+.notice--warn {
+  border-color: var(--warn-soft);
+  border-left-color: var(--warn);
+  background: var(--warn-soft);
+}
+
+.notice p {
+  margin: 0 0 var(--space-2);
+}
+
 .compute-hint {
   border-left-color: var(--accent);
   background: var(--surface-sunken);
