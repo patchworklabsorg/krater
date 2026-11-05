@@ -75,6 +75,12 @@ completion, each approved by another account, the budget granted and reclaimed, 
 Production is the same module behind `hosts/weft/krater-production.nix`, which is still `enable = false`. The host
 file's "Turn on production" comment is the short form of these steps, in this order:
 
+**Progress on 2026-11-04.** The first launch is the approval pipeline only; compute stays off. Steps 2, 3 (except the
+Weave client secret) and 5 are done on patchworklabsorg/infra#73. That PR has the Ganymede Review app's feed and
+alerts channel ids, the new secrets, and the rev. The DNS records are patchworklabsorg/dns#18, which replaces dns#12.
+Jasper's steps are left: checking the Weave app and setting `KRATER_WEAVE_CLIENT_SECRET` (`agenix -e krater-env.age`),
+then steps 4 and 6–9.
+
 1. **Weave production.** Krater's app exists (its client id is in the host file). Check on its app page: redirect
    URI `https://krater.patchworklabs.org/auth/callback`, scopes `openid profile email groups roles slack directory`,
    access "everyone", and the roles `reviewer` and `admin` given to the Ganymede Reviewer and Ganymede Admin groups
