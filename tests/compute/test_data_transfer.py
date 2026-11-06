@@ -12,6 +12,7 @@ import sqlalchemy as sa
 from krater.compute import offers
 from krater.models import AuditEvent, ComputeEvent, ComputeJobState
 from krater.services import compute_jobs, compute_settings
+from krater.services import projects as project_service
 from krater.services.compute_jobs import AUDIT_TRANSFER_WARNING, JobSpec
 from krater.services.errors import ConfirmationRequired, ValidationFailed
 from krater.vast import Offer
@@ -281,6 +282,27 @@ def test_transfer_past_the_warning_share_warns_the_team_once(db_session, member,
     assert audit.payload["owner_id"] == str(member.user.id)
     assert audit.payload["job_id"] == str(job.id) and audit.payload["job_name"] == "train"
     assert (audit.payload["transfer_cents"], audit.payload["percent"], audit.payload["level"]) == (1_100, 11, 1)
+
+
+def test_the_pass_that_finds_the_transfer_warns(db_session, member, admin, project, client, fake, weave) -> None:  # noqa: F811
+    # The 2026-11-06 paid round: a small transfer on a small budget. Krater's sessions don't autoflush (krater.db), and
+    # with a charge this close to the estimate no mismatch audit flushes either, so the warning came a pass late.
+    project_service.admin_adjust_budget(
+        db_session, admin, project=project, amount_cents=-9_900, reason="A $1 test budget.", weave_client=weave
+    )
+    compute_settings.set_project_overrides(
+        db_session, admin, project=project, overrides={"transfer_warn_percent": 1}, reason="Warn early."
+    )
+    job, row = _ran_an_hour(db_session, member, project, client, fake)
+    fake.add_charge(row.provider_instance_id, gpu="0.055", disk="0.009", data_in="0.003")
+
+    with db_session.no_autoflush:
+        result = _reconcile(db_session, client)
+
+    assert result.alerts == 0  # nothing else flushes on the way
+    assert row.transfer_charged_microusd == 3_000
+    (event,) = _warnings(db_session, job)
+    assert event.message.startswith("Data transfer has cost $0.01 so far, 1% of the project's $1.00 budget.")
 
 
 def test_each_further_share_warns_again(db_session, member, project, client, fake) -> None:  # noqa: F811

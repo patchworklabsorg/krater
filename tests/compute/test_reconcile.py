@@ -82,6 +82,25 @@ def test_a_kept_estimate_keeps_accruing_from_where_it_was(db_session, member, pr
     assert row.accrued_until == accrued_until
 
 
+def test_a_small_correction_reaches_the_jobs_spend_in_the_same_pass(db_session, member, project, client, fake) -> None:  # noqa: F811
+    # Krater's sessions don't autoflush (krater.db), and a charge this close to the estimate writes no mismatch audit
+    # (which would flush), so the job's spend must still see the instance's new figure.
+    from krater.services import compute_jobs
+
+    job, row = _ran_an_hour(db_session, member, project, client, fake)
+    compute_jobs.cancel_job(db_session, member, job=job, now=NOW + timedelta(minutes=64))
+    _pass(db_session, client, NOW + timedelta(minutes=65))
+    assert job.spend_cents == 7  # the estimate, about $0.0644
+    fake.add_charge(row.provider_instance_id, gpu="0.051", disk="0.009")
+
+    with db_session.no_autoflush:
+        result = _reconcile(db_session, client, minutes=70)
+
+    assert result.alerts == 0
+    assert row.accrued_microusd == 60_000
+    assert job.spend_cents == 6
+
+
 def test_a_destroyed_instance_takes_vasts_lower_figure_and_quilt_gets_a_correction(
     db_session,
     member,

@@ -139,6 +139,10 @@ def run(session: Session, client: ComputeProvider, settings: Settings, *, now: d
             row.accrued_microusd = actual
         by_project.setdefault(row.job.project_id, []).append((row, estimate, actual))
 
+    # Krater's sessions don't autoflush (krater.db), and the per-job sums below (spend, transfer) must see what this
+    # pass just set. Without it they lagged a pass, an hour, unless a mismatch audit happened to flush first: found
+    # on the 2026-11-06 paid round, where a transfer warning came an hour late.
+    session.flush()
     for project_id, items in by_project.items():
         project = session.get(Project, project_id)
         estimate_total = sum(estimate for _, estimate, _ in items)
