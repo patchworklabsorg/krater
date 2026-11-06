@@ -212,7 +212,8 @@ The proposal form (`projects/_application.html`) asks, in three parts:
 - **The project.** A name; *What is your project, in a sentence normal people would understand?* (one sentence, 300
   characters); *What is it, what does it build on or depart from, and why does it matter?* (the write-up, 500 words at
   most); an optional repo link; *Are you doing this as part of a contest or with the help of a professor?* (neither, a
-  contest, a professor or both, and which).
+  contest, a professor or both, and which); *Is there anything that would stop you from open-sourcing the project?*
+  (the gallery shows open-source work only, so reviewers see this early; "nothing" is an answer).
 - **Compute.** *How are you going to use the compute?*, then two estimates priced at Vast's current rates: the **proof
   of concept** and the **finished product**. Each is a card and about how many hours (plus rental type and safety
   margin), and each can be overridden twice over: the team can give its own price per card-hour (also how a card

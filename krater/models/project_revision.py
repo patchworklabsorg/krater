@@ -38,6 +38,9 @@ class ProjectRevision(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     affiliation: Mapped[str] = mapped_column(sa.String(16), nullable=False, default="none", server_default="none")
     affiliation_detail: Mapped[str] = mapped_column(sa.Text, nullable=False, default="", server_default="")
     compute_use: Mapped[str] = mapped_column(sa.Text, nullable=False, default="", server_default="")
+    # Anything that would stop the team open-sourcing the project (the gallery shows open-source work only): a
+    # contest's or school's rules, data or a model they may not share, a license. "Nothing" is an answer.
+    open_source_obstacles: Mapped[str] = mapped_column(sa.Text, nullable=False, default="", server_default="")
 
     # What approval funds: the proof of concept for a proposal, the new total for an amendment.
     budget_requested_cents: Mapped[int] = mapped_column(sa.Integer, nullable=False)

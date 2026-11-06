@@ -53,7 +53,14 @@ def test_submit_needs_every_answer_of_the_application(db_session: Session, membe
     with pytest.raises(ValidationFailed) as excinfo:
         projects.submit(db_session, member, project=project)
 
-    assert set(excinfo.value.errors) == {"summary", "experience", "compute_use", "poc_gpu", "full_gpu"}
+    assert set(excinfo.value.errors) == {
+        "summary",
+        "experience",
+        "open_source_obstacles",
+        "compute_use",
+        "poc_gpu",
+        "full_gpu",
+    }
 
 
 @pytest.mark.parametrize(("field", "limit"), [("experience", 300), ("write_up", 500)])
@@ -100,7 +107,15 @@ def test_an_amendment_starts_with_every_answer_of_the_approved_revision(
     draft = projects.start_amendment(db_session, member, project=project)
 
     approved = project.approved_revision
-    for field in ("summary", "experience", "write_up", "compute_use", "full_budget_estimate", "full_budget_cents"):
+    for field in (
+        "summary",
+        "experience",
+        "write_up",
+        "open_source_obstacles",
+        "compute_use",
+        "full_budget_estimate",
+        "full_budget_cents",
+    ):
         assert getattr(draft, field) == getattr(approved, field)
     # What it needs now starts as the finished product, on top of the approved budget.
     assert draft.budget_estimate == approved.full_budget_estimate

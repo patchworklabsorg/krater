@@ -23,7 +23,17 @@ from krater.web import estimator_form
 from krater.web.money import InvalidDollarAmount, cents_to_input, parse_dollars
 
 #: The plain answers, by form field name.
-ANSWERS = ("title", "repo_url", "summary", "experience", "write_up", "affiliation", "affiliation_detail", "compute_use")
+ANSWERS = (
+    "title",
+    "repo_url",
+    "summary",
+    "experience",
+    "write_up",
+    "affiliation",
+    "affiliation_detail",
+    "open_source_obstacles",
+    "compute_use",
+)
 #: Estimator prefix -> the draft fields it fills (estimate, amount).
 SECTIONS = {"poc": ("budget_estimate", "budget_requested_cents"), "full": ("full_budget_estimate", "full_budget_cents")}
 
@@ -62,6 +72,7 @@ def values_from_draft(project: Project, draft: ProjectRevision, settings: Settin
         "write_up": draft.write_up,
         "affiliation": draft.affiliation,
         "affiliation_detail": draft.affiliation_detail,
+        "open_source_obstacles": draft.open_source_obstacles,
         "compute_use": draft.compute_use,
     }
     for prefix, (estimate_field, amount_field) in SECTIONS.items():

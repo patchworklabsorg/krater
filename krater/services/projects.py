@@ -61,6 +61,7 @@ _ANSWER_FIELDS = (
     "affiliation",
     "affiliation_detail",
     "compute_use",
+    "open_source_obstacles",
     "budget_requested_cents",
     "budget_estimate",
     "full_budget_cents",
@@ -207,6 +208,7 @@ def update_draft(
     affiliation: str | None = None,
     affiliation_detail: str | None = None,
     compute_use: str | None = None,
+    open_source_obstacles: str | None = None,
     budget_requested_cents: int | None = None,
     budget_estimate: dict | None | EllipsisType = ...,
     full_budget_cents: int | None | EllipsisType = ...,
@@ -246,6 +248,7 @@ def update_draft(
         ("affiliation", affiliation),
         ("affiliation_detail", affiliation_detail),
         ("compute_use", compute_use),
+        ("open_source_obstacles", open_source_obstacles),
         ("budget_requested_cents", budget_requested_cents),
     ):
         if value is not None:
@@ -328,6 +331,7 @@ def application_errors(project: Project, draft: ProjectRevision) -> dict[str, st
         "summary": (draft.summary, "Describe the project in one sentence."),
         "experience": (draft.experience, "Tell reviewers who you are and what experience you have."),
         "write_up": (draft.write_up, "Explain the project."),
+        "open_source_obstacles": (draft.open_source_obstacles, "Say whether anything would stop you open-sourcing it."),
         "compute_use": (draft.compute_use, "Say how you'll use the compute."),
     }
     for field, (value, message) in required.items():

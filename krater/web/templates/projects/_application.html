@@ -182,6 +182,9 @@
       {{ text_field("affiliation_detail", "Which contest or professor?", values, errors, rows=2,
                     hint="The contest's name and a link, or your professor's name and school.") }}
     </div>
+    {{ text_field("open_source_obstacles", "Is there anything that would stop you from open-sourcing the project?",
+                  values, errors, rows=3,
+                  hint="A contest's or school's rules, data or a model you can't share, a license... If nothing would, say so.") }}
   </fieldset>
 
   <fieldset class="form-fieldset">

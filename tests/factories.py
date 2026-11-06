@@ -33,6 +33,7 @@ APPLICATION = {
     "summary": "A small rover that maps caves.",
     "experience": "I build robots.",
     "affiliation": "none",
+    "open_source_obstacles": "Nothing.",
     "compute_use": "Training a mapping model.",
     "budget_estimate": estimate(),
     "full_budget_cents": 10_000,

@@ -137,6 +137,10 @@
           </p>
         </div>
         <div>
+          <h3>Anything stopping them open-sourcing it</h3>
+          <p class="write-up">{{ rev.open_source_obstacles | nl2br if rev.open_source_obstacles else "Not answered yet." }}</p>
+        </div>
+        <div>
           <h3>How they'll use the compute</h3>
           <p class="write-up">{{ rev.compute_use | nl2br if rev.compute_use else "Not answered yet." }}</p>
         </div>
