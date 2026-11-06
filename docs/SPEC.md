@@ -284,7 +284,8 @@ answers 503 once its heartbeat is 5 minutes old, for an uptime check outside Kra
 mirrored into Krater in v1; the project page links to the channel instead.
 
 **App requirements**
-- Bot scopes: `groups:write` (creating, archiving, and removing people from project channels), `groups:write.invites`,
+- Bot scopes: `groups:write` (creating, archiving, and removing people from project channels), `groups:read`
+  (finding a project's channel by name when creating it answers `name_taken`), `groups:write.invites`,
   `chat:write`, `users:read` (the membership gate, when Weave has no `slack_member` for someone). A workspace that
   restricts who may remove members from private channels refuses the removal; Krater logs it, and an admin removes
   the person by hand.

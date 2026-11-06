@@ -11,8 +11,8 @@ staging run first ([staging.md](staging.md)); this page assumes everything there
 - **On any other Docker host: this Compose file**, with the opt-in `proxy` (Caddy, automatic TLS) and `backup`
   profiles. Sections 2 to 5 describe that path.
 
-Section 1 (DNS, Weave, Slack, Vast) applies to both. The image builds for arm64, which alastor is, as well as amd64
-(checked under emulation; not yet run on arm64 hardware).
+Section 1 (DNS, Weave, Slack, Vast) applies to both. The image builds for amd64 (weft, where staging runs) and arm64
+(checked under emulation only).
 
 ### 0.1 On weft (NixOS)
 
@@ -30,11 +30,12 @@ sudo systemctl start krater-build     # the running site keeps serving meanwhile
 sudo systemctl restart krater-web     # migrates, then starts; krater-worker follows
 ```
 
-Settings live in `hosts/weft/krater.nix` (hostnames, Weave client id, the fallback commit). The proposed hostnames
-are `krater` and `krater-storage` under `patchworklabs.org`, added by a PR to
-[patchworklabsorg/dns](https://github.com/patchworklabsorg/dns). They're proxied through Cloudflare like Weave's,
-whose edge certificate covers only one subdomain level. Behind Cloudflare and Traefik, `KRATER_TRUSTED_PROXY_COUNT`
-probably needs to be 2 (see the host file). Secrets are the agenix file
+Settings live in `hosts/weft/krater.nix` (hostnames, Weave client id, the fallback commit); production's one switch
+is `hosts/weft/krater-production.nix`. Production's hostnames are `krater` and `krater-storage` under
+`patchworklabs.org`, added by a PR to [patchworklabsorg/dns](https://github.com/patchworklabsorg/dns), next to
+staging's `krater-staging` and `krater-staging-storage`. They're proxied through Cloudflare like Weave's, whose edge
+certificate covers only one subdomain level. `KRATER_TRUSTED_PROXY_COUNT` is 3: Cloudflare, Traefik on alastor and
+nginx on weft each add one address (see the host file). Secrets are the agenix file
 `secrets/krater-env.age`, with the keys listed at the top of `modules/krater/default.nix`, plus
 `secrets/central-prod-krater.age` (the database password alone, for skein); infra's `bin/new-krater-secrets` writes
 both. The module splits the env file so each container gets only its own. Getting a module change
@@ -44,7 +45,8 @@ that, only the `Deploy` workflow.
 The database is Krater's schema `krater` in `patchwork_central` on skein (infra's `modules/central-db`), not a
 Postgres of its own: the role `krater` has `search_path = krater`, so Krater's tables, its procrastinate queue and
 `alembic_version` all live in that schema, and nothing changes in Krater's code. `KRATER_DATABASE_URL` points at skein
-(its tailnet name from alastor). skein's nightly dump is the backup; a restore is of the schema `krater` and goes
+(its tailnet name, pinned in the host file's `extraHosts` because weft has no MagicDNS). Staging does the same with its
+own schema on hem. skein's nightly dump is the backup; a restore is of the schema `krater` and goes
 through whoever runs skein.
 
 **Compute off (the first deploy).** Krater ships to production with `KRATER_COMPUTE_MODE=off`: proposals, review,
@@ -65,6 +67,57 @@ the file, restart, run `python -m krater.rotate_project_secrets` in the portal c
 `KRATER_VAST_API_KEY_FILE`. The deploy's `ensure_bucket` creates the `krater-compute` bucket for checkpoints. Project secrets also need
 `KRATER_PROJECT_SECRETS_KEY_FILE`: a Fernet key file (an agenix secret) mounted into the portal only. Without it the
 feature is off. Losing the key loses every stored secret, so back it up with the other agenix secrets.
+
+### 0.2 Turning production on
+
+The state on 2026-11-03. Staging on weft has run the whole flow live: a member's proposal, an amendment and a
+completion, each approved by another account, the budget granted and reclaimed, the gallery and the OSPool PDF.
+Production is the same module behind `hosts/weft/krater-production.nix`, which is still `enable = false`. The host
+file's "Turn on production" comment is the short form of these steps, in this order:
+
+**Progress on 2026-11-04.** The first launch is the approval pipeline only; compute stays off. Steps 2, 3 (except the
+Weave client secret) and 5 are done on patchworklabsorg/infra#73. That PR has the Ganymede Review app's feed and
+alerts channel ids, the new secrets, and the rev. The DNS records are patchworklabsorg/dns#18, which replaces dns#12.
+Jasper's steps are left: checking the Weave app and setting `KRATER_WEAVE_CLIENT_SECRET` (`agenix -e krater-env.age`),
+then steps 4 and 6–9.
+
+1. **Weave production.** Krater's app exists (its client id is in the host file). Check on its app page: redirect
+   URI `https://krater.patchworklabs.org/auth/callback`, scopes `openid profile email groups roles slack directory`,
+   access "everyone", and the roles `reviewer` and `admin` given to the Ganymede Reviewer and Ganymede Admin groups
+   ([weave-integration.md](../weave-integration.md)).
+2. **Slack.** Krater's app in the real Patchwork workspace ([slack-setup.md](slack-setup.md)), with interactivity URL
+   `https://krater.patchworklabs.org/slack/interactions`. Note the feed and alerts channel ids: they aren't secret and
+   go in the host file (`slackFeedChannelId`, and `KRATER_SLACK_ALERTS_CHANNEL_ID` in `extraEnv`).
+3. **Secrets.** `secrets/krater-env.age` exists, but its `KRATER_WEAVE_CLIENT_SECRET`, `KRATER_SLACK_BOT_TOKEN` and
+   `KRATER_SLACK_SIGNING_SECRET` are empty, and Krater refuses to start until they're set. Only the file's recipients
+   (Jasper, weft) can edit it. But production has never run, so nothing in it or in `central-prod-krater.age` is in
+   use yet: anyone who can push to infra can replace both instead, without reading them. On a branch, delete the two
+   files, then run infra's `bin/new-krater-secrets production` in a shell with agenix (WSL with Nix works), with the
+   three values in its environment, typed into that shell and never into a file in the repo. It writes both files
+   with a new database password. Once production has started, only the recipients can change them.
+4. **Tailnet.** In `jaspermayone/infra` `tailscale/policy.hujson`, give `tag:patchwork-krater` `pw-skein:5432` again
+   (Jasper; the grant and test lines are in infra#32's body).
+5. **The first build.** Production has no CI deploy, so its first build is the host file's fallback `rev`. Point it
+   at a current `main` commit first; the old one predates the launch hardening, the funder packet and every fix
+   since.
+6. **Switch on.** Set `enable = true` in `krater-production.nix`, deploy skein (the role and its password), then weft,
+   then run `systemctl start krater-prod-build` on weft by hand.
+7. **DNS.** The `krater` and `krater-storage` records in patchworklabsorg/dns, proxied to alastor like staging's.
+8. **The edge.** Bump `patchwork-infra` in `jaspermayone/infra` and deploy alastor, which adds the public routes.
+9. **Check it** (section 3, "Check it"): `/healthz` and `/healthz/worker` answer 200, an admin signs in and sees
+   Review and Admin, a TEST proposal opens its Slack channel, and an outside uptime check watches `/healthz/worker`.
+
+Decide before members apply (none of these blocks the switch):
+
+- **Large requests.** Krater has no ceiling on one grant. The default policy is one approval from any reviewer, and
+  the hourly cap limits only how fast a budget is spent. Add an approval policy on `/admin` with a `min_budget_cents`
+  floor (more approvals, or the admin group) for large requests.
+- **Weave's one-grant cap.** Weave records Ganymede grants by hand on a member's identity record, one per person for
+  life (`config/kyc/knot.yml`). Krater doesn't read or write it, and a member can hold several approved projects.
+- **Members exempt from the code of conduct** stay Slack guests, so Krater's Slack membership gate blocks their
+  submissions until they're full members of the Slack.
+- **Production CI deploys.** Give production its own deploy key and user (`krater-prod-deploy`) when releases should
+  follow `main`, as staging's do.
 
 ## 1. Before the first deploy
 
@@ -201,7 +254,6 @@ docker compose --env-file "$KRATER_ENV_FILE" exec -T db   pg_dump --format=custo
 
 ## 6. Not covered yet
 
-- **Backup alerts.** The alerts above don't watch `db-backup`: check its logs (on alastor, skein's nightly dump).
-- **Off-machine backup copies** and a screenshot volume backup (section 4).
-- **The NixOS module has never run on NixOS.** It evaluates and its units build (in a `nixos/nix` container), and
-  the image builds from a GitHub commit for arm64, but nothing has started on alastor yet.
+- **Backup alerts.** The alerts above don't watch `db-backup`: check its logs (on weft, skein's nightly dump).
+- **Off-machine backup copies** and a screenshot volume backup (section 4). On weft, screenshots sit in SeaweedFS on
+  weft's own disk, and neither infra's `modules/krater` nor weft's host config backs it up yet.
