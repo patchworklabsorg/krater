@@ -23,6 +23,7 @@ ANSWERS = {
     "write_up": "It maps caves with lidar.",
     "affiliation": "contest",
     "affiliation_detail": "Example Robotics Cup",
+    "open_source_blocked": "yes",
     "open_source_obstacles": "The cup's rules keep entries private until the final.",
     "compute_use": "Training the mapping model.",
     "poc_gpu": "A100:1",
@@ -99,6 +100,7 @@ def test_saving_stores_every_answer_and_both_estimates(client: TestClient, login
         "contest",
         "Example Robotics Cup",
     )
+    assert revision.open_source_blocked is True
     assert revision.open_source_obstacles == "The cup's rules keep entries private until the final."
     # With no amount typed, each amount is its estimate: $1.00/h x 40h, and x 400h.
     assert revision.budget_requested_cents == 4_000
@@ -255,7 +257,6 @@ def test_submitting_an_unfinished_application_marks_whats_missing(client: TestCl
     for message in (
         "Describe the project in one sentence.",
         "Tell reviewers who you are and what experience you have.",
-        "Say whether anything would stop you open-sourcing it.",
         "Say how you&#39;ll use the compute.",
         "Choose the card and hours a proof of concept needs.",
         "Choose the card and hours the finished product needs (a rough guess is fine).",

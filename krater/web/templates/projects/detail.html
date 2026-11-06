@@ -138,7 +138,11 @@
         </div>
         <div>
           <h3>Anything stopping them open-sourcing it</h3>
-          <p class="write-up">{{ rev.open_source_obstacles | nl2br if rev.open_source_obstacles else "Not answered yet." }}</p>
+          {% if rev.open_source_blocked %}
+            <p class="write-up">Yes: {{ rev.open_source_obstacles | nl2br if rev.open_source_obstacles else "not said yet." }}</p>
+          {% else %}
+            <p>No</p>
+          {% endif %}
         </div>
         <div>
           <h3>How they'll use the compute</h3>

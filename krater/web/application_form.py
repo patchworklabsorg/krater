@@ -55,6 +55,7 @@ def _estimator_keys() -> list[str]:
 def blank_values(settings: Settings) -> dict[str, str]:
     values = {name: "" for name in ANSWERS}
     values["affiliation"] = "none"
+    values["open_source_blocked"] = ""  # the checkbox starts at no
     for prefix in SECTIONS:
         values |= estimator_form.default_estimator_values(settings, prefix)
         values[f"{prefix}_budget"] = ""
@@ -72,6 +73,7 @@ def values_from_draft(project: Project, draft: ProjectRevision, settings: Settin
         "write_up": draft.write_up,
         "affiliation": draft.affiliation,
         "affiliation_detail": draft.affiliation_detail,
+        "open_source_blocked": "yes" if draft.open_source_blocked else "",
         "open_source_obstacles": draft.open_source_obstacles,
         "compute_use": draft.compute_use,
     }
@@ -100,7 +102,13 @@ def parse(
     `base_cents` is the budget approved so far, for an amendment: its first estimate is the extra compute the next
     stage needs, while its amount is the project's new total, so a filled-in amount is `base_cents` plus the
     estimate. The total can still be typed lower (an amendment may cut the budget)."""
-    keys = [*ANSWERS, *_estimator_keys(), *(f"{prefix}_budget" for prefix in SECTIONS), "teammates"]
+    keys = [
+        *ANSWERS,
+        "open_source_blocked",
+        *_estimator_keys(),
+        *(f"{prefix}_budget" for prefix in SECTIONS),
+        "teammates",
+    ]
     values = blank_values(settings) | {key: str(form[key]) for key in keys if key in form}
     posted = Posted(values=values)
     changes = posted.changes
@@ -110,6 +118,8 @@ def parse(
             changes[name] = values[name]
     changes["title"] = values["title"]
     changes["repo_url"] = values["repo_url"]  # "" clears it; update_draft takes None as "unchanged"
+    # An unticked checkbox isn't posted at all, so its absence is the answer no.
+    changes["open_source_blocked"] = values["open_source_blocked"] == "yes"
     if values["affiliation"] not in project_service.AFFILIATIONS:
         posted.errors["affiliation"] = "Choose one of the answers."
     if len(values["summary"]) > project_service.SUMMARY_MAX_CHARS:

@@ -16,7 +16,6 @@ ANSWERS = {
     "experience": "Two years of robotics club.",
     "affiliation": "professor",
     "affiliation_detail": "Prof. Ada Example, Example University",
-    "open_source_obstacles": "Nothing: it will be MIT-licensed.",
     "compute_use": "Training the rover's mapping model.",
     "poc_gpu": "other",
     "poc_gpu_other": "RTX A4000",
@@ -59,7 +58,6 @@ def test_full_workflow_through_http(client: TestClient, login_as) -> None:
     # --- Submit it for review --------------------------------------------------------------------
     detail = client.get(project_url)
     assert "Ganymede Rover" in detail.text
-    assert "Nothing: it will be MIT-licensed." in detail.text
     csrf = get_csrf_token(detail.text)
     submit_response = client.post(f"{project_url}/submit", data={"csrf_token": csrf}, follow_redirects=False)
     assert submit_response.status_code == 303

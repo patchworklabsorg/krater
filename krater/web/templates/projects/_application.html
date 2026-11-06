@@ -182,9 +182,20 @@
       {{ text_field("affiliation_detail", "Which contest or professor?", values, errors, rows=2,
                     hint="The contest's name and a link, or your professor's name and school.") }}
     </div>
-    {{ text_field("open_source_obstacles", "Is there anything that would stop you from open-sourcing the project?",
-                  values, errors, rows=3,
-                  hint="A contest's or school's rules, data or a model you can't share, a license... If nothing would, say so.") }}
+    <div class="field">
+      <fieldset class="choice-list">
+        <legend class="field-label">Is there anything that would stop you from open-sourcing the project?</legend>
+        <label class="choice">
+          <input type="checkbox" name="open_source_blocked" value="yes" data-role="open-source-blocked"
+                 {% if values.open_source_blocked == "yes" %}checked{% endif %}> Yes
+        </label>
+      </fieldset>
+      <p class="field-hint">Leave it unticked if nothing would. The gallery shows open-source projects.</p>
+    </div>
+    <div data-role="open-source-obstacles"{% if values.open_source_blocked != "yes" and not errors.open_source_obstacles %} hidden{% endif %}>
+      {{ text_field("open_source_obstacles", "What would stop you?", values, errors, rows=3,
+                    hint="A contest's or school's rules, data or a model you can't share, a license...") }}
+    </div>
   </fieldset>
 
   <fieldset class="form-fieldset">

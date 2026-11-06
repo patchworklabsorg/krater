@@ -38,8 +38,10 @@ class ProjectRevision(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     affiliation: Mapped[str] = mapped_column(sa.String(16), nullable=False, default="none", server_default="none")
     affiliation_detail: Mapped[str] = mapped_column(sa.Text, nullable=False, default="", server_default="")
     compute_use: Mapped[str] = mapped_column(sa.Text, nullable=False, default="", server_default="")
-    # Anything that would stop the team open-sourcing the project (the gallery shows open-source work only): a
-    # contest's or school's rules, data or a model they may not share, a license. "Nothing" is an answer.
+    # Whether anything would stop the team open-sourcing the project (the gallery shows open-source work only), and
+    # if so what: a contest's or school's rules, data or a model they may not share, a license. The form's checkbox
+    # starts at no; `open_source_obstacles` is asked, and kept, only while it's yes.
+    open_source_blocked: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False, server_default="false")
     open_source_obstacles: Mapped[str] = mapped_column(sa.Text, nullable=False, default="", server_default="")
 
     # What approval funds: the proof of concept for a proposal, the new total for an amendment.

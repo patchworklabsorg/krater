@@ -56,7 +56,6 @@ def test_submit_needs_every_answer_of_the_application(db_session: Session, membe
     assert set(excinfo.value.errors) == {
         "summary",
         "experience",
-        "open_source_obstacles",
         "compute_use",
         "poc_gpu",
         "full_gpu",
@@ -90,10 +89,41 @@ def test_a_contest_or_professor_needs_naming(db_session: Session, member: Actor)
         projects.update_draft(db_session, member, project=project, affiliation="hackathon")
 
 
+def test_saying_something_would_stop_open_sourcing_needs_what(db_session: Session, member: Actor) -> None:
+    project = new_project(
+        db_session, member, title="T", write_up="W", budget_requested_cents=100, open_source_blocked=True
+    )
+
+    with pytest.raises(ValidationFailed) as excinfo:
+        projects.submit(db_session, member, project=project)
+
+    assert set(excinfo.value.errors) == {"open_source_obstacles"}
+    projects.update_draft(db_session, member, project=project, open_source_obstacles="The school owns the data.")
+    assert projects.submit(db_session, member, project=project).status is ProjectStatus.PENDING_REVIEW
+
+
+def test_unticking_open_source_clears_what_would_stop_it(db_session: Session, member: Actor) -> None:
+    project = new_project(
+        db_session, member, open_source_blocked=True, open_source_obstacles="The school owns the data."
+    )
+
+    projects.update_draft(db_session, member, project=project, open_source_blocked=False)
+
+    assert project.current_revision.open_source_obstacles == ""
+
+
 def test_an_amendment_starts_with_every_answer_of_the_approved_revision(
     db_session: Session, member: Actor, reviewer: Actor, weave
 ) -> None:
-    project = new_project(db_session, member, title="T", write_up="W", budget_requested_cents=100)
+    project = new_project(
+        db_session,
+        member,
+        title="T",
+        write_up="W",
+        budget_requested_cents=100,
+        open_source_blocked=True,
+        open_source_obstacles="The school owns the data.",
+    )
     project = projects.submit(db_session, member, project=project)
     projects.record_review(
         db_session,
@@ -111,6 +141,7 @@ def test_an_amendment_starts_with_every_answer_of_the_approved_revision(
         "summary",
         "experience",
         "write_up",
+        "open_source_blocked",
         "open_source_obstacles",
         "compute_use",
         "full_budget_estimate",

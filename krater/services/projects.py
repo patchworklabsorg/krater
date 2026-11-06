@@ -61,6 +61,7 @@ _ANSWER_FIELDS = (
     "affiliation",
     "affiliation_detail",
     "compute_use",
+    "open_source_blocked",
     "open_source_obstacles",
     "budget_requested_cents",
     "budget_estimate",
@@ -208,6 +209,7 @@ def update_draft(
     affiliation: str | None = None,
     affiliation_detail: str | None = None,
     compute_use: str | None = None,
+    open_source_blocked: bool | None = None,
     open_source_obstacles: str | None = None,
     budget_requested_cents: int | None = None,
     budget_estimate: dict | None | EllipsisType = ...,
@@ -248,11 +250,14 @@ def update_draft(
         ("affiliation", affiliation),
         ("affiliation_detail", affiliation_detail),
         ("compute_use", compute_use),
+        ("open_source_blocked", open_source_blocked),
         ("open_source_obstacles", open_source_obstacles),
         ("budget_requested_cents", budget_requested_cents),
     ):
         if value is not None:
             setattr(draft, field, value)
+    if not draft.open_source_blocked:
+        draft.open_source_obstacles = ""  # only asked while the answer is yes
     for field, value in (
         ("budget_estimate", budget_estimate),
         ("full_budget_cents", full_budget_cents),
@@ -331,7 +336,6 @@ def application_errors(project: Project, draft: ProjectRevision) -> dict[str, st
         "summary": (draft.summary, "Describe the project in one sentence."),
         "experience": (draft.experience, "Tell reviewers who you are and what experience you have."),
         "write_up": (draft.write_up, "Explain the project."),
-        "open_source_obstacles": (draft.open_source_obstacles, "Say whether anything would stop you open-sourcing it."),
         "compute_use": (draft.compute_use, "Say how you'll use the compute."),
     }
     for field, (value, message) in required.items():
@@ -345,6 +349,8 @@ def application_errors(project: Project, draft: ProjectRevision) -> dict[str, st
         errors["affiliation"] = "Choose one of the answers."
     elif draft.affiliation != "none" and not draft.affiliation_detail.strip():
         errors["affiliation_detail"] = "Name the contest or professor."
+    if draft.open_source_blocked and not draft.open_source_obstacles.strip():
+        errors["open_source_obstacles"] = "Say what would stop you open-sourcing it."
     if not draft.budget_estimate:
         errors["poc_gpu"] = "Choose the card and hours a proof of concept needs."
     if draft.budget_requested_cents <= 0:
