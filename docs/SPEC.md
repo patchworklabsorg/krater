@@ -396,7 +396,9 @@ them, and Krater stores none of them (`krater.services.clearance`, `krater.servi
   `HeldGrant`): the approval goes through, but the ledger, and so Quilt's `budget.committed`, has nothing yet, and
   the project's ceiling stays where it was ($0 for a new project). A worker task asks Weave every five minutes and
   writes the held entry, with the approver as its actor, once every member is cleared. The project page shows the
-  held amount, and the project's Slack channel hears when it's held and when it's released.
+  held amount, and the project's Slack channel hears when it's held and when it's released. Each team member it waits
+  on also gets a Slack DM from the app with a link to Weave's verification page (the same words for everyone: Krater
+  doesn't keep why someone isn't cleared). Admins see every held grant at the top of `/admin`.
   - **One at a time.** While a grant is held, nothing else may change the project's budget: amendments can't be
     started or approved, and admins can't adjust or reclaim it. The amount decided at approval stays right.
   - **Cancelled** when the project is withdrawn or completed first. Nothing was granted, so there's nothing to give

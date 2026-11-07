@@ -86,6 +86,17 @@ _SLACK_MEMBERSHIP_REQUIRED_MESSAGE = (
 )
 
 
+def _decision_message(db_session: Session, project: Project, revision: ProjectRevision, default: str) -> str:
+    """The flash after a decision: says so when this approval's budget is held for the team's verification."""
+    held = grants.pending(db_session, project)
+    if held is not None and held.revision_id == revision.id:
+        return (
+            f"Approved. Its budget of {format_cents(held.amount_cents)} is held until every team member is verified "
+            "in Weave, and is added then."
+        )
+    return default
+
+
 def _enforce_slack_membership(db_session: Session, actor: Actor) -> str | None:
     """`None` if `actor` passes the Slack membership gate (`docs/SPEC.md` "Roles & authentication"),
     else a user-facing error message to flash. Drafts are always allowed; this is only called from the
@@ -928,7 +939,8 @@ def record_review(
         slack_notify_decision.defer(revision_id=str(revision_id))
         slack_archive_channel.defer(project_id=str(project.id))
 
-    return _success_redirect(db_session, request, project_id, "Review recorded.", after_commit=_notify)
+    message = _decision_message(db_session, project, revision, "Review recorded.")
+    return _success_redirect(db_session, request, project_id, message, after_commit=_notify)
 
 
 # --------------------------------------------------------------------------------------------------
@@ -991,7 +1003,8 @@ def admin_decide(
             project_id=str(project.id), action=action, actor_sub=actor.user.weave_sub, reason=reason
         )
 
-    return _success_redirect(db_session, request, project_id, "Decision recorded.", after_commit=_notify)
+    message = _decision_message(db_session, project, revision, "Decision recorded.")
+    return _success_redirect(db_session, request, project_id, message, after_commit=_notify)
 
 
 @router.post("/projects/{project_id}/admin-budget", dependencies=[Depends(verify_csrf_token)])

@@ -416,6 +416,37 @@ def test_a_held_and_a_released_grant_are_posted_to_the_channel(db_session: Sessi
     assert "$50.00" in released
 
 
+def test_a_held_grant_dms_each_member_it_waits_on(db_session: Session, member: Actor, make_actor) -> None:
+    waiting = make_actor(slack_user_id="U_WAITING")
+    make_actor(slack_user_id="U_CLEARED")  # Weave cleared them, so not in `waiting_on`
+    no_slack = make_actor()
+    project = new_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=5000)
+    slack_client = FakeSlackClient()
+    project.slack_channel_id = slack_client.create_channel("ganymede-rover-test")
+    db_session.add(
+        AuditEvent(
+            actor_id=None,
+            action=grants.AUDIT_GRANT_HELD,
+            project_id=project.id,
+            payload={"amount_cents": 5000, "waiting_on": [waiting.user.weave_sub, no_slack.user.weave_sub]},
+        )
+    )
+    db_session.flush()
+
+    slack_notify.sync_budget_notifications(db_session, slack_client)
+
+    by_channel = {channel: message["text"] for (channel, _ts), message in slack_client.messages.items()}
+    assert set(by_channel) == {project.slack_channel_id, "U_WAITING"}
+    assert "U_CLEARED" not in by_channel
+    dm = by_channel["U_WAITING"]
+    assert "budget is held until every team member is verified in Weave, you included" in dm
+    assert f"/projects/{project.id}" in dm
+
+    # The next reconcile pass posts neither again.
+    slack_notify.sync_budget_notifications(db_session, slack_client)
+    assert len(slack_client.messages) == 2
+
+
 def test_the_final_budget_warning_tells_members_to_save_their_work(db_session: Session, member: Actor) -> None:
     project = new_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=5000)
     slack_client = FakeSlackClient()
