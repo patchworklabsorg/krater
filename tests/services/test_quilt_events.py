@@ -19,6 +19,7 @@ from krater.models import (
     ApprovalStage,
     AuditEvent,
     BudgetEntry,
+    BudgetEntryKind,
     Project,
     ProjectStatus,
     QuiltOutbox,
@@ -28,7 +29,7 @@ from krater.models import (
     SpendSnapshot,
     SpendSource,
 )
-from krater.services import projects, quilt_events
+from krater.services import budget, projects, quilt_events
 from krater.services.actor import Actor
 from krater.services.errors import InvalidState, NotAllowed, ValidationFailed
 from krater.services.quilt_events import (
@@ -83,6 +84,16 @@ def _spend(session: Session, project: Project, cents: int) -> None:
         SpendSnapshot(project_id=project.id, estimated_spend_cents=cents, source=SpendSource.SKYPILOT_COST_REPORT)
     )
     session.flush()
+    quilt_events.sync_project(session, project)
+
+
+def _cut(session: Session, project: Project, admin: Actor, cents: int) -> None:
+    """A cut written straight to the ledger. Admin cuts and reclaims stop at the spend
+    (`projects._require_spend_floor`), which is what Quilt still has committed, so they never reach the outbox's
+    release cap; these tests check the cap still holds for a cut that does."""
+    budget.add_entry(
+        session, project=project, kind=BudgetEntryKind.RECLAIM, amount_cents=-cents, actor=admin, reason="Cut."
+    )
     quilt_events.sync_project(session, project)
 
 
@@ -379,9 +390,7 @@ def test_a_correction_takes_off_the_overspend_first_as_quilt_does(
     _spend(db_session, project, 12_000)
     _spend(db_session, project, 9_000)
     # Releasing more than Quilt's remaining 1000 is capped at 1000.
-    projects.admin_adjust_budget(
-        db_session, admin, project=project, amount_cents=-5_000, reason="Cut.", weave_client=weave
-    )
+    _cut(db_session, project, admin, 5_000)
 
     last = _rows(db_session, project)[-1]
     assert (last.type, last.payload["amount_cents"]) == (BUDGET_RELEASED, 1_000)
@@ -397,15 +406,13 @@ def test_a_release_is_capped_at_what_quilt_still_has_committed(
 ) -> None:
     project = _approved(db_session, member, reviewer, budget_cents=100_000, weave=weave)
     _spend(db_session, project, 80_000)  # Quilt draws down 80_000; 20_000 stays committed
-    projects.admin_adjust_budget(
-        db_session, admin, project=project, amount_cents=-50_000, reason="Cut.", weave_client=weave
-    )
+    _cut(db_session, project, admin, 50_000)
 
     last = _rows(db_session, project)[-1]
     assert (last.type, last.payload["amount_cents"], last.state) == (BUDGET_RELEASED, 20_000, QuiltOutboxState.PENDING)
 
     # Nothing is left in Quilt, so a further release is stored as skipped and never sent.
-    projects.reclaim_budget(db_session, admin, project=project, amount_cents=10_000, reason="More cut.")
+    _cut(db_session, project, admin, 10_000)
     last = _rows(db_session, project)[-1]
     assert last.state is QuiltOutboxState.SKIPPED
     assert last.last_error == "Nothing left to release in Quilt."
@@ -416,7 +423,7 @@ def test_a_skipped_release_is_never_sent_later(
 ) -> None:
     project = _approved(db_session, member, reviewer, budget_cents=10_000, weave=weave)
     _spend(db_session, project, 10_000)
-    projects.reclaim_budget(db_session, admin, project=project, amount_cents=5_000, reason="Cut.")
+    _cut(db_session, project, admin, 5_000)
     projects.admin_adjust_budget(
         db_session, admin, project=project, amount_cents=50_000, reason="More.", weave_client=weave
     )
@@ -440,9 +447,7 @@ def test_a_new_commitment_covers_earlier_overspend_before_the_release_cap(
         db_session, admin, project=project, amount_cents=5_000, reason="More.", weave_client=weave
     )
     # Quilt uses 2_000 of the new 5_000 to cover the overspend, so 3_000 stays committed.
-    projects.admin_adjust_budget(
-        db_session, admin, project=project, amount_cents=-4_000, reason="Cut.", weave_client=weave
-    )
+    _cut(db_session, project, admin, 4_000)
 
     last = _rows(db_session, project)[-1]
     assert (last.type, last.payload["amount_cents"], last.state) == (BUDGET_RELEASED, 3_000, QuiltOutboxState.PENDING)

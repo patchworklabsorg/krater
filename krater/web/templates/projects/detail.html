@@ -415,6 +415,10 @@
   {% if can_admin_reclaim %}
     <div class="admin-action">
     <h3>Reclaim unspent budget</h3>
+    <p class="muted">
+      {% if summary.remaining_cents > 0 %}Up to {{ summary.remaining_cents | dollars }} is unspent.{% else %}Nothing is unspent: spent money can't be taken back.{% endif %}
+      A cut with Adjust budget stops at the spend too.
+    </p>
     <form method="post" action="/projects/{{ project.id }}/admin-reclaim" class="form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="field">
