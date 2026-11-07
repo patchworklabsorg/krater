@@ -175,6 +175,17 @@
     class="form form--inline"
   >
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {% if draft.kind.value != "completion" %}
+      <div class="field">
+        <label class="choice">
+          <input type="checkbox" name="criteria_read" value="yes" required
+                 {% if errors.criteria_read %}aria-invalid="true" aria-describedby="criteria-read-error"{% endif %}>
+          <span>I've read the <a href="{{ submission_criteria_url() }}" target="_blank" rel="noopener">Ganymede Submission
+          Criteria</a>, and my project meets them.</span>
+        </label>
+        {% if errors.criteria_read %}<p class="field-error" id="criteria-read-error">{{ errors.criteria_read }}</p>{% endif %}
+      </div>
+    {% endif %}
     <button type="submit" class="button">
       {{ "Submit completion for review" if draft.kind.value == "completion" else "Submit for review" }}
     </button>

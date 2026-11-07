@@ -15,7 +15,7 @@ from tests.factories import new_project
 
 def _submitted_revision(db_session: Session, member: Actor):
     project = new_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=5000)
-    project = projects.submit(db_session, member, project=project)
+    project = projects.submit(db_session, member, project=project, criteria_read=True)
     # Mirrors production: the submitting web request commits before the Slack job (which may itself
     # roll back on a domain error) ever runs, in a fresh session of its own.
     db_session.commit()
@@ -139,7 +139,7 @@ def test_approve_that_completes_the_project_archives_the_channel(
 ) -> None:
     reviewer.user.slack_user_id = "U_REVIEWER"
     project = new_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=5000)
-    project = projects.submit(db_session, member, project=project)
+    project = projects.submit(db_session, member, project=project, criteria_read=True)
     projects.record_review(
         db_session,
         reviewer,

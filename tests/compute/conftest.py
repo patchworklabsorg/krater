@@ -37,7 +37,7 @@ def client(fake: FakeVast) -> VastClient:
 @pytest.fixture
 def project(db_session: Session, member: Actor, admin: Actor, weave):  # noqa: F811
     project = new_project(db_session, member, title="Compute Test", write_up="w", budget_requested_cents=10_000)
-    projects.submit(db_session, member, project=project)
+    projects.submit(db_session, member, project=project, criteria_read=True)
     projects.admin_decide(
         db_session,
         admin,

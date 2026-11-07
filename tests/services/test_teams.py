@@ -209,7 +209,7 @@ def test_an_approval_from_a_reviewer_who_later_joins_the_team_stops_counting(
     db_session.add(ApprovalPolicy(stage=ApprovalStage.PROPOSAL, min_approvals=2))
     first = make_actor(groups=frozenset({GROUP_MEMBER, GROUP_REVIEWER}))
     second = make_actor(groups=frozenset({GROUP_MEMBER, GROUP_REVIEWER}))
-    project = projects.submit(db_session, member, project=_project(db_session, member))
+    project = projects.submit(db_session, member, project=_project(db_session, member), criteria_read=True)
     revision = project.current_revision
     projects.record_review(
         db_session,

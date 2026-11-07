@@ -1159,6 +1159,7 @@ form {
   color: var(--good);
 }
 
+.badge--funding-hold,
 .badge--changes_requested,
 .badge--completion_changes_requested {
   background: var(--warn-soft);

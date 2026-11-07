@@ -27,7 +27,7 @@ def _submitted_project(db_session: Session, member: Actor, *, budget_requested_c
     project = new_project(
         db_session, member, title="Admin Test", write_up="Write-up.", budget_requested_cents=budget_requested_cents
     )
-    return projects.submit(db_session, member, project=project)
+    return projects.submit(db_session, member, project=project, criteria_read=True)
 
 
 def _approved_project(db_session: Session, member: Actor, admin: Actor, weave, *, budget_requested_cents: int = 10_000):

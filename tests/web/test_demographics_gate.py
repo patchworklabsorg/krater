@@ -28,7 +28,9 @@ def weave_issuer(monkeypatch) -> None:
 
 def _post_submit(client: TestClient, project_id, route: str = "submit"):
     csrf = get_csrf_token(client.get(f"/projects/{project_id}").text)
-    return client.post(f"/projects/{project_id}/{route}", data={"csrf_token": csrf}, follow_redirects=False)
+    return client.post(
+        f"/projects/{project_id}/{route}", data={"csrf_token": csrf, "criteria_read": "yes"}, follow_redirects=False
+    )
 
 
 def test_a_member_who_answered_can_submit(
@@ -106,7 +108,9 @@ def test_weave_down_refuses_the_submission(
         return real_get_user(sub, fresh=fresh)
 
     monkeypatch.setattr(weave_stub, "get_user", _down_on_the_gate)
-    response = client.post(f"/projects/{project.id}/submit", data={"csrf_token": csrf}, follow_redirects=False)
+    response = client.post(
+        f"/projects/{project.id}/submit", data={"csrf_token": csrf, "criteria_read": "yes"}, follow_redirects=False
+    )
 
     assert response.status_code == 303
     db_session.refresh(project)

@@ -214,7 +214,9 @@ def test_submit_happy_path(client: TestClient, login_as, create_project, db_sess
 
     page = client.get(f"/projects/{project.id}")
     csrf = get_csrf_token(page.text)
-    response = client.post(f"/projects/{project.id}/submit", data={"csrf_token": csrf}, follow_redirects=False)
+    response = client.post(
+        f"/projects/{project.id}/submit", data={"csrf_token": csrf, "criteria_read": "yes"}, follow_redirects=False
+    )
 
     assert response.status_code == 303
     db_session.refresh(project)
@@ -227,7 +229,7 @@ def test_submit_with_missing_fields_rerenders_the_edit_form(client: TestClient, 
 
     page = client.get(f"/projects/{project.id}")
     csrf = get_csrf_token(page.text)
-    response = client.post(f"/projects/{project.id}/submit", data={"csrf_token": csrf})
+    response = client.post(f"/projects/{project.id}/submit", data={"csrf_token": csrf, "criteria_read": "yes"})
 
     assert response.status_code == 422
     assert "Explain the project." in response.text

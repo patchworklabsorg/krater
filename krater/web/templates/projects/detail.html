@@ -3,11 +3,23 @@
 
 {% block title %}{{ project.title or "Untitled proposal" }}{% endblock %}
 
+{% macro funding_hold_field(field_id, form) %}
+  <div class="field">
+    <label for="{{ field_id }}">Fund it now?</label>
+    <select id="{{ field_id }}" name="funding_hold">
+      <option value="">Yes: add the budget once the team is verified</option>
+      {% for value, label in funding_hold_choices %}<option value="{{ value }}">No: approve as {{ label | lower }}</option>{% endfor %}
+    </select>
+    <p class="field-hint">A hold approves it but keeps its budget and compute back until an admin clears the hold.</p>
+    {% if error_form == form and errors.funding_hold %}<p class="field-error">{{ errors.funding_hold }}</p>{% endif %}
+  </div>
+{% endmacro %}
+
 {% block content %}
 <div class="page-head">
   <div>
     <a class="back-link" href="/">&larr; My projects</a>
-    <h1>{{ project.title or "Untitled proposal" }} {{ macros.status_badge(project.status) }}</h1>
+    <h1>{{ project.title or "Untitled proposal" }} {{ macros.status_badge(project.status, project.funding_hold) }}</h1>
     {% if project.repo_url %}
       <p class="page-subtitle project-link"><a href="{{ project.repo_url }}">{{ project.repo_url }}</a></p>
     {% endif %}
@@ -53,7 +65,14 @@
   </p>
 {% endif %}
 
-{% if held_grant and verification_pending == [] %}
+{% if funding_hold_explanation %}
+  <p class="guardian-banner" role="status"><strong>{{ funding_hold_explanation }}</strong>
+    {% if held_grant %}Its {{ held_grant.amount_cents | dollars }} of budget{% else %}Its budget{% endif %} isn't
+    added and no compute starts until an admin clears the hold.
+    {% if verification_pending %}Every team member also needs to be verified in Weave:
+      {% for member in verification_pending %}{{ member.label }} ({{ member.reason }}){{ "; " if not loop.last else "." }}{% endfor %}
+    {% endif %}</p>
+{% elif held_grant and verification_pending == [] %}
   <p class="guardian-banner" role="status">Every team member is now verified in Weave. The held
     {{ held_grant.amount_cents | dollars }} of budget is released within a few minutes.</p>
 {% elif verification_pending %}
@@ -159,6 +178,10 @@
         <div>
           <h3>How they'll use the compute</h3>
           <p class="write-up">{{ rev.compute_use | nl2br if rev.compute_use else "Not answered yet." }}</p>
+        </div>
+        <div>
+          <h3>Where their training data comes from</h3>
+          <p class="write-up">{{ rev.training_data | nl2br if rev.training_data else "Not answered yet." }}</p>
         </div>
         <div>
           <h3>{{ "What they need now" if rev.kind.value == "amendment" else "Proof of concept (what approval funds)" }}</h3>
@@ -334,9 +357,10 @@
 <section class="card">
   <h2>Review this proposal</h2>
   <div class="action-row">
-    <form method="post" action="/projects/{{ project.id }}/review" class="form--inline">
+    <form method="post" action="/projects/{{ project.id }}/review" class="form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="decision" value="approve">
+      {% if can_hold_funding %}{{ funding_hold_field("review-funding-hold", "review") }}{% endif %}
       <button type="submit" class="button button--primary">Approve</button>
     </form>
   </div>
@@ -377,10 +401,43 @@
         <textarea id="admin-decide-reason" name="reason" rows="2">{{ posted.reason if error_form == "admin_decide" else "" }}</textarea>
         {% if error_form == "admin_decide" and errors.reason %}<p class="field-error">{{ errors.reason }}</p>{% endif %}
       </div>
+      {% if can_hold_funding %}{{ funding_hold_field("admin-decide-funding-hold", "admin_decide") }}{% endif %}
       <div class="action-row">
         <button type="submit" name="decision" value="approve" class="button button--primary">Admin approve</button>
         <button type="submit" name="decision" value="reject" class="button button--danger">Admin reject</button>
       </div>
+    </form>
+    </div>
+  {% endif %}
+
+  {% if can_admin_set_funding_hold %}
+    <div class="admin-action">
+    <h3>Funding hold</h3>
+    {% if project.funding_hold %}
+      <p>This project is <strong>{{ funding_hold_label(project.funding_hold) }}</strong>: its budget is held and no
+        compute starts. Clearing it adds the held budget once every team member is verified in Weave.</p>
+    {% else %}
+      <p class="muted">Hold the budget of an approved project, and stop new compute, until Patchwork has the funding or
+        a third party has reviewed it.</p>
+    {% endif %}
+    <form method="post" action="/projects/{{ project.id }}/admin-funding-hold" class="form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="field">
+        <label for="admin-hold-value">Hold</label>
+        <select id="admin-hold-value" name="funding_hold">
+          {% if not admin_own_project %}<option value="">No hold (clear it)</option>{% endif %}
+          {% for value, label in funding_hold_choices %}
+            <option value="{{ value }}"{% if project.funding_hold and project.funding_hold.value == value %} selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+        {% if error_form == "funding_hold" and errors.funding_hold %}<p class="field-error">{{ errors.funding_hold }}</p>{% endif %}
+      </div>
+      <div class="field">
+        <label for="admin-hold-reason">Reason (required)</label>
+        <textarea id="admin-hold-reason" name="reason" rows="2">{{ posted.reason if error_form == "funding_hold" else "" }}</textarea>
+        {% if error_form == "funding_hold" and errors.reason %}<p class="field-error">{{ errors.reason }}</p>{% endif %}
+      </div>
+      <button type="submit" class="button">Save hold</button>
     </form>
     </div>
   {% endif %}

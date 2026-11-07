@@ -48,7 +48,7 @@ def submitted_project(db_session: Session, create_project: Callable[..., Project
 
     def _submit(user: User, **kwargs) -> Project:
         project = create_project(user, **kwargs)
-        return project_service.submit(db_session, actor_for(user), project=project)
+        return project_service.submit(db_session, actor_for(user), project=project, criteria_read=True)
 
     return _submit
 

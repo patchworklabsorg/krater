@@ -13,6 +13,9 @@ only once Weave has cleared every team member (`krater.services.clearance`). Unt
   and writes the entry, with the approver as its actor, once every member is cleared. Weave down keeps it held.
 - **Cancel.** Withdrawing or completing the project cancels its hold (`cancel_pending`).
 - **No override.** An admin can't release a hold; the team is cleared in Weave.
+- **Funding holds.** While `Project.funding_hold` is set (`krater.services.funding_holds`), every grant is held
+  whatever the team's verification, and nothing is released. Clearing the flag releases the hold at once if the team
+  is cleared (`release_project`); otherwise it waits for verification as usual.
 """
 
 from __future__ import annotations
@@ -38,6 +41,10 @@ AUDIT_GRANT_CANCELLED = "budget_grant_cancelled"
 HELD_MESSAGE = (
     "This project's budget is held until every team member is verified in Weave, so its budget can't change until "
     "then. Withdrawing the project cancels the hold."
+)
+FUNDING_HELD_MESSAGE = (
+    "This project's budget is held until an admin clears its funding hold, so its budget can't change until then. "
+    "Withdrawing the project cancels the hold."
 )
 #: Projects whose holds stay pending: a finished project's hold is cancelled, never released.
 _OPEN_STATUSES = (
@@ -86,15 +93,18 @@ def all_pending(session: Session) -> list[HeldGrant]:
 def require_none_pending(session: Session, project: Project) -> None:
     """Refuse a budget change while a grant is held: the hold's amount was decided against today's ceiling."""
     if pending(session, project) is not None:
-        raise InvalidState(HELD_MESSAGE)
+        raise InvalidState(FUNDING_HELD_MESSAGE if project.funding_hold is not None else HELD_MESSAGE)
 
 
 def _not_cleared(session: Session, weave_client: WeaveClient, project: Project) -> dict | None:
-    """What the team is waiting on right now, or `None` when Weave clears it. Weave down counts as not cleared.
+    """What the grant is waiting on right now, or `None` when nothing holds it: a funding hold (Weave isn't asked
+    then), or the team, which Weave hasn't cleared. Weave down counts as not cleared.
 
     Only Patchwork IDs, for the audit payload: Krater stores no names, and not why a member isn't cleared (that
     can say they're under 18). The project page asks Weave for the reasons when it's shown.
     """
+    if project.funding_hold is not None:
+        return {"funding_hold": project.funding_hold.value}
     try:
         members = clearance.members_not_cleared(session, weave_client, project, fresh=True)
     except WeaveUnavailableError:
@@ -199,6 +209,21 @@ def _release_one(session: Session, weave_client: WeaveClient, held_id, *, now: d
     session.execute(sa.select(Project.id).where(Project.id == project.id).with_for_update())
     session.refresh(held)
     session.refresh(project)
+    return _release_locked(session, weave_client, held, project, now=now)
+
+
+def release_project(session: Session, weave_client: WeaveClient, project: Project, *, now: datetime) -> bool:
+    """Release `project`'s pending hold now if nothing holds it any more. The caller holds the project's row lock
+    (an admin clearing its funding hold); it doesn't commit."""
+    held = pending(session, project)
+    if held is None:
+        return False
+    return _release_locked(session, weave_client, held, project, now=now)
+
+
+def _release_locked(
+    session: Session, weave_client: WeaveClient, held: HeldGrant, project: Project, *, now: datetime
+) -> bool:
     if not held.pending or project.status not in _OPEN_STATUSES:
         return False
     if _not_cleared(session, weave_client, project) is not None:
@@ -225,6 +250,7 @@ __all__ = [
     "AUDIT_GRANT_CANCELLED",
     "AUDIT_GRANT_HELD",
     "AUDIT_GRANT_RELEASED",
+    "FUNDING_HELD_MESSAGE",
     "HELD_MESSAGE",
     "KIND_LABELS",
     "Granted",
@@ -232,6 +258,7 @@ __all__ = [
     "cancel_pending",
     "grant",
     "pending",
+    "release_project",
     "release_ready",
     "require_none_pending",
 ]

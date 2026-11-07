@@ -41,7 +41,9 @@ def slack_user_state() -> Iterator[Callable[..., None]]:
 
 def _post_submit(client: TestClient, project_id, route: str = "submit"):
     csrf = get_csrf_token(client.get(f"/projects/{project_id}").text)
-    return client.post(f"/projects/{project_id}/{route}", data={"csrf_token": csrf}, follow_redirects=False)
+    return client.post(
+        f"/projects/{project_id}/{route}", data={"csrf_token": csrf, "criteria_read": "yes"}, follow_redirects=False
+    )
 
 
 def test_a_slack_guest_cannot_submit(client: TestClient, login_as, create_project, db_session: Session) -> None:

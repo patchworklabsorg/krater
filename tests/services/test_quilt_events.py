@@ -59,7 +59,7 @@ def _types(session: Session, project: Project) -> list[str]:
 
 def _submit(session: Session, member: Actor, *, budget_cents: int = 100_000, title: str = "Rover") -> Project:
     project = new_project(session, member, title=title, write_up="A rover.", budget_requested_cents=budget_cents)
-    return projects.submit(session, member, project=project)
+    return projects.submit(session, member, project=project, criteria_read=True)
 
 
 def _approve(session: Session, reviewer: Actor, project: Project, weave) -> Project:
@@ -160,7 +160,7 @@ def test_a_rejection_and_resubmission_send_updates_not_a_second_created(
         weave_client=weave,
     )
     projects.update_draft(db_session, member, project=project, title="Rover 2", budget_requested_cents=20_000)
-    projects.submit(db_session, member, project=project)
+    projects.submit(db_session, member, project=project, criteria_read=True)
 
     rows = _rows(db_session, project)
     assert [row.type for row in rows] == [SUBMISSION_CREATED, SUBMISSION_UPDATED, SUBMISSION_UPDATED]
@@ -210,7 +210,7 @@ def test_an_amendment_increase_sends_the_new_request_then_the_added_budget(
     project = _approved(db_session, member, reviewer, budget_cents=100_000, weave=weave)
     projects.start_amendment(db_session, member, project=project)
     projects.update_draft(db_session, member, project=project, budget_requested_cents=150_000)
-    projects.submit(db_session, member, project=project)
+    projects.submit(db_session, member, project=project, criteria_read=True)
     _approve(db_session, reviewer, project, weave=weave)
 
     rows = _rows(db_session, project)[3:]
@@ -225,7 +225,7 @@ def test_an_amendment_decrease_sends_budget_released(
     project = _approved(db_session, member, reviewer, budget_cents=100_000, weave=weave)
     projects.start_amendment(db_session, member, project=project)
     projects.update_draft(db_session, member, project=project, budget_requested_cents=60_000)
-    projects.submit(db_session, member, project=project)
+    projects.submit(db_session, member, project=project, criteria_read=True)
     _approve(db_session, reviewer, project, weave=weave)
 
     last = _rows(db_session, project)[-1]
@@ -243,7 +243,7 @@ def test_an_unchanged_amendment_budget_is_skipped(db_session: Session, member: A
     projects.update_draft(
         db_session, member, project=project, write_up="A bigger rover.", budget_requested_cents=100_000
     )
-    projects.submit(db_session, member, project=project)
+    projects.submit(db_session, member, project=project, criteria_read=True)
     _approve(db_session, reviewer, project, weave=weave)
 
     zero = db_session.scalars(
@@ -260,7 +260,7 @@ def test_a_rejected_amendment_puts_the_approved_request_back(
     project = _approved(db_session, member, reviewer, budget_cents=100_000, weave=weave)
     projects.start_amendment(db_session, member, project=project)
     projects.update_draft(db_session, member, project=project, budget_requested_cents=150_000)
-    projects.submit(db_session, member, project=project)
+    projects.submit(db_session, member, project=project, criteria_read=True)
     projects.record_review(
         db_session,
         reviewer,
@@ -461,7 +461,7 @@ def test_a_new_commitment_covers_earlier_overspend_before_the_release_cap(
 def test_the_outbox_row_is_part_of_the_callers_transaction(db_session: Session, member: Actor) -> None:
     project = new_project(db_session, member, title="Rover", write_up="x", budget_requested_cents=5)
     nested = db_session.begin_nested()
-    projects.submit(db_session, member, project=project)
+    projects.submit(db_session, member, project=project, criteria_read=True)
     assert len(_rows(db_session, project)) == 1
 
     nested.rollback()
@@ -474,7 +474,7 @@ def test_the_outbox_row_is_part_of_the_callers_transaction(db_session: Session, 
 def test_a_failed_submit_writes_nothing(db_session: Session, member: Actor) -> None:
     project = new_project(db_session, member, title="", write_up="x", budget_requested_cents=5)
     with pytest.raises(ValidationFailed):
-        projects.submit(db_session, member, project=project)
+        projects.submit(db_session, member, project=project, criteria_read=True)
 
     assert _rows(db_session, project) == []
 

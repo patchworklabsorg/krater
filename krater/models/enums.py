@@ -67,6 +67,13 @@ class ReviewSource(enum.StrEnum):
     WEB = "web"
 
 
+class FundingHold(enum.StrEnum):
+    """Why an approved project's budget waits on Patchwork rather than on its team (docs/SPEC.md "Funding holds")."""
+
+    AWAITING_FUNDING = "awaiting_funding"
+    AWAITING_THIRD_PARTY_REVIEW = "awaiting_third_party_review"
+
+
 class BudgetEntryKind(enum.StrEnum):
     INITIAL_APPROVAL = "initial_approval"
     AMENDMENT = "amendment"

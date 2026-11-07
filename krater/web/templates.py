@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi.templating import Jinja2Templates
 
 from krater.config import get_settings
+from krater.services import funding_holds
 from krater.services.actor import GROUP_ADMIN
 from krater.web.csrf import register_csrf_template_global
 from krater.web.estimator_form import summary_text_from_dict
@@ -52,3 +53,5 @@ def nav_is_admin(request) -> bool:
 templates.env.globals["nav_is_admin"] = nav_is_admin
 # Read at render time, not import time, so a test can change the setting.
 templates.env.globals["is_staging"] = lambda: get_settings().staging
+templates.env.globals["funding_hold_label"] = lambda hold: funding_holds.LABELS[hold].lower()
+templates.env.globals["submission_criteria_url"] = lambda: get_settings().submission_criteria_url

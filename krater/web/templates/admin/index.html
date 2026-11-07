@@ -7,7 +7,7 @@
 <div class="page-head">
   <div>
     <h1>Admin</h1>
-    <p class="page-subtitle">Budget held for verification, every project with its budget, recent activity, the approval policy, the public gallery, and the delivery of events to Quilt.</p>
+    <p class="page-subtitle">Budget held, every project with its budget, recent activity, the approval policy, the public gallery, and the delivery of events to Quilt.</p>
   </div>
   <div class="page-actions">
     <a class="button" href="/admin/activity">Activity</a>
@@ -29,10 +29,11 @@
 
 <section aria-labelledby="held-grants">
   <div class="section-head">
-    <h2 id="held-grants">Budget held for verification</h2>
+    <h2 id="held-grants">Budget held</h2>
   </div>
   <p class="muted">Approved budget isn't added until Weave has verified every team member, and a guardian for anyone
-    under 18. Krater checks every five minutes and adds it then. Nobody can release it in Krater.</p>
+    under 18. Krater checks every five minutes and adds it then. Nobody can release that in Krater. Budget approved
+    as awaiting funding or a 3rd party review waits for an admin to clear the hold on the project's page first.</p>
   {% if held %}
     <div class="table-scroll">
       <table class="table">
@@ -55,7 +56,10 @@
               <td>{{ row.approver }}</td>
               <td class="nowrap">{{ row.held.created_at.strftime("%Y-%m-%d") }}</td>
               <td>
-                {% if row.waiting is none %}
+                {% if row.held.project.funding_hold %}
+                  <span class="badge badge--funding-hold">{{ funding_hold_label(row.held.project.funding_hold) | capitalize }}</span>
+                  <div class="muted">An admin clears it on the project's page.</div>
+                {% elif row.waiting is none %}
                   Krater couldn't reach Weave to check.
                 {% elif row.waiting %}
                   {% for member in row.waiting %}<div>{{ member.label }}: {{ member.reason }}</div>{% endfor %}
@@ -113,7 +117,7 @@
             {% for summary in by_status[status] %}
               <tr>
                 <td class="cell-title"><a href="/projects/{{ summary.project.id }}">{{ summary.project.title or "Untitled proposal" }}</a></td>
-                <td>{{ macros.status_badge(status) }}</td>
+                <td>{{ macros.status_badge(status, summary.project.funding_hold) }}</td>
                 <td class="num">{{ summary.ceiling_cents | dollars }}</td>
                 <td class="num">{{ summary.spend_cents | dollars }}</td>
                 <td class="num">{{ summary.remaining_cents | dollars }}</td>
