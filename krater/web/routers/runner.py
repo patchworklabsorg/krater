@@ -84,7 +84,10 @@ async def heartbeat(request: Request, db_session: Annotated[Session, Depends(get
         db_session.rollback()
         return _deny(exc)
     db_session.commit()
-    return {"stop": reply.stop, "sync": reply.sync}
+    answer: dict = {"stop": reply.stop, "sync": reply.sync}
+    if reply.ssh_keys is not None:
+        answer["ssh_keys"] = list(reply.ssh_keys)
+    return answer
 
 
 @router.post("/synced")

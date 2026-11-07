@@ -1,5 +1,6 @@
 """Every Krater ORM model and enum, re-exported for convenient importing (and for Alembic)."""
 
+from krater.models.admin_box_access import AdminBoxAccess
 from krater.models.approval_policy import ApprovalPolicy
 from krater.models.audit_event import AuditEvent
 from krater.models.budget_entry import BudgetEntry
@@ -41,6 +42,7 @@ from krater.models.user import User
 from krater.models.vast_search_quota import VastSearchQuota
 
 __all__ = [
+    "AdminBoxAccess",
     "ApprovalPolicy",
     "ApprovalStage",
     "AuditEvent",

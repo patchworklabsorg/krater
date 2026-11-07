@@ -28,7 +28,17 @@ from krater.models import (
     Project,
 )
 from krater.models.compute_job import ACTIVE_JOB_STATES
-from krater.services import clearance, compute_files, compute_jobs, price_history, project_secrets, teams
+from krater.services import (
+    box_access,
+    clearance,
+    compute_files,
+    compute_jobs,
+    people,
+    price_history,
+    project_secrets,
+    ssh_keys,
+    teams,
+)
 from krater.services import projects as project_service
 from krater.services.actor import Actor
 from krater.services.compute_jobs import JobSpec
@@ -296,10 +306,14 @@ def job_page(
     job_id: uuid.UUID,
     db_session: Annotated[Session, Depends(get_session)],
     actor: Annotated[Actor, Depends(fresh_actor)],  # it shows or signs the job's files
+    weave_client: Annotated[WeaveClient, Depends(get_weave_client)],
 ):
     _require_compute()
     project = _project(db_session, actor, project_id)
     job = _job(db_session, project, job_id)
+    now = datetime.now(UTC)
+    grants = box_access.active(db_session, job, now=now) if job.kind is ComputeJobKind.BOX else []
+    grant_names = people.names(weave_client, {grant.admin for grant in grants})
     events = list(
         db_session.scalars(
             sa.select(ComputeEvent).where(ComputeEvent.job_id == job.id).order_by(ComputeEvent.at.desc()).limit(100)
@@ -332,6 +346,15 @@ def job_page(
             "files": files,
             "log": log,
             "files_error": files_error,
+            "admin_access": [{"grant": grant, "name": grant_names[grant.admin_id]} for grant in grants],
+            "can_grant_access": actor.is_admin
+            and job.kind is ComputeJobKind.BOX
+            and job.state is ComputeJobState.RUNNING,
+            "access_runner_ok": box_access.runner_takes_key_updates(live[-1] if live else None),
+            "admin_has_keys": actor.is_admin and bool(ssh_keys.authorized_keys_for(db_session, actor.user.id)),
+            "my_access": next((grant for grant in grants if grant.admin_id == actor.user.id), None),
+            "access_hours": box_access.ACCESS_HOURS,
+            "is_admin": actor.is_admin,
         },
     )
 

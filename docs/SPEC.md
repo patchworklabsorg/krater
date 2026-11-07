@@ -473,6 +473,10 @@ That check is for display only: every `/admin` page still checks Weave fresh. Re
   events and its `BudgetEntry` ledger, linked from the project page's Admin card.
 - `/admin/live` lists the jobs and boxes queued or holding a machine on every project, each linked to its job page.
 
+**Admin SSH access to a box.** From a running box's job page an admin can get SSH access for 2 hours, with a reason
+(`docs/compute/runner.md` "Admin access"). It's an override like the others: an `AuditEvent`, a post in the project's
+channel, and a banner on the job page for the team. Any admin can end it early.
+
 ## Deployment architecture
 
 Everything runs in Docker and is defined in one Compose file, so it can run on any host. The existing host (alastor) is

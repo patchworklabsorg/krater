@@ -38,7 +38,7 @@ from krater.models import (
     StorageReservation,
 )
 from krater.models.compute_job import ACTIVE_JOB_STATES
-from krater.services import compute_settings, project_secrets, ssh_keys
+from krater.services import box_access, compute_settings, project_secrets
 from krater.services.errors import NotAllowed, ValidationFailed
 from krater.storage import ObjectStore
 
@@ -151,7 +151,7 @@ def start(session: Session, instance: ComputeInstance, *, now: datetime, setting
         runner_starts=instance.runner_starts,
     )
     session.flush()
-    keys = tuple(ssh_keys.authorized_keys_for(session, job.submitter_id)) if job.kind is ComputeJobKind.BOX else ()
+    keys = tuple(box_access.authorized_keys(session, job, now=now)) if job.kind is ComputeJobKind.BOX else ()
     secrets_env = project_secrets.environment(session, job.project_id, settings)
     provider = providers.active(settings)
     if provider is None or provider.capabilities.self_stop:
@@ -174,13 +174,23 @@ def start(session: Session, instance: ComputeInstance, *, now: datetime, setting
     )
 
 
-_HEARTBEAT_FIELDS = {"gpu_util": (int, float), "cpu_util": (int, float), "sessions": int, "phase": str}
+# `key_updates`: the runner applies `ssh_keys` from a heartbeat reply (`krater.services.box_access`).
+_HEARTBEAT_FIELDS = {
+    "gpu_util": (int, float),
+    "cpu_util": (int, float),
+    "sessions": int,
+    "phase": str,
+    "key_updates": bool,
+}
 
 
 @dataclass(frozen=True)
 class HeartbeatReply:
     stop: bool  # the job has ended: stop the command
     sync: bool  # save /workspace and confirm: Krater is about to stop the box
+    # A box's whole authorized_keys: the owner's keys and any admin's with access now. None for a batch job, and the
+    # runner leaves the file alone when the reply has none.
+    ssh_keys: tuple[str, ...] | None = None
 
 
 def heartbeat(session: Session, instance: ComputeInstance, payload: dict[str, Any], *, now: datetime) -> HeartbeatReply:
@@ -194,7 +204,9 @@ def heartbeat(session: Session, instance: ComputeInstance, payload: dict[str, An
     wants_sync = instance.stop_requested_at is not None and (
         instance.last_synced_at is None or instance.last_synced_at < instance.stop_requested_at
     )
-    return HeartbeatReply(stop=instance.job.state not in ACTIVE_JOB_STATES, sync=wants_sync)
+    job = instance.job
+    keys = tuple(box_access.authorized_keys(session, job, now=now)) if job.kind is ComputeJobKind.BOX else None
+    return HeartbeatReply(stop=job.state not in ACTIVE_JOB_STATES, sync=wants_sync, ssh_keys=keys)
 
 
 def synced(session: Session, instance: ComputeInstance, *, now: datetime) -> None:
