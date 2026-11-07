@@ -42,7 +42,7 @@ from krater.models import (
     RevisionKind,
     RevisionOutcome,
 )
-from krater.services import approval_policy, audit, budget, guardian, quilt_events, teams
+from krater.services import approval_policy, audit, budget, quilt_events, teams
 from krater.services.actor import Actor
 from krater.services.errors import InvalidState, NotAllowed, NotFound, ValidationFailed
 from krater.weave import WeaveClient
@@ -585,9 +585,8 @@ def record_review(
     effect only once `approval_policy.is_satisfied` says the policy is now met -- otherwise the revision
     just stays `pending` with one more recorded approval.
 
-    An approval that grants budget first passes the guardian gate (`guardian.require_team_cleared`, asking
-    `weave_client` fresh). If the gate refuses, this raises and the caller rolls back, review included: the
-    reviewer approves again once an admin has recorded the verifications.
+    Approval grants the budget whether or not the team is verified yet: the project's compute is what waits for
+    that (`krater.services.clearance`).
     """
     project = revision.project
 
@@ -663,18 +662,12 @@ def _apply_reject(session: Session, revision: ProjectRevision) -> None:
 def _apply_approve(session: Session, actor: Actor, revision: ProjectRevision, *, weave_client: WeaveClient) -> None:
     """Apply the effect of a revision being approved (by policy satisfaction or an admin override).
 
-    A proposal approval, and an amendment approval that raises the ceiling, grant budget: both pass the
-    guardian gate first (`guardian.require_team_cleared`). There is no override: an admin decision takes the
-    same path. A completion approval only reclaims budget, so it has no gate.
+    A proposal approval, and an amendment approval that raises the ceiling, grant budget at once. Verification is
+    checked when the budget is used, not here (`krater.services.clearance`). A completion approval reclaims budget.
     """
+    del weave_client  # verification no longer gates the grant; kept so every caller's path stays the same
     project = revision.project
     stage = approval_policy.stage_for(revision)
-    if stage is not ApprovalStage.COMPLETION:
-        grants = revision.kind is not RevisionKind.AMENDMENT or (
-            revision.budget_requested_cents > budget.ceiling_cents(session, project)
-        )
-        if grants:
-            guardian.require_team_cleared(session, weave_client, project)
 
     revision.outcome = RevisionOutcome.APPROVED
 
@@ -774,8 +767,8 @@ def admin_decide(
     as a policy-satisfying reviewer decision would (see `record_review`), and writes an `AuditEvent`.
     Still requires `revision` to be the project's current, submitted, still-`pending` revision.
 
-    The override bypasses the approval policy, not the guardian gate: an approval that grants budget still
-    raises `GuardianVerificationRequired` while a team member under 18 has no verification.
+    An approval grants budget whether or not the team is verified yet; its compute waits for that
+    (`krater.services.clearance`).
     """
     if not actor.is_admin:
         raise NotAllowed("Only an admin may override a review decision.")
@@ -828,8 +821,8 @@ def admin_adjust_budget(
 
     Only on an `approved` or `pending_completion_review` project. `reason` is required. Raises
     `ValidationFailed` if `amount_cents` is zero or would take the ceiling below zero, and `NotAllowed` for
-    an increase on the admin's own project (see `admin_decide`; a cut is fine). An increase grants budget,
-    so it passes the guardian gate (`guardian.require_team_cleared`) first. Writes an `AuditEvent`.
+    an increase on the admin's own project (see `admin_decide`; a cut is fine). Writes an `AuditEvent`. Like an
+    approval, an increase doesn't wait for the team's verification; their compute does.
     """
     if not actor.is_admin:
         raise NotAllowed("Only an admin may adjust a project's budget.")
@@ -846,8 +839,7 @@ def admin_adjust_budget(
 
     if budget.ceiling_cents(session, project) + amount_cents < 0:
         raise ValidationFailed({"amount_cents": "This would take the project's budget ceiling below zero."})
-    if amount_cents > 0:
-        guardian.require_team_cleared(session, weave_client, project)
+    del weave_client  # see `_apply_approve`
 
     entry = budget.add_entry(
         session,

@@ -40,30 +40,34 @@ class NotFound(DomainError):
     """The requested record doesn't exist (or isn't visible to this actor)."""
 
 
-class GuardianVerificationRequired(InvalidState):
-    """Krater can't grant budget: a team member is under 18 without a verified guardian in Weave, or Weave's
-    directory doesn't return them.
+class VerificationRequired(InvalidState):
+    """A project's compute is held: a team member isn't cleared in Weave (ID verification, a verified guardian for a
+    member under 18, or Weave's directory doesn't return them).
 
-    `members` holds `(label, reason)` for each such member, so reviewers and admins see who blocks the grant and
-    why (docs/SPEC.md "Guardian verification")."""
+    `members` holds `(label, reason)` for each such member, so the team, reviewers and admins see who holds it and
+    why (docs/SPEC.md "Verification before compute"). `joining` is set when one person can't join a team whose project
+    already has budget."""
 
-    def __init__(self, members: list[tuple[str, str]]) -> None:
+    def __init__(self, members: list[tuple[str, str]], *, joining: bool = False) -> None:
         self.members = members
         listed = "; ".join(f"{label}: {reason}" for label, reason in members)
+        lead = (
+            "You can't join this team yet: its project already has budget, and you must be cleared in Weave first"
+            if joining
+            else "This project's compute is held until every team member is cleared in Weave"
+        )
         super().__init__(
-            "Krater can't grant budget to this project yet. These team members must be cleared in Weave first: "
-            + listed
-            + ". A Weave admin records a verified guardian (the signed form and the call) on the member's Weave "
-            "admin page."
+            f"{lead}. {listed}. ID verification is done on Weave's verification page; a member under 18 also needs a "
+            "verified guardian, which a Weave admin records."
         )
 
 
-class GuardianCheckUnavailable(InvalidState):
-    """Krater couldn't ask Weave about the team members' ages, so it grants no budget (fail closed)."""
+class ClearanceCheckUnavailable(InvalidState):
+    """Krater couldn't ask Weave whether the team is cleared, so it holds the compute (fail closed)."""
 
     def __init__(self) -> None:
         super().__init__(
-            "Krater couldn't reach Weave to check the team members' ages, so it granted no budget. "
+            "Krater couldn't reach Weave to check that the team is verified, so it didn't start anything. "
             "Try again in a minute."
         )
 

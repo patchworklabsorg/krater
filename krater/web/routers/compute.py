@@ -28,7 +28,7 @@ from krater.models import (
     Project,
 )
 from krater.models.compute_job import ACTIVE_JOB_STATES
-from krater.services import compute_files, compute_jobs, price_history, project_secrets, teams
+from krater.services import clearance, compute_files, compute_jobs, price_history, project_secrets, teams
 from krater.services import projects as project_service
 from krater.services.actor import Actor
 from krater.services.compute_jobs import JobSpec
@@ -36,6 +36,8 @@ from krater.services.errors import InvalidState, NotAllowed, NotFound, Validatio
 from krater.services.launch_rules import LAUNCHABLE_STATUSES, hourly_cap_cents
 from krater.storage import StorageError, get_compute_store
 from krater.vast import usd_to_microusd
+from krater.weave import WeaveClient, get_weave_client
+from krater.weave import links as weave_links
 from krater.web.charts import PricePoint, price_chart_svg
 from krater.web.csrf import verify_csrf_token
 from krater.web.deps import fresh_actor, session_actor
@@ -173,7 +175,16 @@ def delete_secret(
     return RedirectResponse(f"/projects/{project.id}/compute", status_code=303)
 
 
-def _form_page(request: Request, db_session: Session, project: Project, *, errors=None, posted=None, status_code=200):
+def _form_page(
+    request: Request,
+    db_session: Session,
+    project: Project,
+    weave_client: WeaveClient,
+    *,
+    errors=None,
+    posted=None,
+    status_code=200,
+):
     settings = get_settings()
     return templates.TemplateResponse(
         request,
@@ -186,6 +197,10 @@ def _form_page(request: Request, db_session: Session, project: Project, *, error
             "escalations": ESCALATION_LABELS,
             "errors": errors or {},
             "posted": posted or {},
+            # Compute is held until Weave clears every team member (`krater.services.clearance`); the page says who
+            # first, and the submit checks Weave fresh. `None`: Weave couldn't say right now.
+            "verification_pending": clearance.pending_for_display(db_session, weave_client, project),
+            "weave_verification_url": weave_links.verification_url(),
         },
         status_code=status_code,
     )
@@ -197,12 +212,13 @@ def new_job(
     project_id: uuid.UUID,
     db_session: Annotated[Session, Depends(get_session)],
     actor: Annotated[Actor, Depends(session_actor)],
+    weave_client: Annotated[WeaveClient, Depends(get_weave_client)],
 ):
     _require_compute()
     project = _project(db_session, actor, project_id)
     if not _is_team(actor, project):
         raise NotAllowed("Only the project's team can run jobs on its budget.")
-    return _form_page(request, db_session, project)
+    return _form_page(request, db_session, project, weave_client)
 
 
 @router.post("/projects/{project_id}/compute", dependencies=[Depends(verify_csrf_token)])
@@ -211,6 +227,7 @@ async def submit_job(
     project_id: uuid.UUID,
     db_session: Annotated[Session, Depends(get_session)],
     actor: Annotated[Actor, Depends(fresh_actor)],
+    weave_client: Annotated[WeaveClient, Depends(get_weave_client)],
 ):
     _require_compute()
     project = _project(db_session, actor, project_id)
@@ -250,6 +267,7 @@ async def submit_job(
             spec=spec,
             cap_cents=hourly_cap_cents(project, get_settings()),
             now=datetime.now(UTC),
+            weave_client=weave_client,
         )
     except (ValidationFailed, ValueError) as exc:
         db_session.rollback()
@@ -261,7 +279,7 @@ async def submit_job(
             for field in ("target", "max"):
                 if field in errors:
                     errors.setdefault("limit", errors.pop(field))
-        return _form_page(request, db_session, project, errors=errors, posted=posted, status_code=422)
+        return _form_page(request, db_session, project, weave_client, errors=errors, posted=posted, status_code=422)
     except InvalidState as exc:
         db_session.rollback()
         flash(request, str(exc), "error")
@@ -351,6 +369,7 @@ def job_action(
     action: str,
     db_session: Annotated[Session, Depends(get_session)],
     actor: Annotated[Actor, Depends(fresh_actor)],
+    weave_client: Annotated[WeaveClient, Depends(get_weave_client)],
 ):
     _require_compute()
     if action not in _ACTIONS:
@@ -359,7 +378,9 @@ def job_action(
     job = _job(db_session, project, job_id)
     service, message = _ACTIONS[action]
     try:
-        service(db_session, actor, job=job, now=datetime.now(UTC))
+        # Resuming starts paying for the GPU again, so it checks the team's verification in Weave.
+        extra = {"weave_client": weave_client} if action == "resume" else {}
+        service(db_session, actor, job=job, now=datetime.now(UTC), **extra)
     except InvalidState as exc:
         db_session.rollback()
         flash(request, str(exc), "error")

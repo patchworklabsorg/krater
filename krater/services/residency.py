@@ -9,7 +9,7 @@ Krater stores none of this.
   approves every user, so one member who is not a verified US resident keeps the whole project off OSPool.
 - **The rule.** A member counts only when Weave says `us_resident: true`. False, a missing field (an older Weave,
   or no standing result) and a 404 all count as "not a verified US resident". This fails closed, unlike the
-  guardian gate's missing-field rule: the OSPool rule is a partner's condition, and nothing else depends on it.
+  missing-`minor` rule: the OSPool rule is a partner's condition, and nothing else depends on it.
 - **Weave down.** The gate fails (`UsResidencyCheckUnavailable`). Krater never guesses.
 
 `require_us_residents` is the gate for the OSPool job type (docs/compute/ospool.md); call it before Krater submits

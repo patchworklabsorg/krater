@@ -254,7 +254,13 @@ def _int(body: dict, field: str, default: int | None) -> int | None:
 
 
 @router.post("/projects/{project_id}/jobs", status_code=201)
-async def submit(project_id: uuid.UUID, request: Request, actor: Me, db_session: Db):
+async def submit(
+    project_id: uuid.UUID,
+    request: Request,
+    actor: Me,
+    db_session: Db,
+    weave_client: Annotated[WeaveClient, Depends(get_weave_client)],
+):
     project = _project(db_session, actor, project_id)
     try:
         body = await request.json()
@@ -303,6 +309,7 @@ async def submit(project_id: uuid.UUID, request: Request, actor: Me, db_session:
             spec=spec,
             cap_cents=hourly_cap_cents(project, get_settings()),
             now=datetime.now(UTC),
+            weave_client=weave_client,
         )
     except ValidationFailed as exc:
         db_session.rollback()
@@ -364,12 +371,20 @@ _ACTIONS = {
 
 
 @router.post("/jobs/{job_id}/{action}")
-def job_action(job_id: uuid.UUID, action: str, actor: Me, db_session: Db):
+def job_action(
+    job_id: uuid.UUID,
+    action: str,
+    actor: Me,
+    db_session: Db,
+    weave_client: Annotated[WeaveClient, Depends(get_weave_client)],
+):
     if action not in _ACTIONS:
         return _error(404, f"No action {action!r}.")
     job = _job(db_session, actor, job_id)
     try:
-        _ACTIONS[action](db_session, actor, job=job, now=datetime.now(UTC))
+        # Resuming starts paying for the GPU again, so it checks the team's verification in Weave.
+        extra = {"weave_client": weave_client} if action == "resume" else {}
+        _ACTIONS[action](db_session, actor, job=job, now=datetime.now(UTC), **extra)
     except NotAllowed as exc:
         db_session.rollback()
         return _error(403, str(exc))

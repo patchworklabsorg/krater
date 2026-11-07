@@ -12,6 +12,17 @@ from krater.vast import FakeVast, VastClient
 from tests.factories import new_project
 from tests.services.conftest import admin, make_actor, make_user, member, weave  # noqa: F401
 
+#: The current test's stub Weave, for module helpers that take no fixtures (`_submit`, `_pass` in
+#: test_scheduler): job submits and scheduler passes ask it whether the team is verified.
+current_weave: list = []
+
+
+@pytest.fixture(autouse=True)
+def _current_weave(weave):  # noqa: F811
+    current_weave[:] = [weave]
+    yield
+    current_weave.clear()
+
 
 @pytest.fixture
 def fake() -> FakeVast:

@@ -27,6 +27,7 @@ from krater.services.compute_jobs import JobSpec
 from krater.services.errors import DomainError
 from krater.services.launch_rules import hourly_cap_cents
 from krater.vast import usd_to_microusd
+from krater.weave import WeaveClient, get_weave_client
 
 
 def _dollars(text: str) -> int:
@@ -65,7 +66,9 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def run(argv: list[str], session: Session, settings: Settings, *, now: datetime) -> str:
+def run(
+    argv: list[str], session: Session, settings: Settings, *, now: datetime, weave_client: WeaveClient | None = None
+) -> str:
     """Do what `argv` asks and return what to print. Commits on success."""
     args = _parser().parse_args(argv)
     if args.command_name == "list":
@@ -105,7 +108,13 @@ def run(argv: list[str], session: Session, settings: Settings, *, now: datetime)
         max_runtime_minutes=args.max_runtime,
     )
     job = compute_jobs.submit_job(
-        session, actor, project=project, spec=spec, cap_cents=hourly_cap_cents(project, settings), now=now
+        session,
+        actor,
+        project=project,
+        spec=spec,
+        cap_cents=hourly_cap_cents(project, settings),
+        now=now,
+        weave_client=weave_client or get_weave_client(),
     )
     session.commit()
     return f"Queued {job.id}."

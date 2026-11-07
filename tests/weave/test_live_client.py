@@ -329,6 +329,19 @@ def test_get_user_parses_a_directory_record(fake_weave: FakeWeave, live_client: 
     )
 
 
+@pytest.mark.parametrize(("sent", "read"), [("verified", "verified"), ("pending", "pending"), (None, None), (7, None)])
+def test_get_user_reads_the_verification_status(
+    fake_weave: FakeWeave, live_client: LiveWeaveClient, sent: object, read: str | None
+) -> None:
+    record = {**DIRECTORY_USER} if sent is None else {**DIRECTORY_USER, "verification_status": sent}
+    fake_weave.directory_users["PWLDIR0001"] = record
+
+    user = live_client.get_user("PWLDIR0001")
+
+    assert user is not None
+    assert user.verification_status == read
+
+
 def test_get_user_reads_the_minor_and_guardian_verified_fields(
     fake_weave: FakeWeave, live_client: LiveWeaveClient
 ) -> None:

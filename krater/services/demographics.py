@@ -7,11 +7,11 @@ says `demographics_answered: true` once the member has saved an answer. Krater s
   completion asks for no budget, so it isn't gated. Saving a draft is never gated.
 - **The rule.** Submission is refused unless Weave says `demographics_answered: true`. The directory is asked
   fresh at decision time.
-- **No directory record.** A 404 refuses the submission, the same as the guardian gate
-  (`krater.services.guardian`): Weave hides anyone Krater may not serve.
+- **No directory record.** A 404 refuses the submission, the same as the verification check
+  (`krater.services.clearance`): Weave hides anyone Krater may not serve.
 - **Field missing.** Older Weave versions send a record without `demographics_answered`. Krater follows the
-  guardian gate's choice for a missing `minor`: it doesn't block, and it logs a warning, so submissions keep working
-  while the Weave rollout finishes.
+  verification check's choice for a missing `minor`: it doesn't block, and it logs a warning, so submissions keep
+  working while the Weave rollout finishes.
 - **Weave down.** The submission fails (`DemographicsCheckUnavailable`). Krater never guesses.
 """
 

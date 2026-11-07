@@ -8,6 +8,8 @@ from krater.config import get_settings
 
 #: Weave's demographics form, relative to the issuer.
 DEMOGRAPHICS_PATH = "/profile/demographics"
+#: Weave's ID verification page for a member, relative to the issuer.
+VERIFICATION_PATH = "/verification"
 
 
 def demographics_form_url(return_to: str) -> str | None:
@@ -20,4 +22,10 @@ def demographics_form_url(return_to: str) -> str | None:
     return f"{issuer}{DEMOGRAPHICS_PATH}?{urlencode({'return_to': return_to})}"
 
 
-__all__ = ["DEMOGRAPHICS_PATH", "demographics_form_url"]
+def verification_url() -> str | None:
+    """Weave's ID verification page, where a member verifies themselves. `None` without a Weave issuer (stub mode)."""
+    issuer = get_settings().weave_issuer.rstrip("/")
+    return f"{issuer}{VERIFICATION_PATH}" if issuer else None
+
+
+__all__ = ["DEMOGRAPHICS_PATH", "VERIFICATION_PATH", "demographics_form_url", "verification_url"]

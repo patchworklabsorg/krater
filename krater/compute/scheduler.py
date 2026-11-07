@@ -15,7 +15,10 @@ Each pass, in order:
 5. **Start** queued jobs, oldest first: search offers for the job's shape, choose the cheapest at or under its
    target (or its max, after `max_wait_minutes`, as the member chose), hold its budget under the project's row
    lock, then rent. Searches are paced (`krater.compute.search_pacing`): Vast's daily quota of search rows is small,
-   and a job that keeps finding nothing is searched for less and less often.
+   and a job that keeps finding nothing is searched for less and less often. A job whose team Weave hasn't cleared
+   (`krater.services.clearance`: ID verification, and a verified guardian for a member under 18) waits in the
+   queue without searching. A machine that is already running isn't stopped for that, and a self-stopped one is
+   started again: both were rented while the team was cleared.
 
 Every destroy is confirmed with `show_instance(...) is None`; until then the row keeps `destroy_requested_at` and
 the next pass tries again. The pass commits as it goes (a rental's row must be durable before Vast is called), so
@@ -57,10 +60,11 @@ from krater.providers import (
     ProviderSearchQuotaError,
     ProviderUnavailableError,
 )
-from krater.services import audit, budget, budget_alerts, compute_jobs, compute_settings
+from krater.services import audit, budget, budget_alerts, clearance, compute_jobs, compute_settings
 from krater.services.compute_settings import ComputePolicy
 from krater.services.launch_rules import LAUNCHABLE_STATUSES, hourly_cap_cents
 from krater.vast import Instance, Offer, OfferQuery, RentalType, microusd_to_usd, usd_to_microusd
+from krater.weave import WeaveClient, WeaveUnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -152,10 +156,14 @@ class Scheduler:
         *,
         now: datetime,
         runner_sha256: str | None,
+        weave_client: WeaveClient,
         pacer: SearchPacer | None = None,
     ) -> None:
         self.session = session
         self.client = client
+        self.weave_client = weave_client
+        # Each project's clearance, asked of Weave once per pass: a reason string while it is held, else `None`.
+        self._held: dict = {}
         self.settings = settings
         provider = providers.active(settings)
         if provider is None:
@@ -1017,6 +1025,25 @@ class Scheduler:
                 self.pacer.searched(key, now=self.now, rented=key in self._rented_from)
             self.pacer.forget_old(self.now)
 
+    def _held_for_verification(self, project: Project) -> str | None:
+        """Why `project`'s queued jobs can't rent yet, or `None` once Weave has cleared every team member
+        (`krater.services.clearance`). Asked fresh once per project per pass, before any search: a held job spends
+        none of the provider's search quota. Weave down holds it too; Krater never guesses."""
+        if project.id not in self._held:
+            try:
+                pending = clearance.members_not_cleared(self.session, self.weave_client, project, fresh=True)
+            except WeaveUnavailableError:
+                self._held[project.id] = "Waiting: Krater couldn't reach Weave to check the team is verified."
+            else:
+                self._held[project.id] = (
+                    "Waiting until every team member is verified in Weave: "
+                    + "; ".join(f"{member.label}: {member.reason}" for member in pending)
+                    + "."
+                    if pending
+                    else None
+                )
+        return self._held[project.id]
+
     def _plan(self, job: ComputeJob) -> tuple[RentalType, int] | None:
         """(rental type, price limit) for this pass, after any escalation. `None` cancels the job."""
         rental_type: RentalType = "bid" if job.interruptible else "ondemand"
@@ -1049,6 +1076,10 @@ class Scheduler:
             _finish(job, ComputeJobState.CANCELLED, f"The project is {project.status.value}.", now=self.now)
             _event(self.session, job, "cancelled", "Cancelled: the project can't launch any more.", now=self.now)
             return False
+        held = self._held_for_verification(project)
+        if held is not None:
+            job.state_reason = held
+            return False  # it stays queued and starts once Weave clears the team
         plan = self._plan(job)
         if plan is None:
             _finish(
@@ -1269,6 +1300,9 @@ def run_pass(
     *,
     now: datetime,
     runner_sha256: str | None,
+    weave_client: WeaveClient,
     pacer: SearchPacer | None = None,
 ) -> PassResult:
-    return Scheduler(session, client, settings, now=now, runner_sha256=runner_sha256, pacer=pacer).run()
+    return Scheduler(
+        session, client, settings, now=now, runner_sha256=runner_sha256, weave_client=weave_client, pacer=pacer
+    ).run()

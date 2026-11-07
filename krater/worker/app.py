@@ -208,6 +208,7 @@ def compute_schedule(timestamp: int) -> None:
             settings,
             now=max(datetime.now(UTC), datetime.fromtimestamp(timestamp, tz=UTC)),
             runner_sha256=compute_launch.runner_sha256(settings.compute_runner_binary_path),
+            weave_client=get_weave_client(),
             pacer=SEARCH_PACER,
         )
         if result.errors:
