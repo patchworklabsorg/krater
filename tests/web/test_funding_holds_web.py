@@ -251,6 +251,24 @@ def test_an_admin_cant_clear_the_hold_on_their_own_project(client, login_as, sub
     assert "Ask another admin." in client.get(f"/projects/{project.id}").text
 
 
+def test_an_admin_increase_on_a_held_project_says_the_hold_holds_it(client, login_as, approved_project, db_session):
+    member = login_as(MEMBER_SUB)
+    project = approved_project(member, login_as(REVIEWER_SUB))
+    login_as(ADMIN_SUB)
+    page = f"/projects/{project.id}"
+    _post(client, f"{page}/admin-funding-hold", page, funding_hold="awaiting_funding", reason="Waiting on the grant.")
+
+    response = _post(client, f"{page}/admin-budget", page, amount="25", reason="More.")
+
+    assert response.status_code == 303
+    shown = client.get(response.headers["location"]).text
+    assert "Budget increase held: the project is awaiting funding" in shown
+    assert "added once an admin clears the hold" in shown
+    assert "Budget increase held until every team member is verified" not in shown
+    db_session.refresh(project)
+    assert grants.pending(db_session, project).amount_cents == 2500
+
+
 def test_the_activity_feed_shows_holds_being_set_and_cleared(client, login_as, approved_project, db_session):
     member = login_as(MEMBER_SUB)
     project = approved_project(member, login_as(REVIEWER_SUB))
