@@ -55,7 +55,7 @@ amendments and the completion review. The `status` is Krater's project status, f
 | --- | --- | --- | --- |
 | First submission of a proposal | `projects.submit` | `submission.created` | `external_id`, `applicant_sub` (the submitter's Weave sub), `title`, `status`, `requested_cents`, `url`, `submitted_at` (the first submission) |
 | Change of status, title, requested amount or link | `submit`, `submit_completion`, `record_review`, `admin_decide`, `withdraw` | `submission.updated` | `external_id` and the changed fields only |
-| `BudgetEntry` with a positive amount: `initial_approval`, an amendment that adds budget, an admin adjustment up | `record_review`, `admin_decide`, `admin_adjust_budget` | `budget.committed` | `amount_cents` (the entry's amount), `actor_sub` (the Weave sub of the entry's actor) |
+| `BudgetEntry` with a positive amount: `initial_approval`, an amendment that adds budget, an admin adjustment up | `record_review`, `admin_decide`, `admin_adjust_budget` when Weave clears the team; otherwise the `grant_release` worker task once it does (`grants.release_ready`) | `budget.committed` | `amount_cents` (the entry's amount), `actor_sub` (the Weave sub of the entry's actor: the approver or admin, also on a release) |
 | `BudgetEntry` with a negative amount: an amendment that cuts budget, an admin adjustment down, a `reclaim` (admin, withdrawal, completion) | `record_review`, `admin_decide`, `admin_adjust_budget`, `reclaim_budget`, `withdraw` | `budget.released` | `amount_cents` (the entry's amount, capped, see below), `actor_sub` |
 | `BudgetEntry` with amount 0 (an amendment that keeps the budget) | | nothing | The row is stored as `skipped` |
 | A new `SpendSnapshot` with a higher total | Krater Compute's spend loop and hourly reconciliation (`krater.compute.spend`, `krater.compute.reconcile`) | `spend.recorded` | `spent_cents_total` (the cumulative total) |
@@ -63,6 +63,8 @@ amendments and the completion review. The `status` is Krater's project status, f
 
 Rules of the mapping:
 
+- A grant held for the team's verification (`HeldGrant`, docs/SPEC.md "Verification before funding") sends
+  nothing: it isn't in the ledger. Its `budget.committed` goes when it's released; a cancelled one never sends.
 - A project that was never submitted sends nothing. A draft that is withdrawn sends nothing.
 - `requested_cents` is the amount of the proposal or amendment that is under review. When none is under review, it
   is the amount of the approved revision. When there is no approved revision, it is the amount of the newest

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+import pytest
 import sqlalchemy as sa
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
@@ -13,6 +14,7 @@ from krater.compute import runner_api
 from krater.config import get_settings
 from krater.models import ComputeEvent, ComputeInstanceState, ComputeJobKind, ComputeJobState
 from krater.services import compute_jobs, ssh_keys
+from tests.compute.conftest import current_weave
 from tests.compute.test_scheduler import NOW, _instance, _pass, _submit, _token
 
 
@@ -150,7 +152,7 @@ def test_resume_restarts_the_same_machine_and_the_runner_must_start_again(
     runner_api.synced(db_session, row, now=NOW + timedelta(minutes=3, seconds=10))
     _pass(db_session, client, NOW + timedelta(minutes=4))
 
-    compute_jobs.resume_box(db_session, member, job=job, now=NOW + timedelta(minutes=10))
+    compute_jobs.resume_box(db_session, member, job=job, now=NOW + timedelta(minutes=10), weave_client=current_weave[0])
     _pass(db_session, client, NOW + timedelta(minutes=11))  # asks Vast to start it
     _pass(db_session, client, NOW + timedelta(minutes=12))  # sees it running
 
@@ -163,6 +165,23 @@ def test_resume_restarts_the_same_machine_and_the_runner_must_start_again(
     assert job.state is ComputeJobState.RUNNING
 
 
+def test_resume_waits_for_the_teams_verification(db_session, member, project, client, fake) -> None:  # noqa: F811
+    from krater.services.errors import VerificationRequired
+
+    job, row = _running_box(db_session, member, project, client, fake)
+    compute_jobs.stop_box(db_session, member, job=job, now=NOW + timedelta(minutes=3))
+    runner_api.synced(db_session, row, now=NOW + timedelta(minutes=3, seconds=10))
+    _pass(db_session, client, NOW + timedelta(minutes=4))
+    current_weave[0].set_verification_status(member.user.weave_sub, "pending")
+
+    with pytest.raises(VerificationRequired):
+        compute_jobs.resume_box(
+            db_session, member, job=job, now=NOW + timedelta(minutes=10), weave_client=current_weave[0]
+        )
+
+    assert row.start_requested_at is None and job.state is ComputeJobState.STOPPED
+
+
 def test_resume_when_the_gpu_is_taken_tells_the_member_and_keeps_the_disk(
     db_session, member, project, client, fake
 ) -> None:  # noqa: F811
@@ -172,7 +191,7 @@ def test_resume_when_the_gpu_is_taken_tells_the_member_and_keeps_the_disk(
     _pass(db_session, client, NOW + timedelta(minutes=4))
     fake.gpu_taken[row.provider_instance_id] = True
 
-    compute_jobs.resume_box(db_session, member, job=job, now=NOW + timedelta(minutes=10))
+    compute_jobs.resume_box(db_session, member, job=job, now=NOW + timedelta(minutes=10), weave_client=current_weave[0])
     for minute in range(11, 22):
         _pass(db_session, client, NOW + timedelta(minutes=minute))
 
@@ -295,7 +314,7 @@ def test_max_runtime_counts_running_time_only(db_session, member, project, clien
     assert row.state is ComputeInstanceState.STOPPED
 
     later = NOW + timedelta(hours=11)
-    compute_jobs.resume_box(db_session, member, job=job, now=later)
+    compute_jobs.resume_box(db_session, member, job=job, now=later, weave_client=current_weave[0])
     _pass(db_session, client, later + timedelta(minutes=1))
     _pass(db_session, client, later + timedelta(minutes=2))
     runner_api.start(db_session, row, now=later + timedelta(minutes=2, seconds=10), settings=get_settings())

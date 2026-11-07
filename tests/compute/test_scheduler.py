@@ -30,6 +30,7 @@ from krater.services import budget, compute_jobs
 from krater.services.compute_jobs import JobSpec
 from krater.services.errors import InvalidState, NotAllowed, ValidationFailed
 from krater.vast import FakeVast, VastClient
+from tests.compute.conftest import current_weave
 from tests.factories import new_project
 
 NOW = datetime(2026, 10, 11, 12, 0, tzinfo=UTC)
@@ -49,14 +50,24 @@ def _submit(db_session, member, project, *, now=NOW, **overrides) -> ComputeJob:
         "max_microusd": 100_000,
         **overrides,
     }
-    return compute_jobs.submit_job(db_session, member, project=project, spec=JobSpec(**spec), cap_cents=500, now=now)
+    return compute_jobs.submit_job(
+        db_session,
+        member,
+        project=project,
+        spec=JobSpec(**spec),
+        cap_cents=500,
+        now=now,
+        weave_client=current_weave[0],
+    )
 
 
 RUNNER_SHA = "ab" * 32
 
 
 def _pass(db_session, client, now=NOW) -> scheduler.PassResult:
-    return scheduler.run_pass(db_session, client, SETTINGS, now=now, runner_sha256=RUNNER_SHA)
+    return scheduler.run_pass(
+        db_session, client, SETTINGS, now=now, runner_sha256=RUNNER_SHA, weave_client=current_weave[0]
+    )
 
 
 def _passes(db_session, client, first: int, last: int) -> None:
@@ -289,7 +300,9 @@ def test_after_max_wait_a_job_can_cancel(db_session, member, project, client) ->
 
 
 def _paced_pass(db_session, client, pacer, now) -> scheduler.PassResult:
-    return scheduler.run_pass(db_session, client, SETTINGS, now=now, runner_sha256=RUNNER_SHA, pacer=pacer)
+    return scheduler.run_pass(
+        db_session, client, SETTINGS, now=now, runner_sha256=RUNNER_SHA, weave_client=current_weave[0], pacer=pacer
+    )
 
 
 def test_searches_ask_for_a_limited_number_of_rows(db_session, member, project, client, fake) -> None:  # noqa: F811
@@ -1083,7 +1096,7 @@ def test_a_runner_restart_reported_before_the_resume_is_seen_counts(db_session, 
 def test_no_runner_binary_means_nothing_is_rented(db_session, member, project, client, fake) -> None:  # noqa: F811
     job = _submit(db_session, member, project)
 
-    scheduler.run_pass(db_session, client, SETTINGS, now=NOW, runner_sha256=None)
+    scheduler.run_pass(db_session, client, SETTINGS, now=NOW, runner_sha256=None, weave_client=current_weave[0])
 
     assert job.state is ComputeJobState.QUEUED
     assert fake.instances == {}

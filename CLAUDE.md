@@ -83,9 +83,12 @@ tests/             mirrors krater/ layout
   nothing); see `docs/compute/vast-api.md`.
 - **Events for Quilt go through the outbox.** A service that changes a project's status, title, ledger or spend
   calls `krater.services.quilt_events.sync_project` in the same transaction. Never post to Quilt from a request.
-- **Every budget grant passes the guardian gate** (`krater.services.guardian.require_team_cleared`): no grant while a
-  team member is `minor` in Weave without `guardian_verified`, or the directory doesn't return them. Weave owns that
-  check; Krater stores no copy, and no admin override bypasses it (`docs/SPEC.md` "Guardian verification").
+- **Funding waits for verification** (`krater.services.clearance`): a team member is cleared only with Weave's ID
+  verification (`verification_status: "verified"`), a `guardian_verified` if `minor`, and a directory record.
+  Approval doesn't wait, but the budget it grants does: grant budget only through `krater.services.grants.grant`,
+  which holds it (`HeldGrant`) until Weave clears the team, and no compute starts until then
+  (`require_team_cleared`). Weave owns the checks; Krater stores no copy, and no admin override bypasses it
+  (`docs/SPEC.md` "Verification before funding").
 - **Every admin override writes an `AuditEvent`** (who, what, reason). Budget changes write a `BudgetEntry` (append-only;
   never update or delete ledger rows).
 - **Stub mode** (`KRATER_WEAVE_MODE=stub`) replaces Weave with a local fixture of fake users for dev and tests. The

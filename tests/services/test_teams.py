@@ -25,7 +25,7 @@ from krater.models import (
 from krater.services import approval_policy, projects, teams
 from krater.services import budget as budget_service
 from krater.services.actor import GROUP_MEMBER, GROUP_REVIEWER, Actor
-from krater.services.errors import GuardianVerificationRequired, InvalidState, NotAllowed, NotFound, ValidationFailed
+from krater.services.errors import InvalidState, NotAllowed, NotFound, ValidationFailed, VerificationRequired
 from krater.weave import StubWeaveClient
 from tests.factories import new_project
 from tests.services.conftest import PROFILES, add_to_team
@@ -269,22 +269,40 @@ def test_nobody_leaves_or_is_removed_with_a_job_still_running(db_session: Sessio
 def test_joining_a_funded_project_needs_a_verified_guardian_for_a_minor(
     db_session: Session, member: Actor, make_actor, weave: StubWeaveClient
 ) -> None:
-    # The grant was checked against the team as it was; someone joining later is checked when they accept.
+    # Someone joining a project that already has budget could reach a running machine, so they are checked on accept.
     minor = make_actor(groups=frozenset({GROUP_MEMBER}))
     weave.set_minor(minor.user.weave_sub, True)
     project = _project(db_session, member)
     draft = teams.invite(db_session, member, weave, project=project, query=minor.user.weave_sub)
-    teams.accept(db_session, minor, weave, member_id=draft.id)  # no budget yet: the approval will check them
+    teams.accept(db_session, minor, weave, member_id=draft.id)  # no budget yet: compute checks them
     teams.remove(db_session, member, project=project, member_id=draft.id)
     budget_service.add_entry(
         db_session, project=project, kind=BudgetEntryKind.ADMIN_ADJUSTMENT, amount_cents=500, actor=member, reason="t"
     )
     invitation = teams.invite(db_session, member, weave, project=project, query=minor.user.weave_sub)
 
-    with pytest.raises(GuardianVerificationRequired):
+    with pytest.raises(VerificationRequired, match="You can't join this team yet"):
         teams.accept(db_session, minor, weave, member_id=invitation.id)
     assert not invitation.accepted
 
     weave.set_guardian_verified(minor.user.weave_sub, True)
     teams.accept(db_session, minor, weave, member_id=invitation.id)
     assert invitation.accepted
+
+
+def test_someone_without_id_verification_cant_join_a_project_with_budget(
+    db_session: Session, member: Actor, make_actor, weave: StubWeaveClient
+) -> None:
+    joiner = make_actor(groups=frozenset({GROUP_MEMBER}))
+    weave.set_verification_status(joiner.user.weave_sub, "pending")
+    project = _project(db_session, member)
+    budget_service.add_entry(
+        db_session, project=project, kind=BudgetEntryKind.ADMIN_ADJUSTMENT, amount_cents=500, actor=member, reason="t"
+    )
+    invitation = teams.invite(db_session, member, weave, project=project, query=joiner.user.weave_sub)
+
+    with pytest.raises(VerificationRequired) as exc_info:
+        teams.accept(db_session, joiner, weave, member_id=invitation.id)
+
+    assert exc_info.value.members[0][1] == "ID verification in Weave is still in review"
+    assert not invitation.accepted

@@ -230,10 +230,10 @@ def test_a_click_while_weave_is_down_is_refused(
     assert "Weave" in slack_client.ephemeral_messages[0][1]
 
 
-def test_a_slack_approval_is_refused_while_a_minor_has_no_verified_guardian(
+def test_a_slack_approval_goes_through_before_a_minors_guardian_is_verified(
     db_session: Session, member: Actor, reviewer: Actor, weave: StubWeaveClient
 ) -> None:
-    # The same service rule as the web path: `record_review` runs the guardian gate.
+    # The same service rule as the web path: approval doesn't wait for verification; the project's compute does.
     reviewer.user.slack_user_id = "U_REVIEWER"
     weave.set_minor(member.user.weave_sub, True)
     project, revision = _submitted_revision(db_session, member)
@@ -243,13 +243,9 @@ def test_a_slack_approval_is_refused_while_a_minor_has_no_verified_guardian(
 
     db_session.refresh(revision)
     db_session.refresh(project)
-    assert revision.outcome is RevisionOutcome.PENDING
-    assert project.status is ProjectStatus.PENDING_REVIEW
-    assert revision.reviews == []
-    assert len(slack_client.ephemeral_messages) == 1
-    text = slack_client.ephemeral_messages[0][1]
-    assert "verified guardian in Weave" in text
-    assert member.user.weave_sub in text
+    assert revision.outcome is RevisionOutcome.APPROVED
+    assert project.status is ProjectStatus.APPROVED
+    assert slack_client.ephemeral_messages == []
 
 
 def test_a_slack_approval_goes_through_once_weave_verifies_the_guardian(

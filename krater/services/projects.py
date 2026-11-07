@@ -32,6 +32,7 @@ from krater.models import (
     ApprovalStage,
     BudgetEntry,
     BudgetEntryKind,
+    HeldGrant,
     Project,
     ProjectMember,
     ProjectRevision,
@@ -42,7 +43,7 @@ from krater.models import (
     RevisionKind,
     RevisionOutcome,
 )
-from krater.services import approval_policy, audit, budget, guardian, quilt_events, teams
+from krater.services import approval_policy, audit, budget, grants, quilt_events, teams
 from krater.services.actor import Actor
 from krater.services.errors import InvalidState, NotAllowed, NotFound, ValidationFailed
 from krater.weave import WeaveClient
@@ -411,6 +412,7 @@ def start_amendment(session: Session, actor: Actor, *, project: Project) -> Proj
         raise InvalidState("Amendments can only be started on an approved project.")
 
     _ensure_no_draft_in_progress(project)
+    grants.require_none_pending(session, project)
 
     approved = project.approved_revision
     if approved is None:
@@ -585,9 +587,8 @@ def record_review(
     effect only once `approval_policy.is_satisfied` says the policy is now met -- otherwise the revision
     just stays `pending` with one more recorded approval.
 
-    An approval that grants budget first passes the guardian gate (`guardian.require_team_cleared`, asking
-    `weave_client` fresh). If the gate refuses, this raises and the caller rolls back, review included: the
-    reviewer approves again once an admin has recorded the verifications.
+    Approval doesn't wait for the team's verification in Weave. The budget it grants does: it's written to the ledger
+    only once Weave clears every team member, and is held until then (`krater.services.grants`).
     """
     project = revision.project
 
@@ -663,23 +664,23 @@ def _apply_reject(session: Session, revision: ProjectRevision) -> None:
 def _apply_approve(session: Session, actor: Actor, revision: ProjectRevision, *, weave_client: WeaveClient) -> None:
     """Apply the effect of a revision being approved (by policy satisfaction or an admin override).
 
-    A proposal approval, and an amendment approval that raises the ceiling, grant budget: both pass the
-    guardian gate first (`guardian.require_team_cleared`). There is no override: an admin decision takes the
-    same path. A completion approval only reclaims budget, so it has no gate.
+    A proposal approval, and an amendment approval that raises the ceiling, grant budget through `grants.grant`:
+    written now if Weave clears the team, held until it does otherwise. The approval itself goes through either way.
+    A completion approval reclaims budget and cancels any held grant.
     """
     project = revision.project
     stage = approval_policy.stage_for(revision)
-    if stage is not ApprovalStage.COMPLETION:
-        grants = revision.kind is not RevisionKind.AMENDMENT or (
-            revision.budget_requested_cents > budget.ceiling_cents(session, project)
-        )
-        if grants:
-            guardian.require_team_cleared(session, weave_client, project)
+    if stage is not ApprovalStage.COMPLETION and revision.kind is RevisionKind.AMENDMENT:
+        # Decided against today's ceiling, so not while an earlier grant is still held.
+        grants.require_none_pending(session, project)
 
     revision.outcome = RevisionOutcome.APPROVED
 
     if stage is ApprovalStage.COMPLETION:
         project.status = ProjectStatus.COMPLETED
+        grants.cancel_pending(
+            session, project, actor=actor, reason="The project was completed before its team was verified."
+        )
         unspent = budget.remaining_cents(session, project)
         if unspent > 0:
             budget.add_entry(
@@ -694,20 +695,32 @@ def _apply_approve(session: Session, actor: Actor, revision: ProjectRevision, *,
     elif revision.kind is RevisionKind.AMENDMENT:
         delta = revision.budget_requested_cents - budget.ceiling_cents(session, project)
         project.approved_revision_id = revision.id
-        budget.add_entry(
-            session,
-            project=project,
-            kind=BudgetEntryKind.AMENDMENT,
-            amount_cents=delta,
-            actor=actor,
-            revision=revision,
-        )
+        if delta > 0:
+            grants.grant(
+                session,
+                weave_client,
+                project=project,
+                kind=BudgetEntryKind.AMENDMENT,
+                amount_cents=delta,
+                actor=actor,
+                revision=revision,
+            )
+        else:  # a cut grants nothing, so it never waits
+            budget.add_entry(
+                session,
+                project=project,
+                kind=BudgetEntryKind.AMENDMENT,
+                amount_cents=delta,
+                actor=actor,
+                revision=revision,
+            )
         # Status stays `approved`; it never left.
     else:  # proposal
         project.status = ProjectStatus.APPROVED
         project.approved_revision_id = revision.id
-        budget.add_entry(
+        grants.grant(
             session,
+            weave_client,
             project=project,
             kind=BudgetEntryKind.INITIAL_APPROVAL,
             amount_cents=revision.budget_requested_cents,
@@ -774,8 +787,8 @@ def admin_decide(
     as a policy-satisfying reviewer decision would (see `record_review`), and writes an `AuditEvent`.
     Still requires `revision` to be the project's current, submitted, still-`pending` revision.
 
-    The override bypasses the approval policy, not the guardian gate: an approval that grants budget still
-    raises `GuardianVerificationRequired` while a team member under 18 has no verification.
+    The override bypasses the approval policy, not verification: the budget an approval grants is held until Weave
+    clears the team (`krater.services.grants`).
     """
     if not actor.is_admin:
         raise NotAllowed("Only an admin may override a review decision.")
@@ -823,13 +836,14 @@ def admin_adjust_budget(
     amount_cents: int,
     reason: str,
     weave_client: WeaveClient,
-) -> BudgetEntry:
+) -> BudgetEntry | HeldGrant:
     """Admin override: adjust a project's budget ceiling by a signed amount. Admin only.
 
     Only on an `approved` or `pending_completion_review` project. `reason` is required. Raises
     `ValidationFailed` if `amount_cents` is zero or would take the ceiling below zero, and `NotAllowed` for
-    an increase on the admin's own project (see `admin_decide`; a cut is fine). An increase grants budget,
-    so it passes the guardian gate (`guardian.require_team_cleared`) first. Writes an `AuditEvent`.
+    an increase on the admin's own project (see `admin_decide`; a cut is fine). Writes an `AuditEvent`. Like an
+    approval's, an increase is held until Weave clears the team (`krater.services.grants`), and returns the
+    `HeldGrant` then. Refused (`InvalidState`) while an earlier grant is held.
     """
     if not actor.is_admin:
         raise NotAllowed("Only an admin may adjust a project's budget.")
@@ -846,17 +860,28 @@ def admin_adjust_budget(
 
     if budget.ceiling_cents(session, project) + amount_cents < 0:
         raise ValidationFailed({"amount_cents": "This would take the project's budget ceiling below zero."})
-    if amount_cents > 0:
-        guardian.require_team_cleared(session, weave_client, project)
+    grants.require_none_pending(session, project)
 
-    entry = budget.add_entry(
-        session,
-        project=project,
-        kind=BudgetEntryKind.ADMIN_ADJUSTMENT,
-        amount_cents=amount_cents,
-        actor=actor,
-        reason=reason,
-    )
+    if amount_cents > 0:
+        granted = grants.grant(
+            session,
+            weave_client,
+            project=project,
+            kind=BudgetEntryKind.ADMIN_ADJUSTMENT,
+            amount_cents=amount_cents,
+            actor=actor,
+            reason=reason,
+        )
+        entry = granted.entry or granted.held
+    else:
+        entry = budget.add_entry(
+            session,
+            project=project,
+            kind=BudgetEntryKind.ADMIN_ADJUSTMENT,
+            amount_cents=amount_cents,
+            actor=actor,
+            reason=reason,
+        )
     audit.record(
         session, actor, "admin_adjust_budget", project=project, payload={"amount_cents": amount_cents}, reason=reason
     )
@@ -886,6 +911,7 @@ def reclaim_budget(
         raise ValidationFailed({"amount_cents": "The amount to reclaim must be greater than zero."})
 
     _lock_project(session, project)
+    grants.require_none_pending(session, project)
     if budget.ceiling_cents(session, project) - amount_cents < 0:
         raise ValidationFailed({"amount_cents": "Cannot reclaim more than the project's current budget ceiling."})
 
@@ -985,6 +1011,7 @@ def withdraw(session: Session, actor: Actor, *, project: Project, reason: str | 
         )
 
     project.status = ProjectStatus.WITHDRAWN
+    grants.cancel_pending(session, project, actor=actor, reason=reason or "The project was withdrawn.")
     _supersede_pending_revisions(session, project)
 
     if not is_self:

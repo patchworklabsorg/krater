@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from krater.config import get_settings
 from krater.db import get_session
 from krater.models import (
+    HeldGrant,
     Project,
     ProjectRevision,
     ProjectStatus,
@@ -30,7 +31,7 @@ from krater.models import (
     User,
 )
 from krater.services import budget as budget_service
-from krater.services import demographics, guardian, people, residency, slack_membership, teams
+from krater.services import clearance, demographics, grants, people, residency, slack_membership, teams
 from krater.services import projects as project_service
 from krater.services import screenshots as screenshot_service
 from krater.services import users as user_service
@@ -49,6 +50,7 @@ from krater.services.launch_rules import LAUNCHABLE_STATUSES, hourly_cap_cents
 from krater.slack import get_slack_client
 from krater.storage import ObjectStore, get_object_store
 from krater.weave import WeaveClient, WeaveUnavailableError, get_weave_client
+from krater.weave import links as weave_links
 from krater.weave.links import demographics_form_url
 from krater.web import application_form, estimator_form
 from krater.web.csrf import verify_csrf_token
@@ -498,12 +500,16 @@ def _build_detail_context(
 
     image_url = primary_image_url(get_object_store(), current)
 
-    # Team members under 18 without a verified guardian in Weave block every budget grant (docs/SPEC.md
-    # "Guardian verification"). A finished project gets no more budget, so it doesn't ask. `None` means Weave
-    # couldn't say right now; the decision itself still checks Weave fresh.
-    guardian_pending = (
-        guardian.pending_for_display(session, weave_client, project) if project.status not in _TERMINAL_STATUSES else []
+    # The project's budget and compute are held until every team member is cleared in Weave: ID verification, and a
+    # verified guardian for a member under 18 (docs/SPEC.md "Verification before funding"). A finished project runs
+    # nothing, so it doesn't ask. `None` means Weave couldn't say right now; releasing a grant and starting compute
+    # check Weave fresh. `held_grant` is the budget an approval granted that is waiting for that.
+    verification_pending = (
+        clearance.pending_for_display(session, weave_client, project)
+        if project.status not in _TERMINAL_STATUSES
+        else []
     )
+    held_grant = grants.pending(session, project)
 
     # Only verified US residents may use OSPool capacity (`krater.services.residency`). Reviewers and admins see
     # it, to pick the projects to send to OSPool. `None` means Weave couldn't say right now.
@@ -541,7 +547,9 @@ def _build_detail_context(
         "summary": summary,
         "budget_flag": budget_flag,
         "primary_image_url": image_url,
-        "guardian_pending": guardian_pending,
+        "verification_pending": verification_pending,
+        "held_grant": held_grant,
+        "weave_verification_url": weave_links.verification_url(),
         "team_residency": team_residency,
         "show_residency": actor.is_reviewer or actor.is_admin,
         "revisions": revisions,
@@ -1017,7 +1025,7 @@ def admin_adjust_budget(
         return templates.TemplateResponse(request, "projects/detail.html", context, status_code=422)
 
     try:
-        project_service.admin_adjust_budget(
+        result = project_service.admin_adjust_budget(
             db_session, actor, project=project, amount_cents=amount_cents, reason=reason, weave_client=weave_client
         )
     except (ValidationFailed, NotAllowed) as exc:
@@ -1048,7 +1056,12 @@ def admin_adjust_budget(
             extra=f"Amount: {amount_cents / 100:+.2f}",
         )
 
-    return _success_redirect(db_session, request, project_id, "Budget adjusted.", after_commit=_notify)
+    message = (
+        "Budget increase held until every team member is verified in Weave."
+        if isinstance(result, HeldGrant)
+        else "Budget adjusted."
+    )
+    return _success_redirect(db_session, request, project_id, message, after_commit=_notify)
 
 
 @router.post("/projects/{project_id}/admin-reclaim", dependencies=[Depends(verify_csrf_token)])

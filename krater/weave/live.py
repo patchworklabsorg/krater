@@ -340,6 +340,7 @@ class LiveWeaveClient:
             guardian_verified=_optional_bool(data.get("guardian_verified")),
             demographics_answered=_optional_bool(data.get("demographics_answered")),
             us_resident=_optional_bool(data.get("us_resident")),
+            verification_status=_string(data.get("verification_status")) or None,
         )
 
 

@@ -32,7 +32,10 @@ minute (`compute_schedule`), under a procrastinate lock so passes never overlap,
    - not looked at for 5 minutes or more (Krater was down) → its runner deadlines count from now;
    - gone from Vast unexpectedly → job requeued;
    - job finished (cancelled, failed, succeeded) → machine destroyed.
-5. **Start** queued jobs, oldest first. For each, search offers for its shape (GPU models or minimum VRAM, GPU
+5. **Start** queued jobs, oldest first. A job whose team Weave hasn't cleared (ID verification, and a verified
+   guardian for a member under 18; `krater.services.clearance`, docs/SPEC.md "Verification before funding") waits
+   with the reason on its page and isn't searched for. Weave is asked once per project per pass, fresh; Weave down
+   holds it too. Running machines aren't stopped for it. For each other job, search offers for its shape (GPU models or minimum VRAM, GPU
    count, disk, the reliability floor), price every offer at full hourly cost (the bid, min bid plus the margin, or
    `dph_base` on demand, plus disk), and take the cheapest at or under the target (several GPU models: best
    performance per dollar). After `max_wait_minutes` the job does what the member chose: keep waiting, accept up to

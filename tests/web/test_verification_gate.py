@@ -1,6 +1,6 @@
-"""HTTP-level tests for the guardian gate: the web approve paths refuse a grant while a team member is a minor
-without a verified guardian in Weave, and the project page says who needs one. The rule itself is covered in
-tests/services/test_guardian.py."""
+"""HTTP-level tests for verification before funding: the web approve paths approve a project whatever the team's
+verification in Weave, and the project page says how much budget is held and whose verification it's waiting on. The
+rules themselves are covered in tests/services/test_clearance.py and tests/services/test_grants.py."""
 
 from __future__ import annotations
 
@@ -21,40 +21,10 @@ def _post_decision(client: TestClient, project, path: str, **data: str):
     return client.post(f"/projects/{project.id}/{path}", data={"csrf_token": csrf, **data}, follow_redirects=False)
 
 
-def test_a_reviewer_approval_is_refused_and_names_the_member(
+def test_a_reviewer_approves_a_minors_project_and_the_page_says_its_budget_is_held(
     client: TestClient, login_as, submitted_project, db_session: Session
 ) -> None:
     project = submitted_project(login_as(MINOR_SUB))
-
-    login_as(REVIEWER_SUB)
-    response = _post_decision(client, project, "review", decision="approve")
-
-    assert response.status_code == 303
-    assert response.headers["location"] == f"/projects/{project.id}"
-    db_session.refresh(project)
-    assert project.status is ProjectStatus.PENDING_REVIEW
-    followed = client.get(response.headers["location"])
-    assert "verified guardian in Weave" in followed.text
-    assert "Milo Minor (PWLMINORONE)" in followed.text
-
-
-def test_an_admin_approval_cannot_bypass_the_gate(
-    client: TestClient, login_as, submitted_project, db_session: Session
-) -> None:
-    project = submitted_project(login_as(MINOR_SUB))
-
-    login_as(ADMIN_SUB)
-    response = _post_decision(client, project, "admin-decide", decision="approve", reason="Urgent.")
-
-    assert response.status_code == 303
-    db_session.refresh(project)
-    assert project.status is ProjectStatus.PENDING_REVIEW
-
-
-def test_a_minor_with_a_verified_guardian_can_be_approved(
-    client: TestClient, login_as, submitted_project, db_session: Session
-) -> None:
-    project = submitted_project(login_as(VERIFIED_MINOR_SUB))
 
     login_as(REVIEWER_SUB)
     response = _post_decision(client, project, "review", decision="approve")
@@ -62,21 +32,59 @@ def test_a_minor_with_a_verified_guardian_can_be_approved(
     assert response.status_code == 303
     db_session.refresh(project)
     assert project.status is ProjectStatus.APPROVED
+    page = client.get(f"/projects/{project.id}").text
+    held = project.approved_revision.budget_requested_cents / 100
+    assert f"{held:,.2f} of this project's budget is held until every team member" in page
+    assert "Milo Minor (PWLMINORONE): under 18 without a verified guardian in Weave" in page
 
 
-def test_the_project_page_shows_who_needs_a_verified_guardian(client: TestClient, login_as, submitted_project) -> None:
+def test_an_admin_increase_says_it_is_held(
+    client: TestClient, login_as, submitted_project, db_session: Session, weave_stub: StubWeaveClient
+) -> None:
+    project = submitted_project(login_as(MEMBER_SUB))
+    login_as(REVIEWER_SUB)
+    _post_decision(client, project, "review", decision="approve")
+    weave_stub.set_verification_status(MEMBER_SUB, "pending")
+
+    login_as(ADMIN_SUB)
+    response = _post_decision(client, project, "admin-budget", amount="25", reason="More.")
+
+    assert response.status_code == 303
+    page = client.get(response.headers["location"]).text
+    assert "Budget increase held until every team member is verified in Weave." in page
+    assert "25.00 of this project&#39;s budget is held" in page or "25.00 of this project's budget is held" in page
+
+
+def test_an_admin_approval_goes_through_too(
+    client: TestClient, login_as, submitted_project, db_session: Session
+) -> None:
     project = submitted_project(login_as(MINOR_SUB))
+
+    login_as(ADMIN_SUB)
+    response = _post_decision(client, project, "admin-decide", decision="approve", reason="Good.")
+
+    assert response.status_code == 303
+    db_session.refresh(project)
+    assert project.status is ProjectStatus.APPROVED
+
+
+def test_the_project_page_lists_a_member_without_id_verification(
+    client: TestClient, login_as, submitted_project, weave_stub: StubWeaveClient
+) -> None:
+    project = submitted_project(login_as(MEMBER_SUB))
+    weave_stub.set_verification_status(MEMBER_SUB, "needs_submission")
 
     login_as(REVIEWER_SUB)
     page = client.get(f"/projects/{project.id}")
 
     assert page.status_code == 200
     assert 'class="guardian-banner"' in page.text
-    assert "Milo Minor (PWLMINORONE)" in page.text
-    assert "Weave admin page" in page.text
+    assert "Mia Member (PWLMEMBERONE): hasn&#39;t done ID verification in Weave" in page.text
+    assert "budget and compute are held until every team member is verified in Weave" in page.text
+    assert "Weave's verification page" in page.text
 
 
-def test_the_project_page_has_no_notice_without_a_blocked_member(
+def test_the_project_page_has_no_notice_once_the_team_is_cleared(
     client: TestClient, login_as, submitted_project
 ) -> None:
     project = submitted_project(login_as(VERIFIED_MINOR_SUB))
@@ -106,21 +114,16 @@ def test_the_project_page_says_when_weave_could_not_be_checked(
     page = client.get(f"/projects/{project.id}")
 
     assert page.status_code == 200
-    assert "couldn" in page.text
-    assert "check whether a team member needs a verified guardian" in page.text
+    assert "couldn't reach Weave to check that the team is verified" in page.text
 
 
-def test_a_member_weave_does_not_return_is_listed_and_blocks_the_approval(
-    client: TestClient, login_as, submitted_project, weave_stub: StubWeaveClient, db_session: Session
+def test_a_member_weave_does_not_return_is_listed(
+    client: TestClient, login_as, submitted_project, weave_stub: StubWeaveClient
 ) -> None:
     project = submitted_project(login_as(MEMBER_SUB))
     weave_stub.remove_user(MEMBER_SUB)
 
     login_as(REVIEWER_SUB)
     page = client.get(f"/projects/{project.id}")
-    response = _post_decision(client, project, "review", decision="approve")
 
     assert "PWLMEMBERONE: not available in Weave (no access to Krater)" in page.text
-    assert response.status_code == 303
-    db_session.refresh(project)
-    assert project.status is ProjectStatus.PENDING_REVIEW

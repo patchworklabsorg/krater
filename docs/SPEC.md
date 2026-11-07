@@ -145,7 +145,7 @@ answer.
   submission goes through only when `demographics_answered` is true.
 - If not, the project page says why and links to Weave's form with `return_to` set to the project page. Weave sends
   the member back after they save. The draft stays as it was, and they submit again.
-- A 404 from the directory blocks, the same as the guardian gate. If Weave can't be reached, the submission fails
+- A 404 from the directory blocks, the same as the verification check. If Weave can't be reached, the submission fails
   with "try again".
 - A record without the field does not block. Krater logs a warning, the same choice as a record without `minor`.
 - Saving a draft and submitting a completion are not gated. Details: [weave-integration.md](weave-integration.md#demographics-gate).
@@ -243,10 +243,9 @@ amendment or a reopened draft starts with every answer of the revision it follow
    - rejects self-review (anyone on the team, or invited to it);
    - records the Review against the current revision;
    - asks `ApprovalPolicyService` whether the policy is now satisfied.
-4. **Approve.** When the policy is satisfied, Krater runs the guardian gate (see "Guardian verification"). If the gate
-   passes, the revision is approved, a `BudgetEntry(initial_approval)` is written, the project moves to `approved`, and
-   its team can run compute. If it fails, nothing is recorded and the reviewer sees which members need a verified
-   guardian.
+4. **Approve.** When the policy is satisfied, the revision is approved and the project moves to `approved`, whether
+   or not the team is verified yet. Its `BudgetEntry(initial_approval)` is written then if Weave clears every team
+   member, and is held until it does otherwise (see "Verification before funding").
 5. **Reject.** A reason is required. The project moves to `changes_requested`, and the submitter edits and resubmits
    (step 2, same project, new revision).
 6. **Amend.** An `approved` project can have its scope or budget amended. This creates an `amendment` revision reviewed
@@ -373,53 +372,71 @@ Uploads use presigned URLs, and only objects from approved completion revisions 
   spend, through Quilt's patch API. The events go through an outbox table in the same transaction as the change.
   See [quilt-integration.md](quilt-integration.md).
 
-## Guardian verification
+## Verification before funding
 
-Added Oct 12, 2026, as a safeguard for Project Ganymede. Weave asks a parent or guardian to consent by email for a
-member under 18. An email link proves control of an inbox, not parenthood. So a Weave admin also records a
-stronger check in Weave: a signed guardian form plus a short call or video check with the guardian. The check
-lives in Weave, so every Patchwork Labs app can use it. Krater stores none of it.
+Changed Nov 6, 2026. A project can be submitted, reviewed and approved before anyone on the team is verified. What
+waits is everything that funds it: the budget its approval grants, and its compute. Krater adds no budget and starts
+nothing for it until Weave has cleared every team member. Weave owns both checks, so every Patchwork Labs app can use
+them, and Krater stores none of them (`krater.services.clearance`, `krater.services.grants`).
 
-**The rule.** Krater grants no budget to a project while a team member is a minor without a verified guardian,
-or while Weave's directory doesn't return a team member.
-
-- **The team** is the project's lead plus its accepted members, as the team stands when the grant is decided. Someone
-  who joins a project that already has budget is checked when they accept the invitation.
-- **The data** comes from Weave's directory record: `minor` (true when the member is under 18) and
-  `guardian_verified` (true when a Weave admin recorded the form and the call). A member blocks the grant when
-  `minor` is true and `guardian_verified` is not true.
-- **No directory record.** Weave's directory answers 404 for anyone the Krater app may not serve. That includes a
-  minor whose guardian consent is missing or was revoked. So a 404 blocks the grant, and the member is listed as
-  "not available in Weave (no access to Krater)".
-- **When.** Krater asks Weave's directory fresh at decision time, the same way it checks roles. It checks on
-  every grant: a proposal approval, an amendment approval that raises the ceiling, and an admin budget increase.
-  A rejection, a completion approval, a cut and a reclaim grant nothing, so they have no check.
-- **One rule for every path.** The gate is in `krater.services.projects` (through `krater.services.guardian`). The
-  web Approve button, the Slack Approve button and the admin overrides all reach it.
-- **No override.** This is a safety rule. An admin override can't bypass it, and Krater has no setting to turn it
-  off. A Weave admin verifies the guardian first, then a reviewer or admin approves again.
-- **Unknown age.** Older Weave versions send a record without `minor`. Weave ships the fields before Krater needs
-  them, so Krater treats that record as "not known to be a minor". It logs a warning with the member's Patchwork
-  ID, so an operator can see when Weave is behind.
-- **Weave down.** If Weave can't be reached, the grant fails with "try again". Krater never guesses.
-- **The project page** shows a notice to everyone who can see the project. The notice lists the members who need
-  to be cleared in Weave and the reason for each, and says that a Weave admin records a verified guardian on the
-  member's Weave admin page.
+- **ID verification.** Weave's identity verification (a document, reviewed by Weave's identity team). Weave's
+  directory sends `verification_status`: `needs_submission`, `pending`, `verified` or `ineligible`. Only `verified`
+  clears the member. A record without the field (an older Weave) doesn't clear them, and Krater logs a warning.
+- **A verified guardian, under 18.** Weave asks a parent or guardian to consent by email for a member under 18. An
+  email link proves control of an inbox, not parenthood, so a Weave admin also records a signed guardian form plus a
+  short call or video check, and the directory sends `guardian_verified: true`. A member with `minor: true` isn't
+  cleared until then. A record without `minor` is treated as "not known to be a minor", and Krater logs a warning.
+- **No directory record.** Weave's directory answers 404 for anyone the Krater app may not serve, a minor whose
+  guardian consent is missing or was revoked included. A 404 doesn't clear, and the member is listed as "not
+  available in Weave (no access to Krater)".
+- **The team** is the project's lead plus its accepted members, as it stands when the budget is released or compute
+  is asked for.
+- **The budget is held.** A proposal approval, an amendment approval that raises the ceiling, and an admin increase
+  write their `BudgetEntry` at once only if Weave clears the team right then. Otherwise the grant is held (a
+  `HeldGrant`): the approval goes through, but the ledger, and so Quilt's `budget.committed`, has nothing yet, and
+  the project's ceiling stays where it was ($0 for a new project). A worker task asks Weave every five minutes and
+  writes the held entry, with the approver as its actor, once every member is cleared. The project page shows the
+  held amount, and the project's Slack channel hears when it's held and when it's released.
+  - **One at a time.** While a grant is held, nothing else may change the project's budget: amendments can't be
+    started or approved, and admins can't adjust or reclaim it. The amount decided at approval stays right.
+  - **Cancelled** when the project is withdrawn or completed first. Nothing was granted, so there's nothing to give
+    back.
+  - A cut (an amendment that lowers the ceiling, an admin cut, a reclaim) grants nothing, so it never waits.
+- **What else waits.**
+  - Queueing a job or a box: web, API and CLI all go through `compute_jobs.submit_job`.
+  - Resuming a stopped box.
+  - The scheduler renting a machine for a queued job. A job queued before a member's verification lapsed waits in
+    the queue, with the reason on its page, and spends none of the provider's search quota.
+  - Someone joining a team whose project already has budget, since they could reach a machine that's running.
+- **What doesn't.** Submitting, reviewing and approving. A machine that's already running isn't stopped when a member's verification lapses, and the
+  scheduler still starts a machine that stopped itself after losing contact with Krater: both were rented while the
+  team was cleared.
+- **When.** Krater asks Weave's directory fresh at each of those points, the same way it checks roles. The scheduler
+  asks once per project per pass, and the release task once per held grant per run.
+- **No override.** This is a safety rule. An admin can't clear a member or release a held grant in Krater, and
+  Krater has no setting to turn it off.
+- **Weave down.** A grant decided then is held, and nothing starts, with "try again". Krater never guesses.
+- **The project page and the new-job page** list the members Weave hasn't cleared and the reason for each, and link
+  to Weave's verification page.
 
 ```mermaid
 flowchart TD
-    A[Approval, amendment increase or admin budget increase] --> B[Ask Weave's directory, fresh, for each team member]
-    B -->|Weave can't be reached| X[Refuse: try again]
-    B -->|404, no record| N[Refuse the grant and list the member: not available in Weave]
-    B --> C{minor: true?}
+    A[Grant budget, queue a job, resume a box, rent for a queued job, or join a funded team] --> B[Ask Weave's directory, fresh, for each team member]
+    B -->|Weave can't be reached| X[Hold: try again]
+    B -->|404, no record| N[Hold, and list the member: not available in Weave]
+    B --> V{verification_status: verified?}
+    V -->|no or missing| H[Hold, and list the member with the status]
+    V -->|yes| C{minor: true?}
     C -->|missing| L[Log a warning, not known to be a minor] --> OK
     C -->|false| OK[Member is clear]
     C -->|true| D{guardian_verified: true?}
     D -->|yes| OK
-    D -->|no or missing| R[Refuse the grant and list the member]
+    D -->|no or missing| R[Hold, and list the member]
     OK --> E{Every member clear?}
-    E -->|yes| G[Grant: write the BudgetEntry]
+    E -->|yes| G[Write the budget entry, or start]
 ```
+
+Until Nov 6, 2026 the guardian check blocked the approval itself (Oct 12, 2026), and ID verification wasn't checked.
 
 ## Admin overrides
 
@@ -435,8 +452,8 @@ can't decide it, add to its budget or raise its hourly cap, so an admin can neve
 else signing off. Another
 admin, or the normal review, has to do it. Cutting or reclaiming its budget and withdrawing it are still allowed.
 
-An override also can't bypass the guardian gate (see "Guardian verification"). An admin approval or budget increase
-fails the same way a reviewer approval does while a team member needs a verified guardian.
+No override clears a team member (see "Verification before funding"): the budget an admin approval or increase
+grants is held, and the compute waits, until Weave clears the team.
 
 Every override writes an `AuditEvent` with who, what, when and a required reason. Budget changes also write a
 `BudgetEntry`. Overrides are posted in the project's channel so reviewers can see them.
