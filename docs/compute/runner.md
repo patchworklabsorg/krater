@@ -109,10 +109,13 @@ URLs signed for 15 minutes) or with `krater logs` and `krater download`. Reviewe
 A box launches in Vast's SSH mode (`runtype: ssh_direct`): Vast's own init runs sshd and is the main process, and the
 bootstrap runs as its startup script, starting the runner in the background. The runner then:
 
-1. writes the box owner's SSH keys (from `/start`) as the whole of `~/.ssh/authorized_keys` (0600, `.ssh` 0700);
+1. writes the box's SSH keys (from `/start`) as the whole of `~/.ssh/authorized_keys` (0600, `.ssh` 0700, replaced
+   in one rename): the owner's, and those of any admin with access now (see "Admin access" below);
 2. restores `/workspace` (`$KRATER_WORKSPACE_DIR`) from the job's stored workspace;
-3. sends a heartbeat every minute with GPU use and the number of established connections to port 22, read from
-   `/proc/net/tcp` and `tcp6`;
+3. sends a heartbeat every minute with GPU use, the number of established connections to port 22, read from
+   `/proc/net/tcp` and `tcp6`, and `key_updates: true`. Krater's reply carries the box's whole key list as
+   `ssh_keys`, and the runner rewrites authorized_keys whenever it differs from what it last wrote. A reply without
+   the field (an older Krater) leaves the file alone; an empty list empties it;
 4. saves `/workspace` every 10 minutes, and when a heartbeat reply says `sync` (Krater is about to stop the box),
    then confirms with `POST /runner/v1/synced`, but only once the save succeeded (retried for up to a minute).
    After a failed save it stays silent: Krater keeps asking on each heartbeat until its sync deadline, and records
@@ -128,6 +131,23 @@ What a member can read inside their box: the container's environment (`/proc/1/e
 (this instance's runner token: it can only report for this box), Vast's `CONTAINER_API_KEY` (it can stop or destroy
 this one instance; Krater treats that like any unexpected stop) and a `JUPYTER_TOKEN` Vast generates. Boxes are
 SSH-only in v1 (Adam, 2026-10-11): members run Jupyter themselves through an SSH tunnel.
+
+### Admin access
+
+An admin can get SSH access to a running box from its job page, with a reason the team sees
+(`krater.services.box_access`, `AdminBoxAccess`). Krater adds the admin's keys to the list it sends for
+`ACCESS_HOURS` (2), or until an admin ends it, so access starts and ends within a heartbeat. The grant writes an
+`AuditEvent`, is posted in the project's channel, and shows as a banner on the job page. Know what it doesn't do:
+
+- it doesn't end an open SSH session: sshd checks keys only at login, so a session already open outlives the access;
+- an open session counts as a session, so the box doesn't stop for being idle while an admin is logged in, and it
+  keeps spending the project's budget;
+- a shell on the box can read the project's secrets, as the owner's can;
+- the admin's role is checked in Weave when access is granted, not again on each heartbeat.
+
+Only boxes whose runner says `key_updates` get access (runners from Nov 7, 2026 on): an older runner reads its keys
+only at start. There's no access to batch jobs, which have no sshd: an admin reads their logs and files on the job
+page instead.
 
 ## What a member's job sees
 

@@ -47,6 +47,9 @@ type StartInfo struct {
 type Reply struct {
 	Stop bool `json:"stop"` // the job has ended
 	Sync bool `json:"sync"` // save /workspace and confirm: Krater is about to stop the box
+	// A box's whole authorized_keys (the owner's keys and any admin's with access now). A pointer, so that a reply
+	// without the field (an older Krater, or a batch job) leaves the file alone, while an empty list empties it.
+	SSHKeys *[]string `json:"ssh_keys"`
 }
 
 // RemoteFile is one stored checkpoint or output.
