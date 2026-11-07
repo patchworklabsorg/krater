@@ -688,7 +688,11 @@ def submit_project(
         project_service.submit(db_session, actor, project=project, criteria_read=criteria_read == "yes")
     except ValidationFailed as exc:
         db_session.rollback()
-        flash(request, "Some answers are missing or too long. They're marked below.", "error")
+        if set(exc.errors) == {"criteria_read"}:
+            # Every answer is there: only the Submission Criteria box was left unticked.
+            flash(request, exc.errors["criteria_read"], "error")
+        else:
+            flash(request, "Some answers are missing or too long. They're marked below.", "error")
         context = _edit_context(
             db_session, weave_client, store, actor, project, project.current_revision, errors=exc.errors
         )

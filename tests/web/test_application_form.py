@@ -247,6 +247,53 @@ def test_a_saved_application_reloads_into_the_form_and_submits(
     assert project.status is ProjectStatus.PENDING_REVIEW
 
 
+def _detail_submit_form(page: str) -> tuple[str, str]:
+    """The project page's own "Submit for review" form: its action and its inner HTML."""
+    match = re.search(r'<form method="post" action="(/projects/[^"]+/submit)"[^>]*>(.*?)</form>', page, re.S)
+    assert match, "the project page has no submit form"
+    return match.group(1), match.group(2)
+
+
+def test_the_project_pages_submit_button_asks_for_the_criteria_box(
+    client: TestClient, login_as, db_session: Session
+) -> None:
+    login_as(MEMBER_SUB)
+    _seed_price(db_session)
+    project_url = _create(client).headers["location"]
+
+    page = client.get(project_url).text
+    action, form = _detail_submit_form(page)
+
+    assert action == f"{project_url}/submit"
+    assert re.search(r'<input type="checkbox" name="criteria_read" value="yes" required>', form)
+    assert "Ganymede Submission" in form
+
+
+def test_the_project_pages_submit_form_submits_once_the_box_is_ticked(
+    client: TestClient, login_as, db_session: Session
+) -> None:
+    login_as(MEMBER_SUB)
+    _seed_price(db_session)
+    response = _create(client)
+    project_url = response.headers["location"]
+    page = client.get(project_url).text
+    action, _ = _detail_submit_form(page)
+
+    # Without the box (a browser that skips `required`): refused, and the message names the box, not "answers".
+    unticked = client.post(action, data={"csrf_token": get_csrf_token(page)})
+    assert unticked.status_code == 422
+    assert "Read the Ganymede Submission Criteria, then tick the box." in unticked.text
+    assert "Some answers are missing" not in unticked.text
+
+    ticked = client.post(
+        action, data={"csrf_token": get_csrf_token(page), "criteria_read": "yes"}, follow_redirects=False
+    )
+    assert ticked.status_code == 303
+    project = project_service.get_project(db_session, project_id=_revision(db_session, response).project_id)
+    db_session.refresh(project)
+    assert project.status is ProjectStatus.PENDING_REVIEW
+
+
 def test_submitting_an_unfinished_application_marks_whats_missing(client: TestClient, login_as) -> None:
     login_as(MEMBER_SUB)
     csrf = get_csrf_token(client.get("/projects/new").text)
