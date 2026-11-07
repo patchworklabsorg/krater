@@ -66,12 +66,19 @@ def bootstrap_script(runner_sha256: str, *, box: bool = False) -> str:
 
 
 def launch_for(
-    job: ComputeJob, *, label: str, bid_price: Decimal | None, env: dict[str, str], runner_sha256: str
+    job: ComputeJob,
+    *,
+    label: str,
+    bid_price: Decimal | None,
+    env: dict[str, str],
+    runner_sha256: str,
+    image: str | None = None,
 ) -> Launch:
-    """What to start for a job or a box; the provider decides how (`ProviderInfo.create_request`)."""
+    """What to start for a job or a box; the provider decides how (`ProviderInfo.create_request`). `image` is the
+    reference to pull when it isn't `job.image` (the same image pinned by digest)."""
     box = job.kind is ComputeJobKind.BOX
     return Launch(
-        image=job.image,
+        image=image or job.image,
         disk_gb=job.disk_gb,
         label=label,
         bootstrap=bootstrap_script(runner_sha256, box=box),

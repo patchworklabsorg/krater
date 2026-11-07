@@ -28,6 +28,7 @@ from krater.models import (
     Project,
 )
 from krater.models.compute_job import ACTIVE_JOB_STATES
+from krater.registry import RegistryError, parse_reference
 from krater.services import (
     box_access,
     clearance,
@@ -78,6 +79,16 @@ def _project(session: Session, actor: Actor, project_id: uuid.UUID) -> Project:
     if not (_is_team(actor, project) or actor.is_reviewer or actor.is_admin):
         raise NotFound(f"No project with id {project_id}.")
     return project
+
+
+def _pinned_reference(image: str, digest: str | None) -> str | None:
+    """`image` at exactly `digest`, for the admin's Inspect button; None without a digest."""
+    if digest is None:
+        return None
+    try:
+        return parse_reference(image).pinned(digest)
+    except (RegistryError, ValueError):
+        return None
 
 
 def _job(session: Session, project: Project, job_id: uuid.UUID) -> ComputeJob:
@@ -355,6 +366,7 @@ def job_page(
             "my_access": next((grant for grant in grants if grant.admin_id == actor.user.id), None),
             "access_hours": box_access.ACCESS_HOURS,
             "is_admin": actor.is_admin,
+            "image_reference": _pinned_reference(job.image, live[-1].image_digest if live else None),
         },
     )
 
