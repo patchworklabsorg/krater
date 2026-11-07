@@ -355,31 +355,14 @@ img {
   color: var(--heading);
 }
 
+/* The Krater mark is the favicon itself (static/icon.svg), so the tab and the page show the same logo. The
+   four-square quilt mark is Weave's. */
 .brand-mark {
   display: block;
   flex: none;
   width: 28px;
   height: 28px;
-}
-
-.brand-mark .q1 {
-  fill: var(--quilt-1);
-}
-.brand-mark .q2 {
-  fill: var(--quilt-2);
-}
-.brand-mark .q3 {
-  fill: var(--quilt-3);
-}
-.brand-mark .q4 {
-  fill: var(--quilt-4);
-}
-
-.brand-mark .stitch {
-  fill: none;
-  stroke: var(--surface);
-  stroke-dasharray: 2 2;
-  stroke-width: 1;
+  border-radius: 6px;
 }
 
 .site-nav {
