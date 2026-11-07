@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from krater.db import get_session
 from krater.models import ApprovalPolicy, Project, ProjectStatus
-from krater.services import clearance, grants, people, quilt_events, site_settings
+from krater.services import clearance, funding_holds, grants, people, quilt_events, site_settings
 from krater.services import projects as project_service
 from krater.services.actor import Actor
 from krater.services.errors import InvalidState, ValidationFailed
@@ -41,6 +41,12 @@ def admin_overview(
     held = _held_grants(db_session, weave_client)
     all_projects = list(db_session.scalars(sa.select(Project).order_by(Project.created_at.desc())))
     summaries = [project_service.project_summary(db_session, project=project) for project in all_projects]
+    held_ids = grants.held_project_ids(db_session, [project.id for project in all_projects])
+    holds = {
+        project.id: label
+        for project in all_projects
+        if (label := funding_holds.approval_label(project, verification_held=project.id in held_ids))
+    }
 
     # The counts are of every project; the table shows the ones the search and status filter keep.
     counts = {each: 0 for each in ProjectStatus}
@@ -62,6 +68,7 @@ def admin_overview(
         "admin/index.html",
         {
             "held": held,
+            "holds": holds,
             "recent": admin_activity.recent_activity(db_session, weave_client),
             "by_status": by_status,
             "counts": counts,

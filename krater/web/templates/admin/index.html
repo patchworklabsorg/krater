@@ -117,7 +117,7 @@
             {% for summary in by_status[status] %}
               <tr>
                 <td class="cell-title"><a href="/projects/{{ summary.project.id }}">{{ summary.project.title or "Untitled proposal" }}</a></td>
-                <td>{{ macros.status_badge(status, summary.project.funding_hold) }}</td>
+                <td>{{ macros.status_badge(status, holds.get(summary.project.id)) }}</td>
                 <td class="num">{{ summary.ceiling_cents | dollars }}</td>
                 <td class="num">{{ summary.spend_cents | dollars }}</td>
                 <td class="num">{{ summary.remaining_cents | dollars }}</td>

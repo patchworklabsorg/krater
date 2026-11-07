@@ -606,6 +606,10 @@ def _build_detail_context(
         # A proposal or amendment approval may be held for funding (`krater.services.funding_holds`).
         "can_hold_funding": current_is_pending and current.kind is not RevisionKind.COMPLETION,
         "funding_hold_choices": [(hold.value, label) for hold, label in funding_holds.LABELS.items()],
+        # Its funding hold, else "Awaiting verification" while its budget is held or Weave hasn't cleared the team.
+        "approval_hold": funding_holds.approval_label(
+            project, verification_held=held_grant is not None or bool(verification_pending)
+        ),
         "funding_hold_explanation": funding_holds.EXPLANATIONS[project.funding_hold]
         if project.funding_hold is not None and project.status not in _TERMINAL_STATUSES
         else None,

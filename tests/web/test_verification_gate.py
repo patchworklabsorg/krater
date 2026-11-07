@@ -128,3 +128,48 @@ def test_a_member_weave_does_not_return_is_listed(
     page = client.get(f"/projects/{project.id}")
 
     assert "PWLMEMBERONE: not available in Weave (no access to Krater)" in page.text
+
+
+# -- "Awaiting verification" -------------------------------------------------------------------------------------
+
+
+def test_a_minor_submits_and_is_approved_and_every_list_says_awaiting_verification(
+    client: TestClient, login_as, create_project, db_session: Session, weave_stub: StubWeaveClient
+) -> None:
+    from datetime import UTC, datetime
+
+    from krater.services import budget, grants
+
+    minor = login_as(MINOR_SUB)
+    project = create_project(minor, title="Minor rover")
+    csrf = get_csrf_token(client.get(f"/projects/{project.id}").text)
+    submitted = client.post(
+        f"/projects/{project.id}/submit", data={"csrf_token": csrf, "criteria_read": "yes"}, follow_redirects=False
+    )
+    assert submitted.status_code == 303  # no guardian needed to submit
+    login_as(REVIEWER_SUB)
+    _post_decision(client, project, "review", decision="approve")
+    db_session.refresh(project)
+    assert project.status is ProjectStatus.APPROVED
+    assert budget.ceiling_cents(db_session, project) == 0  # no funding yet
+
+    assert "Approved · awaiting verification" in client.get(f"/projects/{project.id}").text
+    login_as(ADMIN_SUB)
+    assert "Approved · awaiting verification" in client.get("/admin").text
+    login_as(MINOR_SUB)
+    assert "Approved · awaiting verification" in client.get("/").text
+
+    weave_stub.set_guardian_verified(MINOR_SUB, True)
+    assert grants.release_ready(db_session, weave_stub, now=datetime.now(UTC)) == 1
+    assert "Approved · awaiting verification" not in client.get("/").text
+    assert "awaiting verification" not in client.get(f"/projects/{project.id}").text
+
+
+def test_a_verified_teams_approval_has_no_flag(
+    client: TestClient, login_as, approved_project, db_session: Session
+) -> None:
+    project = approved_project(login_as(MEMBER_SUB), login_as(REVIEWER_SUB))
+
+    page = client.get(f"/projects/{project.id}").text
+
+    assert "awaiting verification" not in page

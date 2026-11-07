@@ -90,6 +90,21 @@ def all_pending(session: Session) -> list[HeldGrant]:
     )
 
 
+def held_project_ids(session: Session, project_ids: list) -> set:
+    """Which of `project_ids` have a pending hold: one query, for the lists that badge them."""
+    if not project_ids:
+        return set()
+    return set(
+        session.scalars(
+            sa.select(HeldGrant.project_id).where(
+                HeldGrant.project_id.in_(project_ids),
+                HeldGrant.released_at.is_(None),
+                HeldGrant.cancelled_at.is_(None),
+            )
+        )
+    )
+
+
 def require_none_pending(session: Session, project: Project) -> None:
     """Refuse a budget change while a grant is held: the hold's amount was decided against today's ceiling."""
     if pending(session, project) is not None:
@@ -257,6 +272,7 @@ __all__ = [
     "all_pending",
     "cancel_pending",
     "grant",
+    "held_project_ids",
     "pending",
     "release_project",
     "release_ready",

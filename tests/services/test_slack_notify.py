@@ -779,3 +779,28 @@ def test_someone_back_on_the_team_is_not_taken_out(
     )
 
     assert not removed and "U_TEAMMATE" in slack_client.channels[channel_id]["members"]
+
+
+def test_notify_decision_says_an_unverified_teams_approval_is_awaiting_verification(
+    db_session: Session, member: Actor, reviewer: Actor, weave: StubWeaveClient
+) -> None:
+    weave.set_minor(member.user.weave_sub, True)
+    project = new_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=5000)
+    project = projects.submit(db_session, member, project=project, criteria_read=True)
+    revision = project.current_revision
+    slack_client = FakeSlackClient()
+    slack_notify.notify_revision_submitted(db_session, slack_client, weave, revision=revision, feed_channel_id=None)
+    projects.record_review(
+        db_session,
+        reviewer,
+        revision=revision,
+        decision=ReviewDecision.APPROVE,
+        source=ReviewSource.WEB,
+        weave_client=weave,
+    )
+    db_session.refresh(revision)
+
+    slack_notify.notify_decision(db_session, slack_client, revision=revision)
+
+    updated = slack_client.messages[(revision.slack_message_channel_id, revision.slack_message_ts)]
+    assert "Approved · awaiting verification" in updated["text"]
