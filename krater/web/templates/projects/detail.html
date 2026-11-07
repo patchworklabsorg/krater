@@ -53,10 +53,18 @@
   </p>
 {% endif %}
 
-{% if verification_pending %}
+{% if held_grant and verification_pending == [] %}
+  <p class="guardian-banner" role="status">Every team member is now verified in Weave. The held
+    {{ held_grant.amount_cents | dollars }} of budget is released within a few minutes.</p>
+{% elif verification_pending %}
   <div class="guardian-banner" role="status">
-    <p><strong>This project's compute is held until every team member is verified in Weave.</strong> It can still be
-      reviewed and approved. Waiting on:</p>
+    {% if held_grant %}
+      <p><strong>{{ held_grant.amount_cents | dollars }} of this project's budget is held until every team member is
+        verified in Weave.</strong> Until then the budget isn't added and no compute runs. Waiting on:</p>
+    {% else %}
+      <p><strong>This project's budget and compute are held until every team member is verified in Weave.</strong> It
+        can still be reviewed and approved. Waiting on:</p>
+    {% endif %}
     <ul>
       {% for member in verification_pending %}
         <li>{{ member.label }}: {{ member.reason }}</li>
@@ -68,8 +76,11 @@
       who is not available in Weave needs their access to Krater back in Weave.</p>
   </div>
 {% elif verification_pending is none %}
-  <p class="guardian-banner">Krater couldn't reach Weave to check that the team is verified. Krater checks again
-    before it starts any compute.</p>
+  <p class="guardian-banner">
+    {% if held_grant %}{{ held_grant.amount_cents | dollars }} of this project's budget is held until every team
+      member is verified in Weave.{% endif %}
+    Krater couldn't reach Weave to check that the team is verified. Krater checks again before it adds any budget or
+    starts any compute.</p>
 {% endif %}
 
 {% if show_residency %}

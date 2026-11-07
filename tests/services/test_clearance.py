@@ -1,6 +1,6 @@
-"""Verification before compute (`krater.services.clearance`): a project is approved and granted its budget whatever
-the team's verification, and its compute waits until Weave clears every team member: ID verification, and a verified
-guardian for a member under 18 (docs/SPEC.md "Verification before compute")."""
+"""Who Weave clears (`krater.services.clearance`): a project's compute waits until Weave clears every team member,
+ID verification and a verified guardian for a member under 18 (docs/SPEC.md "Verification before funding"). Its
+budget waits too: tests/services/test_grants.py."""
 
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ import logging
 import pytest
 from sqlalchemy.orm import Session
 
-from krater.models import ComputeJobState, ProjectStatus, ReviewDecision, ReviewSource
-from krater.services import budget, clearance, compute_jobs, guardian, projects
+from krater.models import ComputeJobState, ReviewDecision, ReviewSource
+from krater.services import clearance, compute_jobs, grants, guardian, projects
 from krater.services.actor import GROUP_MEMBER, Actor
 from krater.services.compute_jobs import JobSpec
 from krater.services.errors import ClearanceCheckUnavailable, VerificationRequired
@@ -95,30 +95,6 @@ def _submit_job(db_session: Session, actor: Actor, project, weave_client):
     )
 
 
-# -- Approval no longer waits ---------------------------------------------------------------------------
-
-
-def test_an_unverified_team_is_approved_and_granted_its_budget(
-    db_session: Session, unverified: Actor, minor: Actor, reviewer: Actor, weave: StubWeaveClient
-) -> None:
-    project = _approved(db_session, unverified, reviewer, weave, builders=[minor])
-
-    assert project.status is ProjectStatus.APPROVED
-    assert budget.ceiling_cents(db_session, project) == 10_000
-
-
-def test_an_admin_can_add_budget_before_the_team_is_verified(
-    db_session: Session, unverified: Actor, reviewer: Actor, admin: Actor, weave: StubWeaveClient
-) -> None:
-    project = _approved(db_session, unverified, reviewer, weave)
-
-    projects.admin_adjust_budget(
-        db_session, admin, project=project, amount_cents=5_000, reason="More.", weave_client=_DownWeave()
-    )
-
-    assert budget.ceiling_cents(db_session, project) == 15_000
-
-
 # -- Compute waits ---------------------------------------------------------------------------------------
 
 
@@ -133,6 +109,7 @@ def test_a_minor_without_a_verified_guardian_holds_the_compute(
     assert exc_info.value.members == [(f"Milo Minor ({minor.user.weave_sub})", guardian.REASON_NO_VERIFIED_GUARDIAN)]
     assert "compute is held until every team member is cleared in Weave" in str(exc_info.value)
     weave.set_guardian_verified(minor.user.weave_sub, True)
+    grants.release_ready(db_session, weave, now=NOW)  # its budget was held too (tests/services/test_grants.py)
     assert _submit_job(db_session, minor, project, weave).state is ComputeJobState.QUEUED
 
 

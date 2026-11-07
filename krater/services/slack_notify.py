@@ -37,6 +37,7 @@ from krater.services import teams
 from krater.services.actor import GROUP_REVIEWER
 from krater.services.budget_alerts import AUDIT_BUDGET_TEARDOWN, AUDIT_BUDGET_WARNING
 from krater.services.compute_jobs import AUDIT_BOX_DESTROY_SOON, AUDIT_BOX_DESTROYED, AUDIT_BOX_STOPPED
+from krater.services.grants import AUDIT_GRANT_HELD, AUDIT_GRANT_RELEASED
 from krater.services.slack_membership import slack_id_for
 from krater.slack.client import SlackClient
 from krater.slack.errors import SlackError, SlackRequestFailedError
@@ -382,7 +383,19 @@ def sync_reviewer_invites(session: Session, slack_client: SlackClient, weave_cli
 
 def _budget_event_message(event: AuditEvent) -> tuple[list[dict], str]:
     payload = event.payload or {}
-    if event.action == AUDIT_BUDGET_TEARDOWN:
+    if event.action == AUDIT_GRANT_HELD:
+        link = f"{get_settings().base_url.rstrip('/')}/projects/{event.project_id}"
+        text = (
+            f":hourglass_flowing_sand: *Budget held*: {_format_cents(payload.get('amount_cents', 0))} of budget is "
+            "held until every team member is verified in Weave (ID verification, and a verified guardian for anyone "
+            f"under 18). <{link}|See who it's waiting on>."
+        )
+    elif event.action == AUDIT_GRANT_RELEASED:
+        text = (
+            ":white_check_mark: *Budget released*: every team member is verified in Weave, so the held "
+            f"{_format_cents(payload.get('amount_cents', 0))} is now this project's to use."
+        )
+    elif event.action == AUDIT_BUDGET_TEARDOWN:
         text = (
             ":octagonal_sign: *Budget teardown*: this project's machines have been "
             f"torn down. Ceiling: {_format_cents(payload.get('ceiling_cents', 0))}, "
@@ -404,8 +417,9 @@ def _budget_event_message(event: AuditEvent) -> tuple[list[dict], str]:
 
 
 def sync_budget_notifications(session: Session, slack_client: SlackClient) -> None:
-    """Post every not-yet-posted `budget_warning`/`budget_teardown` `AuditEvent` to its project's
-    channel, and record it in `SlackNotification` so it's never posted twice.
+    """Post every not-yet-posted `budget_warning`/`budget_teardown` `AuditEvent`, and every held or released
+    budget grant (`krater.services.grants`), to its project's channel, and record it in `SlackNotification` so it's
+    never posted twice.
 
     These events are written by `krater.services.budget_alerts` with `actor=None` (a
     system process, not a request), so nothing calls this synchronously the way `notify_decision`/
@@ -417,7 +431,9 @@ def sync_budget_notifications(session: Session, slack_client: SlackClient) -> No
     stmt = (
         sa.select(AuditEvent)
         .where(
-            AuditEvent.action.in_((AUDIT_BUDGET_WARNING, AUDIT_BUDGET_TEARDOWN)),
+            AuditEvent.action.in_(
+                (AUDIT_BUDGET_WARNING, AUDIT_BUDGET_TEARDOWN, AUDIT_GRANT_HELD, AUDIT_GRANT_RELEASED)
+            ),
             AuditEvent.project_id.is_not(None),
             AuditEvent.id.not_in(already_posted),
         )

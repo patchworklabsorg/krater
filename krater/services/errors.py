@@ -45,7 +45,7 @@ class VerificationRequired(InvalidState):
     member under 18, or Weave's directory doesn't return them).
 
     `members` holds `(label, reason)` for each such member, so the team, reviewers and admins see who holds it and
-    why (docs/SPEC.md "Verification before compute"). `joining` is set when one person can't join a team whose project
+    why (docs/SPEC.md "Verification before funding"). `joining` is set when one person can't join a team whose project
     already has budget."""
 
     def __init__(self, members: list[tuple[str, str]], *, joining: bool = False) -> None:

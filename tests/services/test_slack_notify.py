@@ -7,7 +7,7 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from krater.models import AuditEvent, ProjectStatus, ReviewDecision, ReviewSource, RevisionOutcome
-from krater.services import projects, slack_notify
+from krater.services import grants, projects, slack_notify
 from krater.services.actor import GROUP_MEMBER, GROUP_REVIEWER, Actor
 from krater.slack.errors import SlackRequestFailedError
 from krater.slack.fake import FakeSlackClient
@@ -396,6 +396,24 @@ def test_sync_budget_notifications_posts_a_warning_once(db_session: Session, mem
     # A second reconcile pass must not post it again.
     slack_notify.sync_budget_notifications(db_session, slack_client)
     assert len(slack_client.messages) == 1
+
+
+def test_a_held_and_a_released_grant_are_posted_to_the_channel(db_session: Session, member: Actor) -> None:
+    project = new_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=5000)
+    slack_client = FakeSlackClient()
+    project.slack_channel_id = slack_client.create_channel("ganymede-rover-test")
+    for action in (grants.AUDIT_GRANT_HELD, grants.AUDIT_GRANT_RELEASED):
+        db_session.add(AuditEvent(actor_id=None, action=action, project_id=project.id, payload={"amount_cents": 5000}))
+        db_session.flush()
+
+    slack_notify.sync_budget_notifications(db_session, slack_client)
+
+    texts = sorted(message["text"] for message in slack_client.messages.values())
+    assert len(texts) == 2
+    held = next(text for text in texts if "Budget held" in text)
+    released = next(text for text in texts if "Budget released" in text)
+    assert "$50.00" in held and f"/projects/{project.id}" in held
+    assert "$50.00" in released
 
 
 def test_the_final_budget_warning_tells_members_to_save_their_work(db_session: Session, member: Actor) -> None:

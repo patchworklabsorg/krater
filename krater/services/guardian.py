@@ -1,4 +1,4 @@
-"""The guardian check: the safeguard for team members under 18 (docs/SPEC.md "Verification before compute").
+"""The guardian check: the safeguard for team members under 18 (docs/SPEC.md "Verification before funding").
 
 Weave asks a parent or guardian to consent by email for a member under 18. An email link proves control of an
 inbox, not parenthood. So a Weave admin also records a stronger check in Weave: a signed guardian form plus a

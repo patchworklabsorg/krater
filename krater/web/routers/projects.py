@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from krater.config import get_settings
 from krater.db import get_session
 from krater.models import (
+    HeldGrant,
     Project,
     ProjectRevision,
     ProjectStatus,
@@ -30,7 +31,7 @@ from krater.models import (
     User,
 )
 from krater.services import budget as budget_service
-from krater.services import clearance, demographics, people, residency, slack_membership, teams
+from krater.services import clearance, demographics, grants, people, residency, slack_membership, teams
 from krater.services import projects as project_service
 from krater.services import screenshots as screenshot_service
 from krater.services import users as user_service
@@ -499,14 +500,16 @@ def _build_detail_context(
 
     image_url = primary_image_url(get_object_store(), current)
 
-    # The project's compute is held until every team member is cleared in Weave: ID verification, and a verified
-    # guardian for a member under 18 (docs/SPEC.md "Verification before compute"). A finished project runs nothing,
-    # so it doesn't ask. `None` means Weave couldn't say right now; starting compute checks Weave fresh.
+    # The project's budget and compute are held until every team member is cleared in Weave: ID verification, and a
+    # verified guardian for a member under 18 (docs/SPEC.md "Verification before funding"). A finished project runs
+    # nothing, so it doesn't ask. `None` means Weave couldn't say right now; releasing a grant and starting compute
+    # check Weave fresh. `held_grant` is the budget an approval granted that is waiting for that.
     verification_pending = (
         clearance.pending_for_display(session, weave_client, project)
         if project.status not in _TERMINAL_STATUSES
         else []
     )
+    held_grant = grants.pending(session, project)
 
     # Only verified US residents may use OSPool capacity (`krater.services.residency`). Reviewers and admins see
     # it, to pick the projects to send to OSPool. `None` means Weave couldn't say right now.
@@ -545,6 +548,7 @@ def _build_detail_context(
         "budget_flag": budget_flag,
         "primary_image_url": image_url,
         "verification_pending": verification_pending,
+        "held_grant": held_grant,
         "weave_verification_url": weave_links.verification_url(),
         "team_residency": team_residency,
         "show_residency": actor.is_reviewer or actor.is_admin,
@@ -1021,7 +1025,7 @@ def admin_adjust_budget(
         return templates.TemplateResponse(request, "projects/detail.html", context, status_code=422)
 
     try:
-        project_service.admin_adjust_budget(
+        result = project_service.admin_adjust_budget(
             db_session, actor, project=project, amount_cents=amount_cents, reason=reason, weave_client=weave_client
         )
     except (ValidationFailed, NotAllowed) as exc:
@@ -1052,7 +1056,12 @@ def admin_adjust_budget(
             extra=f"Amount: {amount_cents / 100:+.2f}",
         )
 
-    return _success_redirect(db_session, request, project_id, "Budget adjusted.", after_commit=_notify)
+    message = (
+        "Budget increase held until every team member is verified in Weave."
+        if isinstance(result, HeldGrant)
+        else "Budget adjusted."
+    )
+    return _success_redirect(db_session, request, project_id, message, after_commit=_notify)
 
 
 @router.post("/projects/{project_id}/admin-reclaim", dependencies=[Depends(verify_csrf_token)])

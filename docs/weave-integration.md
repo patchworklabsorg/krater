@@ -15,9 +15,9 @@ Krater depends on this Weave work. All of it is merged on Weave `main`:
 - app-defined roles: [patchworklabsorg/weave#165](https://github.com/patchworklabsorg/weave/pull/165);
 - the directory API: [patchworklabsorg/weave#166](https://github.com/patchworklabsorg/weave/pull/166).
 
-Verification before compute reads the directory fields `verification_status`, `minor` and `guardian_verified` (see
-"Verification before compute" below). Weave `main` sends all three. A Weave without `verification_status` holds every
-project's compute. The demographics gate reads the field
+Verification before funding reads the directory fields `verification_status`, `minor` and `guardian_verified` (see
+"Verification before funding" below). Weave `main` sends all three. A Weave without `verification_status` holds every
+project's budget and compute. The demographics gate reads the field
 `demographics_answered` and links to Weave's page `/profile/demographics`. Krater also works with a Weave that
 doesn't send that field yet (see "Demographics gate" below).
 
@@ -166,15 +166,16 @@ navigation only.
 The gate prefers Weave's `slack_member` from the fresh directory record. When Weave doesn't say, Krater asks Slack
 (see [SPEC.md](SPEC.md#roles--authentication)).
 
-### Verification before compute
+### Verification before funding
 
 Weave owns ID verification and the guardian check for members under 18. Krater stores no copy. A project is
-approved and granted its budget whatever its team's verification; its compute waits until Weave clears every team
-member (docs/SPEC.md "Verification before compute").
+approved whatever its team's verification; the budget it grants and its compute wait until Weave clears every team
+member (docs/SPEC.md "Verification before funding").
 
-`krater.services.clearance.require_team_cleared` asks the directory by `sub`, with `fresh=True`, for each team member
-(the lead and accepted members) when a member queues a job or resumes a box, and once per project per scheduler pass
-before renting for a queued job. `require_member_cleared` asks about one person joining a team whose project already
+`krater.services.clearance.members_not_cleared` asks the directory by `sub`, with `fresh=True`, for each team member
+(the lead and accepted members): when budget is granted and once per held grant per run of the `grant_release` task
+(`krater.services.grants`), when a member queues a job or resumes a box (`require_team_cleared`), and once per project
+per scheduler pass before renting for a queued job. `require_member_cleared` asks about one person joining a team whose project already
 has budget.
 
 | Directory record | Krater's answer |

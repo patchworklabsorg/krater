@@ -23,7 +23,7 @@ from krater.db import get_sessionmaker
 from krater.models import Project, ProjectRevision
 from krater.pricing.catalog import CatalogError, get_price_catalog
 from krater.quilt import sender as quilt_sender
-from krater.services import ops_alerts, people, price_history, slack_notify, slack_reviews
+from krater.services import grants, ops_alerts, people, price_history, slack_notify, slack_reviews
 from krater.services.pricing import refresh_prices
 from krater.slack import SlackError, get_slack_client
 from krater.storage import StorageError, get_compute_store
@@ -283,6 +283,33 @@ def compute_storage_cleanup(timestamp: int) -> None:
     except StorageError as exc:
         logger.exception("krater.compute_storage_cleanup failed")
         _report_failure("compute_storage_cleanup", _failure(exc))
+    finally:
+        session.close()
+
+
+# --------------------------------------------------------------------------------------------------
+# Budget grants held for the team's verification in Weave (`krater.services.grants`): written to the
+# ledger, and so sent to Quilt, once Weave clears every team member. Runs whether or not compute is on.
+# --------------------------------------------------------------------------------------------------
+
+GRANT_RELEASE_LOCK = "grant_release"
+
+
+@app.periodic(cron="*/5 * * * *")
+@app.task(name="grant_release", lock=GRANT_RELEASE_LOCK, queueing_lock=GRANT_RELEASE_LOCK)
+def grant_release(timestamp: int) -> None:
+    """Every five minutes: release the held budget grants whose teams Weave now clears."""
+    now = max(datetime.now(UTC), datetime.fromtimestamp(timestamp, tz=UTC))
+    session = get_sessionmaker()()
+    try:
+        released = grants.release_ready(session, get_weave_client(), now=now)
+        if released:
+            logger.info("krater grant_release: released %d held grants", released)
+            kick_quilt_delivery()
+    except Exception as exc:
+        logger.exception("krater.grant_release failed")
+        session.rollback()
+        _report_failure("grant_release", _failure(exc))
     finally:
         session.close()
 

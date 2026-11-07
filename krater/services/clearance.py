@@ -1,4 +1,4 @@
-"""Clearance: who may use a project's compute (docs/SPEC.md "Verification before compute").
+"""Clearance: who may use a project's compute (docs/SPEC.md "Verification before funding").
 
 A project can be submitted and approved, and its budget is granted on approval, before anyone is verified. Its
 compute is held until every team member is cleared in Weave. Krater stores none of what Weave checked.

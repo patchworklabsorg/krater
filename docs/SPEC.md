@@ -243,9 +243,9 @@ amendment or a reopened draft starts with every answer of the revision it follow
    - rejects self-review (anyone on the team, or invited to it);
    - records the Review against the current revision;
    - asks `ApprovalPolicyService` whether the policy is now satisfied.
-4. **Approve.** When the policy is satisfied, the revision is approved, a `BudgetEntry(initial_approval)` is written
-   and the project moves to `approved`, whether or not the team is verified yet. Its team can run compute once Weave
-   has cleared every member (see "Verification before compute").
+4. **Approve.** When the policy is satisfied, the revision is approved and the project moves to `approved`, whether
+   or not the team is verified yet. Its `BudgetEntry(initial_approval)` is written then if Weave clears every team
+   member, and is held until it does otherwise (see "Verification before funding").
 5. **Reject.** A reason is required. The project moves to `changes_requested`, and the submitter edits and resubmits
    (step 2, same project, new revision).
 6. **Amend.** An `approved` project can have its scope or budget amended. This creates an `amendment` revision reviewed
@@ -372,12 +372,12 @@ Uploads use presigned URLs, and only objects from approved completion revisions 
   spend, through Quilt's patch API. The events go through an outbox table in the same transaction as the change.
   See [quilt-integration.md](quilt-integration.md).
 
-## Verification before compute
+## Verification before funding
 
-Changed Nov 6, 2026. A project can be submitted, reviewed and approved, and its budget is granted on approval, before
-anyone on the team is verified. What waits is the project's compute: Krater starts nothing for it until Weave has
-cleared every team member. Weave owns both checks, so every Patchwork Labs app can use them, and Krater stores none
-of them (`krater.services.clearance`).
+Changed Nov 6, 2026. A project can be submitted, reviewed and approved before anyone on the team is verified. What
+waits is everything that funds it: the budget its approval grants, and its compute. Krater adds no budget and starts
+nothing for it until Weave has cleared every team member. Weave owns both checks, so every Patchwork Labs app can use
+them, and Krater stores none of them (`krater.services.clearance`, `krater.services.grants`).
 
 - **ID verification.** Weave's identity verification (a document, reviewed by Weave's identity team). Weave's
   directory sends `verification_status`: `needs_submission`, `pending`, `verified` or `ineligible`. Only `verified`
@@ -389,28 +389,39 @@ of them (`krater.services.clearance`).
 - **No directory record.** Weave's directory answers 404 for anyone the Krater app may not serve, a minor whose
   guardian consent is missing or was revoked included. A 404 doesn't clear, and the member is listed as "not
   available in Weave (no access to Krater)".
-- **The team** is the project's lead plus its accepted members, as it stands when compute is asked for.
-- **What waits.**
+- **The team** is the project's lead plus its accepted members, as it stands when the budget is released or compute
+  is asked for.
+- **The budget is held.** A proposal approval, an amendment approval that raises the ceiling, and an admin increase
+  write their `BudgetEntry` at once only if Weave clears the team right then. Otherwise the grant is held (a
+  `HeldGrant`): the approval goes through, but the ledger, and so Quilt's `budget.committed`, has nothing yet, and
+  the project's ceiling stays where it was ($0 for a new project). A worker task asks Weave every five minutes and
+  writes the held entry, with the approver as its actor, once every member is cleared. The project page shows the
+  held amount, and the project's Slack channel hears when it's held and when it's released.
+  - **One at a time.** While a grant is held, nothing else may change the project's budget: amendments can't be
+    started or approved, and admins can't adjust or reclaim it. The amount decided at approval stays right.
+  - **Cancelled** when the project is withdrawn or completed first. Nothing was granted, so there's nothing to give
+    back.
+  - A cut (an amendment that lowers the ceiling, an admin cut, a reclaim) grants nothing, so it never waits.
+- **What else waits.**
   - Queueing a job or a box: web, API and CLI all go through `compute_jobs.submit_job`.
   - Resuming a stopped box.
   - The scheduler renting a machine for a queued job. A job queued before a member's verification lapsed waits in
     the queue, with the reason on its page, and spends none of the provider's search quota.
   - Someone joining a team whose project already has budget, since they could reach a machine that's running.
-- **What doesn't.** Submitting, reviewing, approving and amending, admin budget changes, and Quilt's
-  `budget.committed`. A machine that's already running isn't stopped when a member's verification lapses, and the
+- **What doesn't.** Submitting, reviewing and approving. A machine that's already running isn't stopped when a member's verification lapses, and the
   scheduler still starts a machine that stopped itself after losing contact with Krater: both were rented while the
   team was cleared.
 - **When.** Krater asks Weave's directory fresh at each of those points, the same way it checks roles. The scheduler
-  asks once per project per pass.
-- **No override.** This is a safety rule. An admin can't clear a member in Krater, and Krater has no setting to turn
-  it off.
-- **Weave down.** Nothing starts, with "try again". Krater never guesses.
+  asks once per project per pass, and the release task once per held grant per run.
+- **No override.** This is a safety rule. An admin can't clear a member or release a held grant in Krater, and
+  Krater has no setting to turn it off.
+- **Weave down.** A grant decided then is held, and nothing starts, with "try again". Krater never guesses.
 - **The project page and the new-job page** list the members Weave hasn't cleared and the reason for each, and link
   to Weave's verification page.
 
 ```mermaid
 flowchart TD
-    A[Queue a job, resume a box, rent for a queued job, or join a funded team] --> B[Ask Weave's directory, fresh, for each team member]
+    A[Grant budget, queue a job, resume a box, rent for a queued job, or join a funded team] --> B[Ask Weave's directory, fresh, for each team member]
     B -->|Weave can't be reached| X[Hold: try again]
     B -->|404, no record| N[Hold, and list the member: not available in Weave]
     B --> V{verification_status: verified?}
@@ -422,7 +433,7 @@ flowchart TD
     D -->|yes| OK
     D -->|no or missing| R[Hold, and list the member]
     OK --> E{Every member clear?}
-    E -->|yes| G[Start]
+    E -->|yes| G[Write the budget entry, or start]
 ```
 
 Until Nov 6, 2026 the guardian check blocked the approval itself (Oct 12, 2026), and ID verification wasn't checked.
@@ -441,8 +452,8 @@ can't decide it, add to its budget or raise its hourly cap, so an admin can neve
 else signing off. Another
 admin, or the normal review, has to do it. Cutting or reclaiming its budget and withdrawing it are still allowed.
 
-No override clears a team member for compute (see "Verification before compute"): an admin approval or budget
-increase grants the budget, and the compute still waits for Weave.
+No override clears a team member (see "Verification before funding"): the budget an admin approval or increase
+grants is held, and the compute waits, until Weave clears the team.
 
 Every override writes an `AuditEvent` with who, what, when and a required reason. Budget changes also write a
 `BudgetEntry`. Overrides are posted in the project's channel so reviewers can see them.
