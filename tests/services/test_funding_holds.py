@@ -273,3 +273,16 @@ def test_an_amendment_draft_asks_for_the_criteria_again(db_session, member, revi
     with pytest.raises(ValidationFailed) as excinfo:
         projects.submit(db_session, member, project=project)
     assert set(excinfo.value.errors) == {"criteria_read"}
+
+
+def test_the_status_flag_prefers_the_funding_hold_and_only_shows_once_approved(
+    db_session, member, reviewer, weave
+) -> None:
+    project = _submitted(db_session, member)
+    assert funding_holds.approval_label(project, verification_held=True) is None  # not approved yet
+
+    project = _review(db_session, reviewer, project, weave)
+    assert funding_holds.approval_label(project, verification_held=False) is None
+    assert funding_holds.approval_label(project, verification_held=True) == "Awaiting verification"
+    project.funding_hold = FUNDING
+    assert funding_holds.approval_label(project, verification_held=True) == "Awaiting funding"

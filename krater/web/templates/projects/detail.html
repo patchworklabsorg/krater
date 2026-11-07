@@ -19,7 +19,7 @@
 <div class="page-head">
   <div>
     <a class="back-link" href="/">&larr; My projects</a>
-    <h1>{{ project.title or "Untitled proposal" }} {{ macros.status_badge(project.status, project.funding_hold) }}</h1>
+    <h1>{{ project.title or "Untitled proposal" }} {{ macros.status_badge(project.status, approval_hold) }}</h1>
     {% if project.repo_url %}
       <p class="page-subtitle project-link"><a href="{{ project.repo_url }}">{{ project.repo_url }}</a></p>
     {% endif %}

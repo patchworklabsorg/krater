@@ -413,6 +413,11 @@ them, and Krater stores none of them (`krater.services.clearance`, `krater.servi
   held amount, and the project's Slack channel hears when it's held and when it's released. Each team member it waits
   on also gets a Slack DM from the app with a link to Weave's verification page (the same words for everyone: Krater
   doesn't keep why someone isn't cleared). Admins see every held grant at the top of `/admin`.
+  - **"Awaiting verification."** While its budget is held for verification, or Weave hasn't cleared its team, an
+    approved project's status reads *Approved · awaiting verification* on its page, the home page, `/admin`, Slack's
+    decision message and the funder packet. Nobody sets it: it goes once Weave clears the team. A funding hold
+    (see "Funding holds") shows instead while one is set. Nothing about verification stops a member submitting or a
+    reviewer approving; under-18s without guardian consent, and members not yet ID-verified, can do both.
   - **One at a time.** While a grant is held, nothing else may change the project's budget: amendments can't be
     started or approved, and admins can't adjust or reclaim it. The amount decided at approval stays right.
   - **Cancelled** when the project is withdrawn or completed first. Nothing was granted, so there's nothing to give

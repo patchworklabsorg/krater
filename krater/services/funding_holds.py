@@ -35,6 +35,8 @@ EXPLANATIONS = {
     FundingHold.AWAITING_FUNDING: "Approved, and waiting on Patchwork to fund it.",
     FundingHold.AWAITING_THIRD_PARTY_REVIEW: "Approved, and waiting on a review by a third party.",
 }
+#: An approved project whose team Weave hasn't cleared: shown, never set. Weave decides it, not an admin.
+AWAITING_VERIFICATION = "Awaiting verification"
 AUDIT_SET = "admin_set_funding_hold"
 AUDIT_CLEAR = "admin_clear_funding_hold"
 #: Statuses a hold can be set on: approved, and still open.
@@ -64,6 +66,17 @@ def parse(value: str | None) -> FundingHold | None:
         return FundingHold(value)
     except ValueError:
         raise ValidationFailed({"funding_hold": "Choose one of the holds."}) from None
+
+
+def approval_label(project: Project, *, verification_held: bool) -> str | None:
+    """What an approved project waits on, for its status badge: its funding hold, else "Awaiting verification" when
+    `verification_held` (its budget is held for the team's verification, or Weave hasn't cleared the team), else
+    `None`. `None` too for a project that isn't approved and open."""
+    if project.status not in HOLDABLE_STATUSES:
+        return None
+    if project.funding_hold is not None:
+        return LABELS[project.funding_hold]
+    return AWAITING_VERIFICATION if verification_held else None
 
 
 def require_not_held(project: Project) -> None:
@@ -121,7 +134,9 @@ def describe_change(previous: FundingHold | None, hold: FundingHold | None) -> s
 
 
 __all__ = [
+    "AWAITING_VERIFICATION",
     "HOLDABLE_STATUSES",
+    "approval_label",
     "AUDIT_CLEAR",
     "AUDIT_SET",
     "EXPLANATIONS",

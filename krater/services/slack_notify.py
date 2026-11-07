@@ -33,7 +33,7 @@ from krater.models import (
     SlackNotification,
     User,
 )
-from krater.services import funding_holds, teams
+from krater.services import funding_holds, grants, teams
 from krater.services.actor import GROUP_REVIEWER
 from krater.services.budget_alerts import AUDIT_BUDGET_TEARDOWN, AUDIT_BUDGET_WARNING
 from krater.services.compute_jobs import AUDIT_BOX_DESTROY_SOON, AUDIT_BOX_DESTROYED, AUDIT_BOX_STOPPED
@@ -265,12 +265,11 @@ def notify_revision_submitted(
         )
 
 
-def _outcome_label(revision: ProjectRevision) -> str:
+def _outcome_label(revision: ProjectRevision, hold: str | None = None) -> str:
     if revision.outcome is RevisionOutcome.APPROVED:
-        hold = revision.project.funding_hold
         if hold is not None and revision.kind is not RevisionKind.COMPLETION:
-            # Approved, but its budget waits for an admin to clear the hold (`krater.services.funding_holds`).
-            return f":white_check_mark: Approved · {funding_holds.LABELS[hold].lower()}"
+            # Approved, but its budget waits: on an admin clearing a funding hold, or on Weave clearing the team.
+            return f":white_check_mark: Approved · {hold.lower()}"
         return ":white_check_mark: Approved"
     if revision.outcome is RevisionOutcome.REJECTED:
         return ":x: Rejected"
@@ -298,6 +297,7 @@ def notify_decision(session: Session, slack_client: SlackClient, *, revision: Pr
 
     project = revision.project
     stage = _stage_label(revision)
+    hold = funding_holds.approval_label(project, verification_held=grants.pending(session, project) is not None)
     blocks = [
         {
             "type": "section",
@@ -306,13 +306,13 @@ def notify_decision(session: Session, slack_client: SlackClient, *, revision: Pr
                 "text": f"*{stage}: {_escape_mrkdwn(project.title)}* (revision {revision.number})",
             },
         },
-        {"type": "section", "text": {"type": "mrkdwn", "text": f"*Outcome:* {_outcome_label(revision)}"}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": f"*Outcome:* {_outcome_label(revision, hold)}"}},
     ]
     reason = _latest_reject_reason(revision)
     if reason:
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"*Reason:* {_escape_mrkdwn(reason)}"}})
     # Top-level fallback text isn't parsed as mrkdwn -- the raw title/reason are fine here.
-    text = f"{stage} for {project.title}: {_outcome_label(revision)}"
+    text = f"{stage} for {project.title}: {_outcome_label(revision, hold)}"
 
     slack_client.update_message(revision.slack_message_channel_id, revision.slack_message_ts, blocks=blocks, text=text)
 
