@@ -15,8 +15,7 @@
 
 <p class="notice">
   OSPool takes only teams whose every member is a verified US resident; each project says whether its team is. The
-  PDF holds each ticked project's title, summary, compute use, status, amounts requested and granted, GPU estimate,
-  team names and that residency line. {% if names_full %}Members under 18 are named in full, as the gallery setting
+  PDF holds each ticked project's title and the fields you tick below. {% if names_full %}Members under 18 are named in full, as the gallery setting
   says.{% else %}Members under 18 are named as the gallery setting on the admin page says.{% endif %} Never emails,
   Patchwork IDs, demographics or secrets. Each download asks Weave again, and is recorded in the audit log.
 </p>
@@ -63,9 +62,24 @@
         {% endfor %}
       </ul>
     </section>
+    <section class="card" aria-labelledby="export-fields">
+      <div class="field">
+        <fieldset class="choice-list">
+          <legend class="field-label" id="export-fields">What to include about each project</legend>
+          {% for field in fields %}
+            <label class="choice">
+              <input type="checkbox" name="field" value="{{ field.key }}"{% if field.default %} checked{% endif %}>
+              {{ field.label }}
+            </label>
+          {% endfor %}
+        </fieldset>
+        <p class="field-hint">The title always goes. Write-up, experience, contest or professor, open source, repo and
+          the finished-product estimate start unticked: they're the team's own answers, sent only when you choose.</p>
+      </div>
+    </section>
     <div class="form-actions">
       <button class="button button--primary" type="submit">Download PDF</button>
-      <p class="muted">Only the ticked projects go in the file.</p>
+      <p class="muted">Only the ticked projects and fields go in the file.</p>
     </div>
   </form>
 {% endif %}

@@ -3,6 +3,7 @@ must not run, and a character the PDF font lacks must not break the file."""
 
 from __future__ import annotations
 
+import dataclasses
 import uuid
 from datetime import UTC, datetime
 
@@ -61,3 +62,39 @@ def test_the_pdf_is_a_pdf_even_with_markup_and_characters_the_font_lacks() -> No
 
 def test_the_file_name_says_who_and_when() -> None:
     assert funder_export.filename(_packet()) == "ganymede-ospool-2026-10-25.pdf"
+
+
+def test_the_pdf_prints_only_the_packets_fields_in_order() -> None:
+    row = _row(write_up="It maps caves with lidar.", full_budget_cents=50_000)
+    packet = dataclasses.replace(_packet(row), fields=("write_up", "requested", "full_estimate"))
+
+    assert funder_export.row_fields(packet, row) == [
+        ("Write-up", "It maps caves with lidar."),
+        ("Requested", "$123.45"),
+        ("Finished-product estimate", "$500.00, roughly"),
+    ]
+    assert funder_export.to_pdf(packet).startswith(b"%PDF-")
+
+
+def test_the_usual_fields_are_the_ones_sent_before() -> None:
+    row = _row()
+
+    labels = [label for label, _text in funder_export.row_fields(_packet(row), row)]
+
+    assert labels == [
+        "Summary",
+        "Compute use",
+        "Training data",
+        "Status",
+        "Requested",
+        "Granted",
+        "GPU estimate",
+        "Team",
+        "US residency",
+    ]
+
+
+def test_a_title_only_pdf_still_builds() -> None:
+    packet = dataclasses.replace(_packet(_row(), _row(title="Second")), fields=())
+
+    assert funder_export.to_pdf(packet).startswith(b"%PDF-")
