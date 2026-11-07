@@ -840,10 +840,11 @@ def admin_adjust_budget(
     """Admin override: adjust a project's budget ceiling by a signed amount. Admin only.
 
     Only on an `approved` or `pending_completion_review` project. `reason` is required. Raises
-    `ValidationFailed` if `amount_cents` is zero or would take the ceiling below zero, and `NotAllowed` for
-    an increase on the admin's own project (see `admin_decide`; a cut is fine). Writes an `AuditEvent`. Like an
-    approval's, an increase is held until Weave clears the team (`krater.services.grants`), and returns the
-    `HeldGrant` then. Refused (`InvalidState`) while an earlier grant is held.
+    `ValidationFailed` if `amount_cents` is zero or would take the ceiling below the spend
+    (`_require_spend_floor`), and `NotAllowed` for an increase on the admin's own project (see `admin_decide`; a
+    cut is fine). Writes an `AuditEvent`. Like an approval's, an increase is held until Weave clears the team
+    (`krater.services.grants`), and returns the `HeldGrant` then. Refused (`InvalidState`) while an earlier grant
+    is held.
     """
     if not actor.is_admin:
         raise NotAllowed("Only an admin may adjust a project's budget.")
@@ -858,8 +859,8 @@ def admin_adjust_budget(
     if project.status not in (ProjectStatus.APPROVED, ProjectStatus.PENDING_COMPLETION_REVIEW):
         raise InvalidState("Budget can only be adjusted on an approved or pending-completion project.")
 
-    if budget.ceiling_cents(session, project) + amount_cents < 0:
-        raise ValidationFailed({"amount_cents": "This would take the project's budget ceiling below zero."})
+    if amount_cents < 0:
+        _require_spend_floor(session, project, cut_cents=-amount_cents)
     grants.require_none_pending(session, project)
 
     if amount_cents > 0:
@@ -889,6 +890,32 @@ def admin_adjust_budget(
     return entry
 
 
+def _require_spend_floor(session: Session, project: Project, *, cut_cents: int) -> None:
+    """Refuse an admin cut that would take the ceiling below what the project has already spent (its latest spend
+    estimate): spent money can't come back, and Quilt can't release more than is still committed. At most
+    `ceiling - spend` is unspent, and that is all a cut or reclaim can take. Cutting into what running machines expect
+    to spend is allowed: the scheduler stops them when the spend reaches the new ceiling."""
+    ceiling = budget.ceiling_cents(session, project)
+    spent = budget.latest_spend_cents(session, project)
+    if ceiling - cut_cents >= spent:
+        return
+    unspent = max(0, ceiling - spent)
+    if unspent == 0:
+        message = f"Nothing is unspent: the project has spent {_dollars(spent)} of its {_dollars(ceiling)} budget."
+    else:
+        message = (
+            f"At most {_dollars(unspent)} is unspent: the project has spent {_dollars(spent)} of its "
+            f"{_dollars(ceiling)} budget, and spent money can't be taken back."
+        )
+    raise ValidationFailed({"amount_cents": message})
+
+
+def _dollars(cents: int) -> str:
+    sign = "-" if cents < 0 else ""
+    whole, remainder = divmod(abs(cents), 100)
+    return f"{sign}${whole:,}.{remainder:02d}"
+
+
 def reclaim_budget(
     session: Session,
     actor: Actor,
@@ -901,7 +928,7 @@ def reclaim_budget(
 
     `amount_cents` is the positive amount to reclaim; it's recorded as a negative ledger entry.
     `reason` is required. Raises `ValidationFailed` if `amount_cents` isn't positive, or would take the
-    ceiling below zero. Writes an `AuditEvent`.
+    ceiling below the spend (`_require_spend_floor`). Writes an `AuditEvent`.
     """
     if not actor.is_admin:
         raise NotAllowed("Only an admin may reclaim budget.")
@@ -912,8 +939,7 @@ def reclaim_budget(
 
     _lock_project(session, project)
     grants.require_none_pending(session, project)
-    if budget.ceiling_cents(session, project) - amount_cents < 0:
-        raise ValidationFailed({"amount_cents": "Cannot reclaim more than the project's current budget ceiling."})
+    _require_spend_floor(session, project, cut_cents=amount_cents)
 
     entry = budget.add_entry(
         session, project=project, kind=BudgetEntryKind.RECLAIM, amount_cents=-amount_cents, actor=actor, reason=reason
