@@ -11,13 +11,36 @@
   </div>
 </div>
 
+{% for item in admin_access %}
+  <p class="budget-banner" role="status">
+    <strong>An admin has SSH access to this box:</strong> {{ item.name }}, until
+    {{ item.grant.expires_at.strftime("%H:%M UTC") }}. Their reason: {{ item.grant.reason }}
+  </p>
+{% endfor %}
+
 <div class="layout-split">
 <div class="stack">
 <section class="card">
   <h2>{{ "Box" if job.kind.value == "box" else "Job" }}</h2>
   <dl class="details">
     <dt>Kind</dt><dd>{{ "Box (SSH workspace)" if job.kind.value == "box" else "Job" }}</dd>
-    <dt>Image</dt><dd><code>{{ job.image }}</code></dd>
+    <dt>Image</dt>
+    <dd>
+      <code class="break">{{ job.image }}</code>
+      {% if instance and instance.image_digest %}
+        <div class="muted">
+          <code class="break" title="{{ instance.image_digest }}">{{ instance.image_digest[:19] }}…</code>,
+          {{ "pinned: exactly this image runs" if instance.image_pinned else "what the tag pointed to when Krater rented the machine" }}
+        </div>
+        {% if is_admin and image_reference %}
+          <form method="post" action="/admin/images/inspect" class="inline-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="image" value="{{ image_reference }}">
+            <button type="submit" class="button button--small">Inspect this image</button>
+          </form>
+        {% endif %}
+      {% endif %}
+    </dd>
     {% if job.command %}<dt>Command</dt><dd><code>{{ job.command }}</code></dd>{% endif %}
     <dt>GPU</dt>
     <dd>
@@ -135,6 +158,46 @@
         <p class="muted">Or <code>krater ssh {{ job.id }}</code>. For Jupyter, start it in the box and tunnel to it:
           <code>ssh -L 8888:localhost:8888 -p {{ instance.ssh_port }} root@{{ instance.ssh_host }}</code></p>
       {% endif %}
+    </section>
+  {% endif %}
+
+  {% if can_grant_access or admin_access %}
+    <section class="card" id="admin-access" aria-labelledby="admin-access-head">
+      <h2 id="admin-access-head">Admin SSH access</h2>
+      {% for item in admin_access %}
+        <div class="admin-action">
+          <p>{{ item.name }} until {{ item.grant.expires_at.strftime("%H:%M UTC") }}.</p>
+          {% if is_admin %}
+            <form method="post" action="/projects/{{ project.id }}/compute/{{ job.id }}/admin-access/{{ item.grant.id }}/revoke">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" class="button button--small">End this access</button>
+            </form>
+          {% endif %}
+        </div>
+      {% endfor %}
+      {% if can_grant_access and not my_access %}
+        {% if not access_runner_ok %}
+          <p class="muted">This box's runner is older than live key updates, so it can't take your key while it runs.</p>
+        {% elif not admin_has_keys %}
+          <p class="muted">Add an SSH key to your account first (<a href="/account/ssh-keys">SSH keys</a>).</p>
+        {% else %}
+          <form method="post" action="/projects/{{ project.id }}/compute/{{ job.id }}/admin-access" class="form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="field">
+              <label for="admin-access-reason">Reason (required; the team sees it)</label>
+              <textarea id="admin-access-reason" name="reason" rows="2"></textarea>
+            </div>
+            <button type="submit" class="button">Get SSH access for {{ access_hours }} hours</button>
+          </form>
+          <p class="muted">
+            Your SSH keys are added next to the owner's within a minute, and the project's channel is told. While you're
+            logged in the box counts as in use, so it doesn't stop for being idle and keeps spending the project's
+            budget. A shell can read the project's secrets. When access ends, Krater removes your keys, but a session
+            already open stays open until you close it.
+          </p>
+        {% endif %}
+      {% endif %}
+      {% if my_access %}<p class="muted">Connect with the command under Machine.</p>{% endif %}
     </section>
   {% endif %}
 

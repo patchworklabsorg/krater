@@ -20,6 +20,7 @@ from krater.models import (
 )
 from krater.services import compute_jobs
 from krater.services.compute_jobs import JobSpec
+from krater.weave import StubWeaveClient
 from krater.web.charts import PricePoint, price_chart_svg
 from tests.conftest import ADMIN_SUB, MEMBER_SUB, OTHER_MEMBER_SUB, REVIEWER_SUB, get_csrf_token
 from tests.web.conftest import actor_for
@@ -64,7 +65,13 @@ def _job(db_session, project, member, **overrides) -> ComputeJob:
         **overrides,
     }
     return compute_jobs.submit_job(
-        db_session, actor_for(member), project=project, spec=JobSpec(**spec), cap_cents=500, now=datetime.now(UTC)
+        db_session,
+        actor_for(member),
+        project=project,
+        spec=JobSpec(**spec),
+        cap_cents=500,
+        now=datetime.now(UTC),
+        weave_client=StubWeaveClient(),  # the bundled fixture: every member there is verified
     )
 
 
@@ -111,6 +118,30 @@ def test_a_member_queues_a_job(client: TestClient, login_as, project, db_session
     assert (job.target_microusd, job.max_microusd, job.interruptible) == (70_000, 100_000, True)
     assert job.gpu_names == ["RTX 3060"]
     assert response.headers["location"] == f"/projects/{project.id}/compute/{job.id}"
+
+
+def test_compute_is_held_until_the_team_is_verified(
+    client: TestClient, login_as, project, db_session, weave_stub: StubWeaveClient
+) -> None:
+    login_as(MEMBER_SUB)
+    weave_stub.set_verification_status(MEMBER_SUB, "pending")
+    page = client.get(f"/projects/{project.id}/compute/new")
+    assert "compute is held until every team member is verified in Weave" in page.text
+    assert "Mia Member (PWLMEMBERONE): ID verification in Weave is still in review" in page.text
+
+    response = client.post(
+        f"/projects/{project.id}/compute",
+        data={**FORM, "csrf_token": get_csrf_token(page.text)},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert db_session.scalars(sa.select(ComputeJob).where(ComputeJob.project_id == project.id)).first() is None
+    assert (
+        "compute is held until every team member is cleared in Weave" in client.get(response.headers["location"]).text
+    )
+    weave_stub.set_verification_status(MEMBER_SUB, "verified")
+    assert "guardian-banner" not in client.get(f"/projects/{project.id}/compute/new").text
 
 
 def test_a_bad_form_is_shown_again_with_the_errors(client: TestClient, login_as, project, db_session) -> None:

@@ -1,0 +1,38 @@
+{# Audit events as a table: `rows` from `krater.web.routers.admin_activity.activity_rows`. #}
+{% if rows %}
+  <div class="table-scroll">
+    <table class="table">
+      <thead>
+        <tr>
+          <th scope="col">When</th>
+          <th scope="col">What</th>
+          {% if not project %}<th scope="col">Project</th>{% endif %}
+          <th scope="col">By</th>
+          <th scope="col">Reason and details</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+          <tr>
+            <td class="nowrap">{{ row.event.created_at.strftime("%Y-%m-%d %H:%M UTC") }}</td>
+            <td>{{ row.label }}</td>
+            {% if not project %}
+              <td>
+                {% if row.event.project %}
+                  <a href="/admin/activity?project={{ row.event.project.id }}">{{ row.event.project.title or "Untitled proposal" }}</a>
+                {% else %}<span class="muted">None</span>{% endif %}
+              </td>
+            {% endif %}
+            <td>{{ row.actor }}</td>
+            <td>
+              {% if row.event.reason %}<div>{{ row.event.reason }}</div>{% endif %}
+              {% for line in row.details %}<div class="muted">{{ line }}</div>{% endfor %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% else %}
+  <div class="empty-state"><p>Nothing recorded yet.</p></div>
+{% endif %}

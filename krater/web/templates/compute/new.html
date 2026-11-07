@@ -15,6 +15,23 @@
   </div>
 </div>
 
+{% if verification_pending %}
+  <div class="guardian-banner" role="status">
+    <p><strong>This project's compute is held until every team member is verified in Weave.</strong> Waiting on:</p>
+    <ul>
+      {% for member in verification_pending %}
+        <li>{{ member.label }}: {{ member.reason }}</li>
+      {% endfor %}
+    </ul>
+    <p>Each member does ID verification on
+      {% if weave_verification_url %}<a href="{{ weave_verification_url }}">Weave's verification page</a>{% else %}Weave's verification page{% endif %}.
+      For a member under 18, a Weave admin also records a verified guardian.</p>
+  </div>
+{% elif verification_pending is none %}
+  <p class="guardian-banner">Krater couldn't reach Weave to check that the team is verified. It checks again when you
+    queue the job.</p>
+{% endif %}
+
 <section class="card form-card">
   <form method="post" action="/projects/{{ project.id }}/compute" class="form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

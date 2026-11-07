@@ -23,7 +23,10 @@ ANSWERS = {
     "write_up": "It maps caves with lidar.",
     "affiliation": "contest",
     "affiliation_detail": "Example Robotics Cup",
+    "open_source_blocked": "yes",
+    "open_source_obstacles": "The cup's rules keep entries private until the final.",
     "compute_use": "Training the mapping model.",
+    "training_data": "Lidar scans from the cup's practice caves.",
     "poc_gpu": "A100:1",
     "poc_hours": "40",
     "poc_basis": "on_demand",
@@ -74,6 +77,7 @@ def test_the_form_asks_every_question_and_shows_who_is_applying(client: TestClie
         "What is your project, in a sentence normal people would understand?",
         "Now explain it properly.",
         "Are you doing this as part of a contest or with the help of a professor?",
+        "Is there anything that would stop you from open-sourcing the project?",
         "How are you going to use the compute?",
         "Proof of concept",
         "Finished product",
@@ -97,6 +101,8 @@ def test_saving_stores_every_answer_and_both_estimates(client: TestClient, login
         "contest",
         "Example Robotics Cup",
     )
+    assert revision.open_source_blocked is True
+    assert revision.open_source_obstacles == "The cup's rules keep entries private until the final."
     # With no amount typed, each amount is its estimate: $1.00/h x 40h, and x 400h.
     assert revision.budget_requested_cents == 4_000
     assert revision.budget_estimate["total_cents"] == 4_000
@@ -231,9 +237,58 @@ def test_a_saved_application_reloads_into_the_form_and_submits(
 
     detail = client.get(project_url)
     submitted = client.post(
-        f"{project_url}/submit", data={"csrf_token": get_csrf_token(detail.text)}, follow_redirects=False
+        f"{project_url}/submit",
+        data={"csrf_token": get_csrf_token(detail.text), "criteria_read": "yes"},
+        follow_redirects=False,
     )
     assert submitted.status_code == 303
+    project = project_service.get_project(db_session, project_id=_revision(db_session, response).project_id)
+    db_session.refresh(project)
+    assert project.status is ProjectStatus.PENDING_REVIEW
+
+
+def _detail_submit_form(page: str) -> tuple[str, str]:
+    """The project page's own "Submit for review" form: its action and its inner HTML."""
+    match = re.search(r'<form method="post" action="(/projects/[^"]+/submit)"[^>]*>(.*?)</form>', page, re.S)
+    assert match, "the project page has no submit form"
+    return match.group(1), match.group(2)
+
+
+def test_the_project_pages_submit_button_asks_for_the_criteria_box(
+    client: TestClient, login_as, db_session: Session
+) -> None:
+    login_as(MEMBER_SUB)
+    _seed_price(db_session)
+    project_url = _create(client).headers["location"]
+
+    page = client.get(project_url).text
+    action, form = _detail_submit_form(page)
+
+    assert action == f"{project_url}/submit"
+    assert re.search(r'<input type="checkbox" name="criteria_read" value="yes" required>', form)
+    assert "Ganymede Submission" in form
+
+
+def test_the_project_pages_submit_form_submits_once_the_box_is_ticked(
+    client: TestClient, login_as, db_session: Session
+) -> None:
+    login_as(MEMBER_SUB)
+    _seed_price(db_session)
+    response = _create(client)
+    project_url = response.headers["location"]
+    page = client.get(project_url).text
+    action, _ = _detail_submit_form(page)
+
+    # Without the box (a browser that skips `required`): refused, and the message names the box, not "answers".
+    unticked = client.post(action, data={"csrf_token": get_csrf_token(page)})
+    assert unticked.status_code == 422
+    assert "Read the Ganymede Submission Criteria, then tick the box." in unticked.text
+    assert "Some answers are missing" not in unticked.text
+
+    ticked = client.post(
+        action, data={"csrf_token": get_csrf_token(page), "criteria_read": "yes"}, follow_redirects=False
+    )
+    assert ticked.status_code == 303
     project = project_service.get_project(db_session, project_id=_revision(db_session, response).project_id)
     db_session.refresh(project)
     assert project.status is ProjectStatus.PENDING_REVIEW
@@ -246,7 +301,9 @@ def test_submitting_an_unfinished_application_marks_whats_missing(client: TestCl
     project_url = created.headers["location"]
 
     detail = client.get(project_url)
-    response = client.post(f"{project_url}/submit", data={"csrf_token": get_csrf_token(detail.text)})
+    response = client.post(
+        f"{project_url}/submit", data={"csrf_token": get_csrf_token(detail.text), "criteria_read": "yes"}
+    )
 
     assert response.status_code == 422
     for message in (
@@ -320,7 +377,7 @@ def test_an_amendment_adds_its_estimate_to_the_approved_budget(
     assert "adds $100.00 to the $40.00 approved now" in detail
     assert "differs a lot" not in detail
 
-    client.post(f"/projects/{project.id}/submit", data={"csrf_token": get_csrf_token(detail)})
+    client.post(f"/projects/{project.id}/submit", data={"csrf_token": get_csrf_token(detail), "criteria_read": "yes"})
     login_as(REVIEWER_SUB)
     page = client.get(f"/projects/{project.id}")
     client.post(f"/projects/{project.id}/review", data={"csrf_token": get_csrf_token(page.text), "decision": "approve"})

@@ -132,7 +132,9 @@ def test_an_export_fails_closed_when_weave_is_down(
 
     monkeypatch.setattr(weave_stub, "get_user", get_user)
     response = client.post(
-        f"{PAGE}/export", data={"csrf_token": token, "project_id": [str(project.id)]}, follow_redirects=False
+        f"{PAGE}/export",
+        data={"csrf_token": token, "project_id": [str(project.id)], "field": list(funder_packet.DEFAULT_FIELDS)},
+        follow_redirects=False,
     )
 
     assert response.status_code == 303
@@ -159,4 +161,48 @@ def test_an_export_without_the_csrf_token_is_refused(
     response = client.post(f"{PAGE}/export", data={"project_id": [str(project.id)]})
 
     assert response.status_code == 403
+    assert _exports(db_session) == []
+
+
+def test_the_page_offers_the_fields_with_the_usual_ones_ticked(client: TestClient, login_as, approved_project) -> None:
+    _approved(login_as, approved_project)
+    login_as(ADMIN_SUB)
+
+    page = client.get(PAGE).text
+
+    for field in funder_packet.FIELDS:
+        tick = " checked" if field.default else ""
+        assert f'name="field" value="{field.key}"{tick}>' in page
+
+
+def test_the_export_records_the_ticked_fields(
+    client: TestClient, login_as, approved_project, db_session: Session
+) -> None:
+    chosen = _approved(login_as, approved_project)
+    login_as(ADMIN_SUB)
+    token = get_csrf_token(client.get(PAGE).text)
+
+    response = client.post(
+        f"{PAGE}/export",
+        data={"csrf_token": token, "project_id": [str(chosen.id)], "field": ["write_up", "summary"]},
+    )
+
+    assert response.status_code == 200
+    [event] = _exports(db_session)
+    assert event.payload["fields"] == ["summary", "write_up"]
+
+
+def test_an_unknown_field_goes_back_with_a_message(
+    client: TestClient, login_as, approved_project, db_session: Session
+) -> None:
+    chosen = _approved(login_as, approved_project)
+    login_as(ADMIN_SUB)
+    token = get_csrf_token(client.get(PAGE).text)
+
+    response = client.post(
+        f"{PAGE}/export", data={"csrf_token": token, "project_id": [str(chosen.id)], "field": ["email"]}
+    )
+
+    assert response.status_code == 200  # followed back to the page
+    assert "Unknown fields: email." in response.text
     assert _exports(db_session) == []

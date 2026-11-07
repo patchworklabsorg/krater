@@ -23,7 +23,21 @@ from krater.web import estimator_form
 from krater.web.money import InvalidDollarAmount, cents_to_input, parse_dollars
 
 #: The plain answers, by form field name.
-ANSWERS = ("title", "repo_url", "summary", "experience", "write_up", "affiliation", "affiliation_detail", "compute_use")
+ANSWERS = (
+    "title",
+    "repo_url",
+    "summary",
+    "experience",
+    "write_up",
+    "affiliation",
+    "affiliation_detail",
+    "open_source_obstacles",
+    "compute_use",
+    "training_data",
+)
+#: The checkboxes: an unticked one isn't posted, so its absence is the answer no. (The Submission Criteria box is on
+#: the submit form, not here: `projects.submit` takes it.)
+CHECKBOXES = ("open_source_blocked",)
 #: Estimator prefix -> the draft fields it fills (estimate, amount).
 SECTIONS = {"poc": ("budget_estimate", "budget_requested_cents"), "full": ("full_budget_estimate", "full_budget_cents")}
 
@@ -45,6 +59,8 @@ def _estimator_keys() -> list[str]:
 def blank_values(settings: Settings) -> dict[str, str]:
     values = {name: "" for name in ANSWERS}
     values["affiliation"] = "none"
+    for name in CHECKBOXES:
+        values[name] = ""  # the checkboxes start unticked
     for prefix in SECTIONS:
         values |= estimator_form.default_estimator_values(settings, prefix)
         values[f"{prefix}_budget"] = ""
@@ -62,7 +78,10 @@ def values_from_draft(project: Project, draft: ProjectRevision, settings: Settin
         "write_up": draft.write_up,
         "affiliation": draft.affiliation,
         "affiliation_detail": draft.affiliation_detail,
+        "open_source_blocked": "yes" if draft.open_source_blocked else "",
+        "open_source_obstacles": draft.open_source_obstacles,
         "compute_use": draft.compute_use,
+        "training_data": draft.training_data,
     }
     for prefix, (estimate_field, amount_field) in SECTIONS.items():
         values |= estimator_form.values_from_estimate(getattr(draft, estimate_field), settings, prefix)
@@ -89,7 +108,13 @@ def parse(
     `base_cents` is the budget approved so far, for an amendment: its first estimate is the extra compute the next
     stage needs, while its amount is the project's new total, so a filled-in amount is `base_cents` plus the
     estimate. The total can still be typed lower (an amendment may cut the budget)."""
-    keys = [*ANSWERS, *_estimator_keys(), *(f"{prefix}_budget" for prefix in SECTIONS), "teammates"]
+    keys = [
+        *ANSWERS,
+        *CHECKBOXES,
+        *_estimator_keys(),
+        *(f"{prefix}_budget" for prefix in SECTIONS),
+        "teammates",
+    ]
     values = blank_values(settings) | {key: str(form[key]) for key in keys if key in form}
     posted = Posted(values=values)
     changes = posted.changes
@@ -99,6 +124,8 @@ def parse(
             changes[name] = values[name]
     changes["title"] = values["title"]
     changes["repo_url"] = values["repo_url"]  # "" clears it; update_draft takes None as "unchanged"
+    for name in CHECKBOXES:
+        changes[name] = values[name] == "yes"
     if values["affiliation"] not in project_service.AFFILIATIONS:
         posted.errors["affiliation"] = "Choose one of the answers."
     if len(values["summary"]) > project_service.SUMMARY_MAX_CHARS:
@@ -136,6 +163,7 @@ def teammate_entries(raw: str) -> list[str]:
 
 __all__ = [
     "ANSWERS",
+    "CHECKBOXES",
     "SECTIONS",
     "Posted",
     "blank_values",

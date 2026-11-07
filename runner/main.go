@@ -195,7 +195,7 @@ func Run(ctx context.Context, cfg Config, apiHTTP, storageHTTP *http.Client, gpu
 		} else if n > 0 {
 			logf("restored %d workspace files", n)
 		}
-		runBox(ctx, api, info, workspace, gpu, cfg.ProcNet)
+		runBox(ctx, api, info, workspace, gpu, cfg.ProcNet, cfg.Home)
 		return 0, nil
 	}
 	if info.Command == "" {

@@ -1,7 +1,7 @@
 """add data transfer guard
 
 Revision ID: a1c4e7f2b9d3
-Revises: e7b3c9d2a4f1
+Revises: c2d8e4f6a1b9
 Create Date: 2026-11-04 12:00:00.000000
 
 Vast bills data into and out of a machine per GB, at the host's own price, on top of the hourly cost Krater
@@ -20,7 +20,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "a1c4e7f2b9d3"
-down_revision: str | Sequence[str] | None = "e7b3c9d2a4f1"
+down_revision: str | Sequence[str] | None = "c2d8e4f6a1b9"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

@@ -27,7 +27,7 @@ def _submitted_project(db_session: Session, member: Actor, *, budget_requested_c
     project = new_project(
         db_session, member, title="Admin Test", write_up="Write-up.", budget_requested_cents=budget_requested_cents
     )
-    return projects.submit(db_session, member, project=project)
+    return projects.submit(db_session, member, project=project, criteria_read=True)
 
 
 def _approved_project(db_session: Session, member: Actor, admin: Actor, weave, *, budget_requested_cents: int = 10_000):
@@ -271,6 +271,52 @@ def test_reclaim_budget_cannot_exceed_ceiling(db_session: Session, member: Actor
 
     with pytest.raises(ValidationFailed):
         projects.reclaim_budget(db_session, admin, project=project, amount_cents=5_000, reason="x")
+
+
+def _spent(db_session: Session, project, cents: int) -> None:
+    db_session.add(
+        SpendSnapshot(project_id=project.id, estimated_spend_cents=cents, source=SpendSource.SKYPILOT_COST_REPORT)
+    )
+    db_session.flush()
+
+
+def test_reclaim_takes_only_unspent_budget(db_session: Session, member: Actor, admin: Actor, weave) -> None:
+    project = _approved_project(db_session, member, admin, budget_requested_cents=10_000, weave=weave)
+    _spent(db_session, project, 7_000)
+
+    with pytest.raises(ValidationFailed) as exc_info:
+        projects.reclaim_budget(db_session, admin, project=project, amount_cents=3_001, reason="x")
+
+    assert "At most $30.00 is unspent" in exc_info.value.errors["amount_cents"]
+    projects.reclaim_budget(db_session, admin, project=project, amount_cents=3_000, reason="All of what's left.")
+    assert budget.ceiling_cents(db_session, project) == 7_000
+
+
+def test_nothing_can_be_reclaimed_once_it_is_all_spent(db_session: Session, member: Actor, admin: Actor, weave) -> None:
+    project = _approved_project(db_session, member, admin, budget_requested_cents=10_000, weave=weave)
+    _spent(db_session, project, 12_000)  # spend can run past the ceiling
+
+    with pytest.raises(ValidationFailed) as exc_info:
+        projects.reclaim_budget(db_session, admin, project=project, amount_cents=100, reason="x")
+
+    assert "Nothing is unspent" in exc_info.value.errors["amount_cents"]
+
+
+def test_an_admin_cut_stops_at_the_spend(db_session: Session, member: Actor, admin: Actor, weave) -> None:
+    project = _approved_project(db_session, member, admin, budget_requested_cents=10_000, weave=weave)
+    _spent(db_session, project, 4_000)
+
+    with pytest.raises(ValidationFailed) as exc_info:
+        projects.admin_adjust_budget(
+            db_session, admin, project=project, amount_cents=-6_001, reason="Too much.", weave_client=weave
+        )
+
+    assert "At most $60.00 is unspent" in exc_info.value.errors["amount_cents"]
+    assert db_session.query(AuditEvent).filter_by(project_id=project.id, action="admin_adjust_budget").count() == 0
+    projects.admin_adjust_budget(
+        db_session, admin, project=project, amount_cents=-6_000, reason="Down to the spend.", weave_client=weave
+    )
+    assert budget.ceiling_cents(db_session, project) == 4_000
 
 
 def test_withdraw_by_submitter_reclaims_remaining_budget_without_audit(

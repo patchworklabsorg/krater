@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 RENOTIFY = timedelta(hours=6)
 #: The worker counts as down when its heartbeat (every minute) is older than this.
 HEARTBEAT_STALE = timedelta(minutes=5)
-#: Quilt's outbox is backed up when an event has waited this long to be sent.
+#: Quilt's outbox is backed up when Krater has kept trying to send an event this long.
 QUILT_BACKLOG_AGE = timedelta(minutes=30)
 #: The price catalog is refreshed daily; past this it's stale.
 PRICES_STALE = timedelta(hours=48)
@@ -55,6 +55,7 @@ FAILURE_RULES = {
     "compute_reconcile": FailureRule("Spend reconciliation keeps failing", 2, timedelta(hours=3)),
     "compute_storage_cleanup": FailureRule("Cleaning up unfinished uploads keeps failing", 2, timedelta(hours=3)),
     "price_history": FailureRule("Recording Vast's prices keeps failing", 3, timedelta(hours=4)),
+    "grant_release": FailureRule("Releasing held budget grants keeps failing", 3, timedelta(hours=1)),
     "quilt": FailureRule("Sending events to Quilt keeps failing", 5, timedelta(minutes=15)),
     "slack": FailureRule("Slack tasks keep failing", 3, timedelta(minutes=30)),
 }
@@ -108,8 +109,11 @@ def _quilt_backlog(session: Session, settings: Settings, now: datetime) -> str |
     failed = session.scalar(
         sa.select(sa.func.count()).select_from(QuiltOutbox).where(QuiltOutbox.state == QuiltOutboxState.FAILED)
     )
+    # Measured from the first attempt, not `occurred_at`: events queued before sending was switched on are old the
+    # moment it is, and go out within minutes. One Krater has kept trying for half an hour is stuck. A run that
+    # never gets to try (no token, Quilt refusing every request) opens the "quilt" task alert instead.
     oldest = session.scalar(
-        sa.select(sa.func.min(QuiltOutbox.occurred_at)).where(QuiltOutbox.state == QuiltOutboxState.PENDING)
+        sa.select(sa.func.min(QuiltOutbox.first_attempted_at)).where(QuiltOutbox.state == QuiltOutboxState.PENDING)
     )
     waiting = oldest is not None and now - oldest >= QUILT_BACKLOG_AGE
     if not failed and not waiting:
@@ -118,7 +122,7 @@ def _quilt_backlog(session: Session, settings: Settings, now: datetime) -> str |
     if failed:
         parts.append(f"{failed} event{'s' if failed != 1 else ''} Quilt refused for good (an admin must look)")
     if waiting:
-        parts.append(f"the oldest unsent event has waited since {oldest:%Y-%m-%d %H:%M} UTC")
+        parts.append(f"Krater has been trying to send an event since {oldest:%Y-%m-%d %H:%M} UTC")
     return "; ".join(parts) + "."
 
 

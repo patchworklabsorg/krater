@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 from krater.config import get_settings
 from krater.models import (
     AuditEvent,
+    FundingHold,
     Project,
     ProjectRevision,
     ProjectStatus,
@@ -33,7 +34,7 @@ from krater.models import (
     SlackNotification,
     User,
 )
-from krater.services import teams
+from krater.services import funding_holds, grants, teams
 from krater.services.actor import GROUP_REVIEWER
 from krater.services.budget_alerts import AUDIT_BUDGET_TEARDOWN, AUDIT_BUDGET_WARNING
 from krater.services.compute_jobs import (
@@ -42,9 +43,11 @@ from krater.services.compute_jobs import (
     AUDIT_BOX_STOPPED,
     AUDIT_TRANSFER_WARNING,
 )
+from krater.services.grants import AUDIT_GRANT_HELD, AUDIT_GRANT_RELEASED
 from krater.services.slack_membership import slack_id_for
 from krater.slack.client import SlackClient
 from krater.slack.errors import SlackError, SlackRequestFailedError
+from krater.weave import links as weave_links
 from krater.weave.client import WeaveClient
 
 logger = logging.getLogger(__name__)
@@ -84,6 +87,17 @@ def _format_cents(cents: int) -> str:
     sign = "-" if cents < 0 else ""
     whole, remainder = divmod(abs(cents), 100)
     return f"{sign}${whole:,}.{remainder:02d}"
+
+
+def _funding_hold_label(value: str | None) -> str | None:
+    """A held grant's `funding_hold` payload value as the hold reads in a sentence ("awaiting funding"), or `None`
+    when the grant waits on verification. An unknown value still reads as a hold, never as verification."""
+    if not value:
+        return None
+    try:
+        return funding_holds.LABELS[FundingHold(value)].lower()
+    except ValueError:
+        return "on a funding hold"
 
 
 def _slack_ids(session: Session, slack_client: SlackClient, people: list[User]) -> set[str]:
@@ -268,8 +282,11 @@ def notify_revision_submitted(
         )
 
 
-def _outcome_label(revision: ProjectRevision) -> str:
+def _outcome_label(revision: ProjectRevision, hold: str | None = None) -> str:
     if revision.outcome is RevisionOutcome.APPROVED:
+        if hold is not None and revision.kind is not RevisionKind.COMPLETION:
+            # Approved, but its budget waits: on an admin clearing a funding hold, or on Weave clearing the team.
+            return f":white_check_mark: Approved · {hold.lower()}"
         return ":white_check_mark: Approved"
     if revision.outcome is RevisionOutcome.REJECTED:
         return ":x: Rejected"
@@ -297,6 +314,7 @@ def notify_decision(session: Session, slack_client: SlackClient, *, revision: Pr
 
     project = revision.project
     stage = _stage_label(revision)
+    hold = funding_holds.approval_label(project, verification_held=grants.pending(session, project) is not None)
     blocks = [
         {
             "type": "section",
@@ -305,13 +323,13 @@ def notify_decision(session: Session, slack_client: SlackClient, *, revision: Pr
                 "text": f"*{stage}: {_escape_mrkdwn(project.title)}* (revision {revision.number})",
             },
         },
-        {"type": "section", "text": {"type": "mrkdwn", "text": f"*Outcome:* {_outcome_label(revision)}"}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": f"*Outcome:* {_outcome_label(revision, hold)}"}},
     ]
     reason = _latest_reject_reason(revision)
     if reason:
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"*Reason:* {_escape_mrkdwn(reason)}"}})
     # Top-level fallback text isn't parsed as mrkdwn -- the raw title/reason are fine here.
-    text = f"{stage} for {project.title}: {_outcome_label(revision)}"
+    text = f"{stage} for {project.title}: {_outcome_label(revision, hold)}"
 
     slack_client.update_message(revision.slack_message_channel_id, revision.slack_message_ts, blocks=blocks, text=text)
 
@@ -387,7 +405,29 @@ def sync_reviewer_invites(session: Session, slack_client: SlackClient, weave_cli
 
 def _budget_event_message(event: AuditEvent) -> tuple[list[dict], str]:
     payload = event.payload or {}
-    if event.action == AUDIT_BUDGET_TEARDOWN:
+    if event.action == AUDIT_GRANT_HELD:
+        link = f"{get_settings().base_url.rstrip('/')}/projects/{event.project_id}"
+        amount = _format_cents(payload.get("amount_cents", 0))
+        hold = _funding_hold_label(payload.get("funding_hold"))
+        if hold:
+            # A funding hold holds every grant whatever the team's verification (`grants._not_cleared`), and Weave
+            # isn't asked, so this says nothing about verification.
+            text = (
+                f":hourglass_flowing_sand: *Budget held*: {amount} of budget is held because the project is {hold}. "
+                f"It's added once an admin clears the hold. <{link}|See the project>."
+            )
+        else:
+            text = (
+                f":hourglass_flowing_sand: *Budget held*: {amount} of budget is held until every team member is "
+                "verified in Weave (ID verification, and a verified guardian for anyone under 18). "
+                f"<{link}|See who it's waiting on>."
+            )
+    elif event.action == AUDIT_GRANT_RELEASED:
+        text = (
+            ":white_check_mark: *Budget released*: every team member is verified in Weave, so the held "
+            f"{_format_cents(payload.get('amount_cents', 0))} is now this project's to use."
+        )
+    elif event.action == AUDIT_BUDGET_TEARDOWN:
         text = (
             ":octagonal_sign: *Budget teardown*: this project's machines have been "
             f"torn down. Ceiling: {_format_cents(payload.get('ceiling_cents', 0))}, "
@@ -408,9 +448,43 @@ def _budget_event_message(event: AuditEvent) -> tuple[list[dict], str]:
     return [{"type": "section", "text": {"type": "mrkdwn", "text": text}}], text
 
 
+def _held_grant_dm(project: Project) -> tuple[list[dict], str]:
+    """The direct message to a team member a held grant waits on. The same words for everyone: Krater doesn't keep
+    why they aren't cleared (it can say they're under 18), and Weave's page tells them what's left."""
+    base = get_settings().base_url.rstrip("/")
+    title = _escape_mrkdwn(project.title or "your project")
+    verify = weave_links.verification_url()
+    where = f"<{verify}|Weave's verification page>" if verify else "Weave's verification page"
+    text = (
+        f":hourglass_flowing_sand: *<{base}/projects/{project.id}|{title}>* is approved, but its budget is held until "
+        "every team member is verified in Weave, you included. That's ID verification, and for anyone under 18 a "
+        f"verified guardian. See what's left on {where}. Krater adds the budget within a few minutes of the last check "
+        "passing."
+    )
+    return [{"type": "section", "text": {"type": "mrkdwn", "text": text}}], text
+
+
+def _dm_waiting_members(session: Session, slack_client: SlackClient, event: AuditEvent, project: Project) -> None:
+    """DM each team member a held grant waits on (`waiting_on`, Patchwork IDs). A member without a Slack id, or one
+    Slack refuses, is skipped and logged: the channel post and the project page still say it."""
+    subs = (event.payload or {}).get("waiting_on") or []
+    if not subs:
+        return
+    blocks, text = _held_grant_dm(project)
+    for user in session.scalars(sa.select(User).where(User.weave_sub.in_(subs))):
+        slack_id = slack_id_for(session, slack_client, user)
+        if not slack_id:
+            continue
+        try:
+            slack_client.post_message(slack_id, blocks=blocks, text=text)
+        except SlackRequestFailedError:
+            logger.exception("krater.slack held-grant DM to %s for project %s failed; continuing", user.id, project.id)
+
+
 def sync_budget_notifications(session: Session, slack_client: SlackClient) -> None:
-    """Post every not-yet-posted `budget_warning`/`budget_teardown` `AuditEvent` to its project's
-    channel, and record it in `SlackNotification` so it's never posted twice.
+    """Post every not-yet-posted `budget_warning`/`budget_teardown` `AuditEvent`, and every held or released
+    budget grant (`krater.services.grants`), to its project's channel, and record it in `SlackNotification` so it's
+    never posted twice. A held grant also DMs each team member it waits on.
 
     These events are written by `krater.services.budget_alerts` with `actor=None` (a
     system process, not a request), so nothing calls this synchronously the way `notify_decision`/
@@ -422,7 +496,9 @@ def sync_budget_notifications(session: Session, slack_client: SlackClient) -> No
     stmt = (
         sa.select(AuditEvent)
         .where(
-            AuditEvent.action.in_((AUDIT_BUDGET_WARNING, AUDIT_BUDGET_TEARDOWN)),
+            AuditEvent.action.in_(
+                (AUDIT_BUDGET_WARNING, AUDIT_BUDGET_TEARDOWN, AUDIT_GRANT_HELD, AUDIT_GRANT_RELEASED)
+            ),
             AuditEvent.project_id.is_not(None),
             AuditEvent.id.not_in(already_posted),
         )
@@ -445,6 +521,9 @@ def sync_budget_notifications(session: Session, slack_client: SlackClient) -> No
             # One channel Slack refuses (archived by hand, bot kicked) mustn't hold up every other notice.
             logger.exception("krater.slack budget notice %s for project %s failed; continuing", event.id, project.id)
             continue
+        if event.action == AUDIT_GRANT_HELD:
+            # After the channel post, so a retried event doesn't DM twice.
+            _dm_waiting_members(session, slack_client, event, project)
         session.add(SlackNotification(audit_event_id=event.id))
         session.flush()
 

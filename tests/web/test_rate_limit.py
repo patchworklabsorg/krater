@@ -170,19 +170,20 @@ def test_post_general_is_rate_limited_too(rate_limited: TestClient, login_as, cr
     edit_page = rate_limited.get(f"/projects/{project.id}/edit").text
     csrf_token = edit_page.split('name="csrf_token" value="')[1].split('"')[0]
 
-    statuses = []
+    limited = None
     for _ in range(150):
         response = rate_limited.post(
             f"/projects/{project.id}/edit",
             data={"csrf_token": csrf_token, "title": "Still a draft", "write_up": "..."},
             follow_redirects=False,
         )
-        statuses.append(response.status_code)
         if response.status_code == 429:
+            limited = response
             break
 
-    assert 429 in statuses
-    assert int(rate_limited.post(f"/projects/{project.id}/edit", data={}).headers["Retry-After"]) >= 0
+    # Read Retry-After from the 429 itself: on a slow runner the bucket can refill before another request.
+    assert limited is not None
+    assert int(limited.headers["Retry-After"]) >= 0
 
 
 def test_rate_limit_key_is_per_ip_not_global(rate_limited: TestClient, monkeypatch) -> None:

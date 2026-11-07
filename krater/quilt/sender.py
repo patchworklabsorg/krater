@@ -7,7 +7,8 @@ Rules (see `docs/quilt-integration.md`, "Delivery"):
 - Two workers never send the same row: each row is taken with `SELECT ... FOR UPDATE SKIP LOCKED`, and a
   row that another worker holds still blocks the later rows of its subject.
 - 201 and 200 mean sent. 409 `unknown_submission`, 5xx and network errors are retried with backoff.
-  401 and 403 are retried too, but they are a configuration error: the run stops and logs it.
+  401, 403 and any other answer are a configuration error: the run stops and logs it, and the event is due again
+  on the next run, without a backoff (the event isn't at fault, so it goes as soon as the setup is fixed).
   409 `id_conflict` / `submission_exists`, 413 and 422 fail for good: an admin sees them on `/admin`.
 """
 
@@ -105,8 +106,16 @@ def next_row(session: Session, now: datetime) -> QuiltOutbox | None:
 
 
 def _record(row: QuiltOutbox, response: QuiltResponse, outcome: Outcome, now: datetime) -> None:
-    row.attempts += 1
+    if row.first_attempted_at is None:
+        row.first_attempted_at = now
     row.last_status = response.status
+    if outcome is Outcome.RETRY_CONFIG:
+        # Krater's or Quilt's setup is wrong, not this event: it doesn't count as an attempt or grow the wait, so
+        # the event goes on the first run after the setup is fixed. The run stops here, so Quilt gets at most one
+        # request a minute meanwhile.
+        row.last_error = response.error or (response.body[:500] if response.body else None)
+        return
+    row.attempts += 1
     if outcome is Outcome.SENT:
         row.state = QuiltOutboxState.SENT
         row.sent_at = now

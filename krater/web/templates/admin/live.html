@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+
+{% block title %}Live compute{% endblock %}
+
+{% macro job_table(rows, show_machine) %}
+  <div class="table-scroll">
+    <table class="table">
+      <thead>
+        <tr>
+          <th scope="col">Job</th>
+          <th scope="col">Project</th>
+          <th scope="col">State</th>
+          {% if show_machine %}
+            <th scope="col">Machine</th>
+            <th scope="col" class="num">Rate</th>
+            <th scope="col">Last heartbeat</th>
+            <th scope="col" class="num">Spent</th>
+          {% else %}
+            <th scope="col">Queued</th>
+            <th scope="col">Why</th>
+          {% endif %}
+          <th scope="col" class="num">Held</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+          {% set job = row.job %}
+          <tr>
+            <td class="cell-title">
+              <a href="/projects/{{ job.project_id }}/compute/{{ job.id }}">{{ job.name }}</a>
+              <div class="muted">{{ "Box" if job.kind.value == "box" else "Job" }}</div>
+            </td>
+            <td><a href="/projects/{{ job.project_id }}">{{ job.project.title or "Untitled proposal" }}</a></td>
+            <td><span class="badge badge--compute-{{ job.state.value }}">{{ job.state.value }}</span></td>
+            {% if show_machine %}
+              {% set instance = row.instance %}
+              <td>{% if instance %}{{ job.num_gpus }}× {{ instance.gpu_name }}{% else %}<span class="muted">None yet</span>{% endif %}</td>
+              <td class="num">{% if instance %}{{ instance.full_microusd | rate }}{% endif %}</td>
+              <td class="nowrap">{% if instance and instance.last_heartbeat_at %}{{ instance.last_heartbeat_at.strftime("%Y-%m-%d %H:%M UTC") }}{% else %}<span class="muted">None</span>{% endif %}</td>
+              <td class="num">{{ job.spend_cents | dollars }}</td>
+            {% else %}
+              <td class="nowrap">{{ job.queued_at.strftime("%Y-%m-%d %H:%M UTC") }}</td>
+              <td>{{ job.state_reason or "" }}</td>
+            {% endif %}
+            <td class="num">{{ job.hold_cents | dollars }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% endmacro %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <a class="back-link" href="/admin">&larr; Admin</a>
+    <h1>Live compute</h1>
+    <p class="page-subtitle">
+      Every job and box queued or holding a machine, across all projects, as of {{ now.strftime("%H:%M UTC") }}.
+      Each links to its job page, where an admin can cancel it.
+    </p>
+  </div>
+  <div class="page-actions"><a class="button" href="/admin/compute">Compute settings</a></div>
+</div>
+
+{% if not compute_on %}
+  <p class="budget-banner" role="status">Compute is off here, so nothing can start or run, and the job pages aren't open.</p>
+{% endif %}
+
+<dl class="stats stats--compact">
+  <div class="stat"><dt>Running or holding a machine</dt><dd>{{ running | length }}</dd></div>
+  <div class="stat"><dt>Queued</dt><dd>{{ queued | length }}</dd></div>
+  <div class="stat"><dt>Budget held</dt><dd>{{ held_cents | dollars }}</dd></div>
+  <div class="stat"><dt>Spent by these so far</dt><dd>{{ spend_cents | dollars }}</dd></div>
+</dl>
+
+<section class="card" aria-labelledby="running">
+  <h2 id="running">Running</h2>
+  <p class="muted">Starting, running, paused (outbid) and stopped boxes. A stopped box keeps its disk, which bills.</p>
+  {% if running %}{{ job_table(running, true) }}{% else %}<div class="empty-state"><p>Nothing is running.</p></div>{% endif %}
+</section>
+
+<section class="card" aria-labelledby="queued">
+  <h2 id="queued">Queued</h2>
+  {% if queued %}{{ job_table(queued, false) }}{% else %}<div class="empty-state"><p>Nothing is queued.</p></div>{% endif %}
+</section>
+{% endblock %}

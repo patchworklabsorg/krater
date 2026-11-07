@@ -7,9 +7,12 @@
 <div class="page-head">
   <div>
     <h1>Admin</h1>
-    <p class="page-subtitle">Every project with its budget, the approval policy, the public gallery, and the delivery of events to Quilt.</p>
+    <p class="page-subtitle">Budget held, every project with its budget, recent activity, the approval policy, the public gallery, and the delivery of events to Quilt.</p>
   </div>
   <div class="page-actions">
+    <a class="button" href="/admin/activity">Activity</a>
+    <a class="button" href="/admin/live">Live compute</a>
+    <a class="button" href="/admin/images">Images</a>
     <a class="button" href="/admin/funders/ospool">Share with OSPool</a>
     <a class="button" href="/admin/compute">Compute settings</a>
   </div>
@@ -19,15 +22,82 @@
   {% for status in statuses %}
     <div class="stat">
       <dt>{{ status.value.replace('_', ' ') | capitalize }}</dt>
-      <dd>{{ by_status[status] | length }}</dd>
+      <dd>{{ counts[status] }}</dd>
     </div>
   {% endfor %}
 </dl>
+
+<section aria-labelledby="held-grants">
+  <div class="section-head">
+    <h2 id="held-grants">Budget held</h2>
+  </div>
+  <p class="muted">Approved budget isn't added until Weave has verified every team member, and a guardian for anyone
+    under 18. Krater checks every five minutes and adds it then. Nobody can release that in Krater. Budget approved
+    as awaiting funding or a 3rd party review waits for an admin to clear the hold on the project's page first.</p>
+  {% if held %}
+    <div class="table-scroll">
+      <table class="table">
+        <thead>
+          <tr>
+            <th scope="col">Project</th>
+            <th scope="col" class="num">Held</th>
+            <th scope="col">For</th>
+            <th scope="col">Decided by</th>
+            <th scope="col">Since</th>
+            <th scope="col">Waiting on</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in held %}
+            <tr>
+              <td class="cell-title"><a href="/projects/{{ row.held.project.id }}">{{ row.held.project.title or "Untitled proposal" }}</a></td>
+              <td class="num">{{ row.held.amount_cents | dollars }}</td>
+              <td>{{ row.kind }}</td>
+              <td>{{ row.approver }}</td>
+              <td class="nowrap">{{ row.held.created_at.strftime("%Y-%m-%d") }}</td>
+              <td>
+                {% if row.held.project.funding_hold %}
+                  <span class="badge badge--funding-hold">{{ funding_hold_label(row.held.project.funding_hold) | capitalize }}</span>
+                  <div class="muted">An admin clears it on the project's page.</div>
+                {% elif row.waiting is none %}
+                  Krater couldn't reach Weave to check.
+                {% elif row.waiting %}
+                  {% for member in row.waiting %}<div>{{ member.label }}: {{ member.reason }}</div>{% endfor %}
+                {% else %}
+                  Everyone is verified. It's added within five minutes.
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="empty-state"><p>No budget is held.</p></div>
+  {% endif %}
+</section>
 
 <section aria-labelledby="all-projects">
   <div class="section-head">
     <h2 id="all-projects">All projects</h2>
   </div>
+  <form method="get" action="/admin#all-projects" class="filter-bar" role="search" aria-label="Projects">
+    <div class="field">
+      <label for="project-search">Title or lead's Patchwork ID</label>
+      <input id="project-search" type="search" name="q" value="{{ query }}" autocomplete="off">
+    </div>
+    <div class="field">
+      <label for="project-status">Status</label>
+      <select id="project-status" name="status">
+        <option value="">Any status</option>
+        {% for status in statuses %}
+          <option value="{{ status.value }}" {% if status.value == status_filter %}selected{% endif %}>{{ status.value.replace('_', ' ') | capitalize }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit" class="button">Search</button>
+    {% if filtered %}<a href="/admin#all-projects">Clear</a>{% endif %}
+  </form>
   {% set ns = namespace(any=false) %}
   {% for status in statuses %}{% if by_status[status] %}{% set ns.any = true %}{% endif %}{% endfor %}
   {% if ns.any %}
@@ -47,7 +117,7 @@
             {% for summary in by_status[status] %}
               <tr>
                 <td class="cell-title"><a href="/projects/{{ summary.project.id }}">{{ summary.project.title or "Untitled proposal" }}</a></td>
-                <td>{{ macros.status_badge(status) }}</td>
+                <td>{{ macros.status_badge(status, holds.get(summary.project.id)) }}</td>
                 <td class="num">{{ summary.ceiling_cents | dollars }}</td>
                 <td class="num">{{ summary.spend_cents | dollars }}</td>
                 <td class="num">{{ summary.remaining_cents | dollars }}</td>
@@ -58,8 +128,16 @@
       </table>
     </div>
   {% else %}
-    <div class="empty-state"><p>No projects yet.</p></div>
+    <div class="empty-state"><p>{{ "No project matches." if filtered else "No projects yet." }}</p></div>
   {% endif %}
+</section>
+
+<section aria-labelledby="recent-activity">
+  <div class="section-head">
+    <h2 id="recent-activity">Recent activity</h2>
+    <a href="/admin/activity">All activity</a>
+  </div>
+  {% with rows = recent, project = none %}{% include "admin/_activity_table.html" %}{% endwith %}
 </section>
 
 <section class="card" aria-labelledby="approval-policy">
@@ -158,12 +236,17 @@
               <input type="text" id="quilt-retry-{{ row.id }}" name="reason">
               <button type="submit" class="button button--small">Retry</button>
             </form>
-            <form method="post" action="/admin/quilt/{{ row.id }}/dismiss" class="compact-form">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-              <label for="quilt-dismiss-{{ row.id }}">Reason to dismiss (required)</label>
-              <input type="text" id="quilt-dismiss-{{ row.id }}" name="reason">
-              <button type="submit" class="button button--small button--danger">Dismiss</button>
-            </form>
+            {% if row.id in quilt.dismissable %}
+              <form method="post" action="/admin/quilt/{{ row.id }}/dismiss" class="compact-form">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <label for="quilt-dismiss-{{ row.id }}">Reason to dismiss (required)</label>
+                <input type="text" id="quilt-dismiss-{{ row.id }}" name="reason">
+                <button type="submit" class="button button--small button--danger">Dismiss</button>
+              </form>
+            {% else %}
+              <p class="muted">Quilt needs this event before any other event of this project, so it can't be
+              dismissed. Fix what Quilt refused, then retry it.</p>
+            {% endif %}
           </div>
         </li>
       {% endfor %}

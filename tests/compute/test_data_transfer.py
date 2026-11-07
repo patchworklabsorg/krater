@@ -17,6 +17,7 @@ from krater.services.compute_jobs import AUDIT_TRANSFER_WARNING, JobSpec
 from krater.services.errors import ConfirmationRequired, ValidationFailed
 from krater.vast import Offer
 from krater.vast.fake import _offer
+from tests.compute.conftest import current_weave
 from tests.compute.test_reconcile import _ran_an_hour, _reconcile
 from tests.compute.test_scheduler import NOW, _instance, _pass, _submit
 
@@ -181,6 +182,7 @@ def _queue(db_session, member, project, *, confirm=False, **overrides):  # noqa:
         spec=_spec(**overrides),
         cap_cents=500,
         now=NOW,
+        weave_client=current_weave[0],
         confirm_transfer_cost=confirm,
     )
 

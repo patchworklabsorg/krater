@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     secret_key: str = DEFAULT_SECRET_KEY
     base_url: str = "http://localhost:8000"
     session_cookie_max_age_seconds: int = 60 * 60 * 24 * 14  # 14 days
+    # The Ganymede Submission Criteria, which applicants confirm they've read when they submit.
+    submission_criteria_url: str = (
+        "https://docs.google.com/document/d/16mQKrPm1LQabLe05OXBT9vmwiACDw0YGMTt6QOVG-Pk/edit?usp=sharing"
+    )
 
     # Trusted reverse proxies in front of this app (e.g. an nginx/ALB terminating TLS). Each hop is
     # expected to append the client's address to `X-Forwarded-For` -- this is how many trailing hops of
@@ -74,6 +78,10 @@ class Settings(BaseSettings):
     # Where a rented machine reaches Krater: the runner downloads itself from here and reports to it. Blank means
     # `base_url`; local staging sets its public tunnel URL.
     compute_runner_url: str = ""
+    # Launch each machine with the exact image digest Krater looked up when renting it (`name@sha256:...`), so what an
+    # admin inspects is what ran. Off until a real rental shows the provider pulls a digest reference
+    # (docs/compute/images.md); Krater records the digest either way.
+    compute_pin_image_digest: bool = False
     # The runner binary the portal serves and the worker checksums (built by the Dockerfile's runner stage).
     compute_runner_binary_path: str = "/app/runner/dist/krater-runner-linux-amd64"
     # The bucket for job checkpoints and outputs, on the same S3 storage as screenshots. Machines only ever get

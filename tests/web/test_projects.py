@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from krater.config import get_settings
-from krater.models import ProjectStatus
+from krater.models import ProjectStatus, SpendSnapshot, SpendSource
 from krater.services import projects as project_service
 from tests.conftest import ADMIN_SUB, MEMBER_SUB, OTHER_MEMBER_SUB, REVIEWER_SUB, get_csrf_token
 from tests.web.conftest import actor_for
@@ -214,7 +214,9 @@ def test_submit_happy_path(client: TestClient, login_as, create_project, db_sess
 
     page = client.get(f"/projects/{project.id}")
     csrf = get_csrf_token(page.text)
-    response = client.post(f"/projects/{project.id}/submit", data={"csrf_token": csrf}, follow_redirects=False)
+    response = client.post(
+        f"/projects/{project.id}/submit", data={"csrf_token": csrf, "criteria_read": "yes"}, follow_redirects=False
+    )
 
     assert response.status_code == 303
     db_session.refresh(project)
@@ -227,7 +229,7 @@ def test_submit_with_missing_fields_rerenders_the_edit_form(client: TestClient, 
 
     page = client.get(f"/projects/{project.id}")
     csrf = get_csrf_token(page.text)
-    response = client.post(f"/projects/{project.id}/submit", data={"csrf_token": csrf})
+    response = client.post(f"/projects/{project.id}/submit", data={"csrf_token": csrf, "criteria_read": "yes"})
 
     assert response.status_code == 422
     assert "Explain the project." in response.text
@@ -422,6 +424,28 @@ def test_admin_reclaim_requires_a_reason(client: TestClient, login_as, approved_
 
     assert response.status_code == 422
     assert "reason" in response.text.lower()
+
+
+def test_admin_reclaim_past_the_spend_shows_whats_unspent(
+    client: TestClient, login_as, approved_project, db_session
+) -> None:
+    member = login_as(MEMBER_SUB)
+    project = approved_project(member, login_as(REVIEWER_SUB))  # $100.00
+    db_session.add(
+        SpendSnapshot(project_id=project.id, estimated_spend_cents=7_500, source=SpendSource.SKYPILOT_COST_REPORT)
+    )
+    db_session.flush()
+
+    login_as(ADMIN_SUB)
+    page = client.get(f"/projects/{project.id}")
+    assert "Up to $25.00 is unspent." in page.text
+    response = client.post(
+        f"/projects/{project.id}/admin-reclaim",
+        data={"csrf_token": get_csrf_token(page.text), "amount": "30.00", "reason": "Stalled."},
+    )
+
+    assert response.status_code == 422
+    assert "At most $25.00 is unspent" in response.text
 
 
 # --------------------------------------------------------------------------------------------------

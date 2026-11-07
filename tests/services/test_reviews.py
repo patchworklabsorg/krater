@@ -31,7 +31,7 @@ def _submitted_project(db_session: Session, member: Actor, *, budget_requested_c
         write_up="Write-up.",
         budget_requested_cents=budget_requested_cents,
     )
-    project = projects.submit(db_session, member, project=project)
+    project = projects.submit(db_session, member, project=project, criteria_read=True)
     return project
 
 
@@ -229,7 +229,7 @@ def test_resubmit_after_reject_does_not_count_old_reviews(
     assert project.status is ProjectStatus.CHANGES_REQUESTED
 
     projects.update_draft(db_session, member, project=project, write_up="Revised write-up.")
-    project = projects.submit(db_session, member, project=project)
+    project = projects.submit(db_session, member, project=project, criteria_read=True)
     second_revision = project.current_revision
     assert second_revision.id != first_revision.id
 

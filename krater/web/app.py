@@ -26,8 +26,11 @@ from krater.web.request_id import RequestIdMiddleware
 from krater.web.routers import (
     account,
     admin,
+    admin_activity,
+    admin_images,
     api,
     auth,
+    box_access,
     compute,
     compute_admin,
     funders,
@@ -44,6 +47,19 @@ from krater.web.templates import templates
 from krater.worker.app import app as procrastinate_app
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+
+class RevalidatedStaticFiles(StaticFiles):
+    """`/static`, with `Cache-Control: no-cache`: a browser keeps its copy but asks first (a 304 when nothing changed).
+    The URLs carry no version, so without it a browser could keep running last week's script against this week's
+    page: a form field the new page hides until its script shows it would never appear."""
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 SESSION_COOKIE_NAME = "krater_session"
 _HTML_ERROR_PAGES = {403: "errors/403.html", 404: "errors/404.html", 503: "errors/503.html"}
 
@@ -103,16 +119,20 @@ def create_app() -> FastAPI:
     )
     app.add_middleware(RequestIdMiddleware)
 
-    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+    app.mount("/static", RevalidatedStaticFiles(directory=str(STATIC_DIR)), name="static")
 
     app.include_router(pages.router)
     app.include_router(auth.router)
     app.include_router(projects.router)
     app.include_router(reviews.router)
     app.include_router(admin.router)
+    app.include_router(admin_activity.router)
+    app.include_router(admin_images.router)
     app.include_router(funders.router)
     app.include_router(account.router)
     app.include_router(compute_admin.router)
+    # Before `compute`, whose /projects/{id}/compute/{job}/{action} would take /admin-access.
+    app.include_router(box_access.router)
     app.include_router(compute.router)
     app.include_router(runner.router)
     app.include_router(gallery.router)

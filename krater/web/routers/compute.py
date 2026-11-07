@@ -28,7 +28,19 @@ from krater.models import (
     Project,
 )
 from krater.models.compute_job import ACTIVE_JOB_STATES
-from krater.services import compute_files, compute_jobs, compute_settings, price_history, project_secrets, teams
+from krater.registry import RegistryError, parse_reference
+from krater.services import (
+    box_access,
+    clearance,
+    compute_files,
+    compute_jobs,
+    compute_settings,
+    people,
+    price_history,
+    project_secrets,
+    ssh_keys,
+    teams,
+)
 from krater.services import projects as project_service
 from krater.services.actor import Actor
 from krater.services.compute_jobs import JobSpec
@@ -36,6 +48,8 @@ from krater.services.errors import ConfirmationRequired, InvalidState, NotAllowe
 from krater.services.launch_rules import LAUNCHABLE_STATUSES, hourly_cap_cents
 from krater.storage import StorageError, get_compute_store
 from krater.vast import usd_to_microusd
+from krater.weave import WeaveClient, get_weave_client
+from krater.weave import links as weave_links
 from krater.web.charts import PricePoint, price_chart_svg
 from krater.web.csrf import verify_csrf_token
 from krater.web.deps import fresh_actor, session_actor
@@ -66,6 +80,16 @@ def _project(session: Session, actor: Actor, project_id: uuid.UUID) -> Project:
     if not (_is_team(actor, project) or actor.is_reviewer or actor.is_admin):
         raise NotFound(f"No project with id {project_id}.")
     return project
+
+
+def _pinned_reference(image: str, digest: str | None) -> str | None:
+    """`image` at exactly `digest`, for the admin's Inspect button; None without a digest."""
+    if digest is None:
+        return None
+    try:
+        return parse_reference(image).pinned(digest)
+    except (RegistryError, ValueError):
+        return None
 
 
 def _job(session: Session, project: Project, job_id: uuid.UUID) -> ComputeJob:
@@ -117,7 +141,9 @@ def _index_page(request: Request, db_session: Session, actor: Actor, project: Pr
             "project": project,
             "jobs": jobs,
             "active_states": ACTIVE_JOB_STATES,
-            "can_launch": _is_team(actor, project) and project.status in LAUNCHABLE_STATUSES,
+            "can_launch": _is_team(actor, project)
+            and project.status in LAUNCHABLE_STATUSES
+            and project.funding_hold is None,  # held: launching is refused (`funding_holds`)
             "secrets": project_secrets.list_secrets(db_session, project),
             "secrets_enabled": project_secrets.enabled(get_settings()),
             "can_manage_secrets": actor.is_member and (_is_team(actor, project) or actor.is_admin),
@@ -177,6 +203,7 @@ def _form_page(
     request: Request,
     db_session: Session,
     project: Project,
+    weave_client: WeaveClient,
     *,
     errors=None,
     posted=None,
@@ -200,6 +227,10 @@ def _form_page(
             "escalations": ESCALATION_LABELS,
             "errors": errors or {},
             "posted": posted or {},
+            # Compute is held until Weave clears every team member (`krater.services.clearance`); the page says who
+            # first, and the submit checks Weave fresh. `None`: Weave couldn't say right now.
+            "verification_pending": clearance.pending_for_display(db_session, weave_client, project),
+            "weave_verification_url": weave_links.verification_url(),
         },
         status_code=status_code,
     )
@@ -211,12 +242,13 @@ def new_job(
     project_id: uuid.UUID,
     db_session: Annotated[Session, Depends(get_session)],
     actor: Annotated[Actor, Depends(session_actor)],
+    weave_client: Annotated[WeaveClient, Depends(get_weave_client)],
 ):
     _require_compute()
     project = _project(db_session, actor, project_id)
     if not _is_team(actor, project):
         raise NotAllowed("Only the project's team can run jobs on its budget.")
-    return _form_page(request, db_session, project)
+    return _form_page(request, db_session, project, weave_client)
 
 
 @router.post("/projects/{project_id}/compute", dependencies=[Depends(verify_csrf_token)])
@@ -225,6 +257,7 @@ async def submit_job(
     project_id: uuid.UUID,
     db_session: Annotated[Session, Depends(get_session)],
     actor: Annotated[Actor, Depends(fresh_actor)],
+    weave_client: Annotated[WeaveClient, Depends(get_weave_client)],
 ):
     _require_compute()
     project = _project(db_session, actor, project_id)
@@ -267,11 +300,12 @@ async def submit_job(
             spec=spec,
             cap_cents=hourly_cap_cents(project, get_settings()),
             now=datetime.now(UTC),
+            weave_client=weave_client,
             confirm_transfer_cost=posted.get("confirm_transfer_cost") == "on",
         )
     except ConfirmationRequired as exc:
         db_session.rollback()
-        return _form_page(request, db_session, project, posted=posted, transfer_warning=str(exc))
+        return _form_page(request, db_session, project, weave_client, posted=posted, transfer_warning=str(exc))
     except (ValidationFailed, ValueError) as exc:
         db_session.rollback()
         errors = (
@@ -282,7 +316,7 @@ async def submit_job(
             for field in ("target", "max"):
                 if field in errors:
                     errors.setdefault("limit", errors.pop(field))
-        return _form_page(request, db_session, project, errors=errors, posted=posted, status_code=422)
+        return _form_page(request, db_session, project, weave_client, errors=errors, posted=posted, status_code=422)
     except InvalidState as exc:
         db_session.rollback()
         flash(request, str(exc), "error")
@@ -299,10 +333,14 @@ def job_page(
     job_id: uuid.UUID,
     db_session: Annotated[Session, Depends(get_session)],
     actor: Annotated[Actor, Depends(fresh_actor)],  # it shows or signs the job's files
+    weave_client: Annotated[WeaveClient, Depends(get_weave_client)],
 ):
     _require_compute()
     project = _project(db_session, actor, project_id)
     job = _job(db_session, project, job_id)
+    now = datetime.now(UTC)
+    grants = box_access.active(db_session, job, now=now) if job.kind is ComputeJobKind.BOX else []
+    grant_names = people.names(weave_client, {grant.admin for grant in grants})
     events = list(
         db_session.scalars(
             sa.select(ComputeEvent).where(ComputeEvent.job_id == job.id).order_by(ComputeEvent.at.desc()).limit(100)
@@ -337,6 +375,16 @@ def job_page(
             "files": files,
             "log": log,
             "files_error": files_error,
+            "admin_access": [{"grant": grant, "name": grant_names[grant.admin_id]} for grant in grants],
+            "can_grant_access": actor.is_admin
+            and job.kind is ComputeJobKind.BOX
+            and job.state is ComputeJobState.RUNNING,
+            "access_runner_ok": box_access.runner_takes_key_updates(live[-1] if live else None),
+            "admin_has_keys": actor.is_admin and bool(ssh_keys.authorized_keys_for(db_session, actor.user.id)),
+            "my_access": next((grant for grant in grants if grant.admin_id == actor.user.id), None),
+            "access_hours": box_access.ACCESS_HOURS,
+            "is_admin": actor.is_admin,
+            "image_reference": _pinned_reference(job.image, live[-1].image_digest if live else None),
         },
     )
 
@@ -374,6 +422,7 @@ def job_action(
     action: str,
     db_session: Annotated[Session, Depends(get_session)],
     actor: Annotated[Actor, Depends(fresh_actor)],
+    weave_client: Annotated[WeaveClient, Depends(get_weave_client)],
 ):
     _require_compute()
     if action not in _ACTIONS:
@@ -382,7 +431,9 @@ def job_action(
     job = _job(db_session, project, job_id)
     service, message = _ACTIONS[action]
     try:
-        service(db_session, actor, job=job, now=datetime.now(UTC))
+        # Resuming starts paying for the GPU again, so it checks the team's verification in Weave.
+        extra = {"weave_client": weave_client} if action == "resume" else {}
+        service(db_session, actor, job=job, now=datetime.now(UTC), **extra)
     except InvalidState as exc:
         db_session.rollback()
         flash(request, str(exc), "error")

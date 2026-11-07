@@ -29,23 +29,18 @@
     <header class="site-header">
       <div class="site-header__inner">
         <a class="brand" href="/" aria-label="Krater home">
-          <svg class="brand-mark" width="28" height="28" viewBox="0 0 32 32" aria-hidden="true" focusable="false">
-            <rect class="q1" x="0" y="0" width="15" height="15" rx="3" />
-            <rect class="q2" x="17" y="0" width="15" height="15" rx="3" />
-            <path class="q3" d="M17 3 a3 3 0 0 1 3 -3 H29 a3 3 0 0 1 3 3 V12 Z" />
-            <rect class="q4" x="0" y="17" width="15" height="15" rx="3" />
-            <path class="q2" d="M0 20 a3 3 0 0 1 3 -3 H12 a3 3 0 0 1 3 3 V29 Z" />
-            <rect class="q3" x="17" y="17" width="15" height="15" rx="3" />
-            <rect class="stitch" x="2.5" y="2.5" width="10" height="10" rx="1.5" />
-            <rect class="stitch" x="19.5" y="19.5" width="10" height="10" rx="1.5" />
-          </svg>
+          <img class="brand-mark" src="/static/icon.svg" width="28" height="28" alt="" />
           <span>Krater</span>
         </a>
         <nav class="site-nav" aria-label="Primary">
-          {% set on_home = path == "/" or path.startswith("/projects") or path.startswith("/reviews") or path.startswith("/admin") %}
+          {% set show_admin = nav_is_admin(request) %}
+          {% set on_home = path == "/" or path.startswith("/projects") or path.startswith("/reviews") or (path.startswith("/admin") and not show_admin) %}
           <a class="site-nav__link" href="/"{% if on_home %} aria-current="{{ 'page' if path == '/' else 'true' }}"{% endif %}>{{ "My projects" if signed_in_name else "Home" }}</a>
           <a class="site-nav__link" href="/gallery"{% if path.startswith("/gallery") %} aria-current="{{ 'page' if path == '/gallery' else 'true' }}"{% endif %}>Gallery</a>
           <a class="site-nav__link" href="/pricing"{% if path.startswith("/pricing") %} aria-current="{{ 'page' if path == '/pricing' else 'true' }}"{% endif %}>GPU pricing</a>
+          {% if show_admin %}
+            <a class="site-nav__link" href="/admin"{% if path.startswith("/admin") %} aria-current="{{ 'page' if path == '/admin' else 'true' }}"{% endif %}>Admin</a>
+          {% endif %}
           {% if signed_in_name %}
             <a class="site-nav__link" href="/account/ssh-keys"{% if path.startswith("/account") %} aria-current="page"{% endif %}>SSH keys</a>
           {% endif %}
