@@ -4,6 +4,7 @@ actually redirect signed-out requests to `/login`.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Annotated
 
 import pytest
@@ -35,6 +36,7 @@ _POST = Request({"type": "http", "method": "POST", "headers": []})
 def _make_request(session_data: dict) -> object:
     class _FakeRequest:
         session = session_data
+        state = SimpleNamespace()
 
     return _FakeRequest()
 

@@ -465,6 +465,14 @@ grants is held, and the compute waits, until Weave clears the team.
 Every override writes an `AuditEvent` with who, what, when and a required reason. Budget changes also write a
 `BudgetEntry`. Overrides are posted in the project's channel so reviewers can see them.
 
+**Admin console.** The navigation bar shows an Admin link to anyone whose cached roles include `ganymede:admin`.
+That check is for display only: every `/admin` page still checks Weave fresh. Read-only views:
+- `/admin` has search (by title or the lead's Patchwork ID) and a status filter on the project table, and the latest
+  audit events.
+- `/admin/activity` lists every `AuditEvent`, newest first and paged. With `?project=`, it shows that project's
+  events and its `BudgetEntry` ledger, linked from the project page's Admin card.
+- `/admin/live` lists the jobs and boxes queued or holding a machine on every project, each linked to its job page.
+
 ## Deployment architecture
 
 Everything runs in Docker and is defined in one Compose file, so it can run on any host. The existing host (alastor) is

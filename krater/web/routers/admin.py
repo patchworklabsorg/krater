@@ -22,6 +22,7 @@ from krater.weave import WeaveClient, get_weave_client
 from krater.web.csrf import verify_csrf_token
 from krater.web.deps import fresh_actor, require_admin
 from krater.web.flash import flash
+from krater.web.routers import admin_activity
 from krater.web.templates import templates
 from krater.worker.app import kick_quilt_delivery
 
@@ -34,14 +35,23 @@ def admin_overview(
     db_session: Annotated[Session, Depends(get_session)],
     actor: Annotated[Actor, Depends(require_admin)],
     weave_client: Annotated[WeaveClient, Depends(get_weave_client)],
+    q: str = "",
+    status: str = "",
 ):
     held = _held_grants(db_session, weave_client)
     all_projects = list(db_session.scalars(sa.select(Project).order_by(Project.created_at.desc())))
     summaries = [project_service.project_summary(db_session, project=project) for project in all_projects]
 
-    by_status: dict[ProjectStatus, list] = {status: [] for status in ProjectStatus}
+    # The counts are of every project; the table shows the ones the search and status filter keep.
+    counts = {each: 0 for each in ProjectStatus}
     for summary in summaries:
-        by_status[summary.status].append(summary)
+        counts[summary.status] += 1
+    query = q.strip()
+    wanted = next((each for each in ProjectStatus if each.value == status), None)
+    by_status: dict[ProjectStatus, list] = {each: [] for each in ProjectStatus}
+    for summary in summaries:
+        if (wanted is None or summary.status is wanted) and _matches(summary.project, query):
+            by_status[summary.status].append(summary)
 
     policies = list(
         db_session.scalars(sa.select(ApprovalPolicy).order_by(ApprovalPolicy.stage, ApprovalPolicy.min_budget_cents))
@@ -52,7 +62,12 @@ def admin_overview(
         "admin/index.html",
         {
             "held": held,
+            "recent": admin_activity.recent_activity(db_session, weave_client),
             "by_status": by_status,
+            "counts": counts,
+            "query": query,
+            "status_filter": wanted.value if wanted else "",
+            "filtered": bool(query) or wanted is not None,
             "policies": policies,
             "statuses": list(ProjectStatus),
             "quilt": quilt_events.delivery_overview(db_session, actor),
@@ -62,6 +77,15 @@ def admin_overview(
             ],
         },
     )
+
+
+def _matches(project: Project, query: str) -> bool:
+    """Whether a project's title, or its lead's Patchwork ID, contains `query` (case-insensitive). Empty matches all.
+    Krater stores no names, so a person is found by Patchwork ID."""
+    if not query:
+        return True
+    needle = query.casefold()
+    return needle in (project.title or "").casefold() or needle in project.submitter.weave_sub.casefold()
 
 
 def _held_grants(db_session: Session, weave_client: WeaveClient) -> list[dict]:

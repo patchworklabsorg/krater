@@ -1796,6 +1796,15 @@ h1 .badge {
   min-width: min(100%, 12rem);
 }
 
+/* Newer / Page n / Older under a paged table (admin activity). */
+.pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+
 /* Events Quilt refused (the admin page): one block per event, with its two forms side by side. */
 .event-list {
   display: grid;

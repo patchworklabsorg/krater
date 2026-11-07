@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi.templating import Jinja2Templates
 
 from krater.config import get_settings
+from krater.services.actor import GROUP_ADMIN
 from krater.web.csrf import register_csrf_template_global
 from krater.web.estimator_form import summary_text_from_dict
 from krater.web.flash import register_flash_template_global
@@ -24,5 +25,15 @@ templates.env.filters["filesize"] = format_size
 templates.env.filters["nl2br"] = nl2br
 templates.env.filters["markdown"] = markdown
 templates.env.filters["estimate_summary"] = summary_text_from_dict
+
+
+def nav_is_admin(request) -> bool:
+    """Whether the navigation bar shows the Admin link. Display only, from the roles Weave last gave
+    (`users.roles_cached`); `/admin` itself checks Weave fresh. False on a page with no signed-in user."""
+    user = getattr(request.state, "nav_user", None)
+    return user is not None and GROUP_ADMIN in (user.roles_cached or [])
+
+
+templates.env.globals["nav_is_admin"] = nav_is_admin
 # Read at render time, not import time, so a test can change the setting.
 templates.env.globals["is_staging"] = lambda: get_settings().staging
