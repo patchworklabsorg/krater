@@ -27,11 +27,26 @@ templates.env.filters["markdown"] = markdown
 templates.env.filters["estimate_summary"] = summary_text_from_dict
 
 
+#: Session key remembering the last answer, for pages that never load the user (the gallery, pricing, error pages).
+NAV_ADMIN_KEY = "nav_admin"
+
+
 def nav_is_admin(request) -> bool:
     """Whether the navigation bar shows the Admin link. Display only, from the roles Weave last gave
-    (`users.roles_cached`); `/admin` itself checks Weave fresh. False on a page with no signed-in user."""
+    (`users.roles_cached`); `/admin` itself checks Weave fresh. False on a page with no signed-in user.
+
+    A page that loaded the user (`krater.web.deps.current_user`) answers from it and remembers the answer in the
+    signed session cookie, as sign-in does the name; a page that didn't uses the remembered answer."""
+    session = request.session if "session" in request.scope else {}
+    if not session.get("user_id"):
+        return False
     user = getattr(request.state, "nav_user", None)
-    return user is not None and GROUP_ADMIN in (user.roles_cached or [])
+    if user is None:
+        return bool(session.get(NAV_ADMIN_KEY))
+    is_admin = GROUP_ADMIN in (user.roles_cached or [])
+    if session.get(NAV_ADMIN_KEY) != is_admin:
+        session[NAV_ADMIN_KEY] = is_admin
+    return is_admin
 
 
 templates.env.globals["nav_is_admin"] = nav_is_admin

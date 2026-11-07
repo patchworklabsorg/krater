@@ -32,6 +32,23 @@ def test_admins_see_the_admin_link_in_the_navigation(client: TestClient, login_a
     assert 'href="/admin" aria-current="page">Admin</a>' in client.get("/admin").text
 
 
+@pytest.mark.parametrize("path", ["/gallery", "/pricing"])
+def test_the_link_stays_on_pages_that_dont_load_the_user(client: TestClient, login_as, path) -> None:
+    login_as(ADMIN_SUB)
+    client.get("/")  # any page that loads the user remembers the answer
+
+    assert NAV_LINK in client.get(path).text
+
+
+def test_the_link_goes_when_weave_drops_the_admin_role(client: TestClient, login_as, weave_stub) -> None:
+    admin = login_as(ADMIN_SUB)
+    client.get("/")
+    admin.roles_cached = [each for each in admin.roles_cached if each != "ganymede:admin"]
+
+    assert NAV_LINK not in client.get("/").text
+    assert NAV_LINK not in client.get("/gallery").text
+
+
 @pytest.mark.parametrize("sub", [MEMBER_SUB, REVIEWER_SUB])
 def test_members_and_reviewers_dont_see_it(client: TestClient, login_as, sub) -> None:
     login_as(sub)
