@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from krater.models import AuditEvent, ProjectStatus, ReviewDecision, ReviewSource, RevisionOutcome
+from krater.models import AuditEvent, FundingHold, ProjectStatus, ReviewDecision, ReviewSource, RevisionOutcome
 from krater.services import grants, projects, slack_notify
 from krater.services.actor import GROUP_MEMBER, GROUP_REVIEWER, Actor
 from krater.slack.errors import SlackRequestFailedError
@@ -160,6 +160,31 @@ def test_notify_decision_updates_the_message_and_drops_the_buttons(
     updated = slack_client.messages[(revision.slack_message_channel_id, revision.slack_message_ts)]
     assert not any(block.get("type") == "actions" for block in updated["blocks"])
     assert "Approved" in updated["text"]
+
+
+def test_notify_decision_says_an_approval_is_awaiting_funding(
+    db_session: Session, member: Actor, reviewer: Actor, weave: StubWeaveClient
+) -> None:
+    project = new_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=5000)
+    project = projects.submit(db_session, member, project=project, criteria_read=True)
+    revision = project.current_revision
+    slack_client = FakeSlackClient()
+    slack_notify.notify_revision_submitted(db_session, slack_client, weave, revision=revision, feed_channel_id=None)
+    projects.record_review(
+        db_session,
+        reviewer,
+        revision=revision,
+        decision=ReviewDecision.APPROVE,
+        source=ReviewSource.WEB,
+        weave_client=weave,
+        funding_hold=FundingHold.AWAITING_FUNDING,
+    )
+    db_session.refresh(revision)
+
+    slack_notify.notify_decision(db_session, slack_client, revision=revision)
+
+    updated = slack_client.messages[(revision.slack_message_channel_id, revision.slack_message_ts)]
+    assert "Approved · awaiting funding" in updated["text"]
 
 
 def test_notify_decision_is_a_no_op_while_still_pending(

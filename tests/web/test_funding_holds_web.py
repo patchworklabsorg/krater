@@ -249,3 +249,38 @@ def test_an_admin_cant_clear_the_hold_on_their_own_project(client, login_as, sub
     db_session.refresh(project)
     assert project.funding_hold is FundingHold.AWAITING_FUNDING
     assert "Ask another admin." in client.get(f"/projects/{project.id}").text
+
+
+def test_the_activity_feed_shows_holds_being_set_and_cleared(client, login_as, approved_project, db_session):
+    member = login_as(MEMBER_SUB)
+    project = approved_project(member, login_as(REVIEWER_SUB))
+    login_as(ADMIN_SUB)
+    page = f"/projects/{project.id}"
+    _post(client, f"{page}/admin-funding-hold", page, funding_hold="awaiting_funding", reason="Waiting on the grant.")
+    _post(client, f"{page}/admin-funding-hold", page, funding_hold="", reason="Grant arrived.")
+
+    for url in ("/admin/activity", f"/admin/activity?project={project.id}"):
+        response = client.get(url)
+        assert response.status_code == 200
+        assert "Admin set funding hold" in response.text
+        assert "Admin clear funding hold" in response.text
+        assert "Grant arrived." in response.text
+
+
+def test_a_held_projects_compute_page_offers_no_launch(client, login_as, approved_project, db_session, monkeypatch):
+    from krater.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "compute_mode", "vast")
+    member = login_as(MEMBER_SUB)
+    project = approved_project(member, login_as(REVIEWER_SUB))
+    login_as(MEMBER_SUB)
+    project.funding_hold = FundingHold.AWAITING_FUNDING
+    db_session.commit()
+
+    page = client.get(f"/projects/{project.id}/compute").text
+    project.funding_hold = None
+    db_session.commit()
+    unheld = client.get(f"/projects/{project.id}/compute").text
+
+    assert "New job or box" not in page
+    assert "New job or box" in unheld

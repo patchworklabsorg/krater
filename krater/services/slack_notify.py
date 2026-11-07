@@ -33,7 +33,7 @@ from krater.models import (
     SlackNotification,
     User,
 )
-from krater.services import teams
+from krater.services import funding_holds, teams
 from krater.services.actor import GROUP_REVIEWER
 from krater.services.budget_alerts import AUDIT_BUDGET_TEARDOWN, AUDIT_BUDGET_WARNING
 from krater.services.compute_jobs import AUDIT_BOX_DESTROY_SOON, AUDIT_BOX_DESTROYED, AUDIT_BOX_STOPPED
@@ -267,6 +267,10 @@ def notify_revision_submitted(
 
 def _outcome_label(revision: ProjectRevision) -> str:
     if revision.outcome is RevisionOutcome.APPROVED:
+        hold = revision.project.funding_hold
+        if hold is not None and revision.kind is not RevisionKind.COMPLETION:
+            # Approved, but its budget waits for an admin to clear the hold (`krater.services.funding_holds`).
+            return f":white_check_mark: Approved · {funding_holds.LABELS[hold].lower()}"
         return ":white_check_mark: Approved"
     if revision.outcome is RevisionOutcome.REJECTED:
         return ":x: Rejected"

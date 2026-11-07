@@ -209,7 +209,7 @@ def my_projects(actor: Me, db_session: Db):
                 "id": str(p.id),
                 "title": p.title,
                 "status": p.status.value,
-                "can_launch": p.status in LAUNCHABLE_STATUSES,
+                "can_launch": p.status in LAUNCHABLE_STATUSES and p.funding_hold is None,
                 "hourly_cap_cents": hourly_cap_cents(p, get_settings()),
             }
             for p in projects
