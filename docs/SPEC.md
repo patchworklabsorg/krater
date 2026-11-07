@@ -99,6 +99,11 @@ channel.
 - If Slack can't be reached, the submission fails with an error rather than guessing either way.
 - If the check fails, the user can still save drafts but sees "Join the Patchwork Labs Slack and accept the code of
   conduct to submit", with a link to Weave.
+- Weave decides who needs Slack at all (its directory's `slack_required` and `code_of_conduct_required`, weave#274).
+  A member of a sponsored project whose group waives the Patchwork Slack, such as HackBoston, passes the gate and
+  follows the review on the project page; channel invites skip them like any member Slack refuses. Someone Weave
+  exempts from the code of conduct alone still needs full membership, but Weave promotes guests only when they accept
+  the code, so Krater tells them to ask a Slack admin to make them a full member. A missing field means required.
 - Channel invites use the team's stored Slack ids (from Weave). Reviewers come from Weave's directory (`?role=reviewer`), with Weave's `slack_id`. Krater doesn't pre-filter
   guests: invites use Slack's `force` flag, and anyone Slack refuses (a guest, a deactivated or stale id) is skipped and
   logged, so one person's Slack account never stops the channel, the rest of the team's invites or the review message.
@@ -396,7 +401,9 @@ them, and Krater stores none of them (`krater.services.clearance`, `krater.servi
   `HeldGrant`): the approval goes through, but the ledger, and so Quilt's `budget.committed`, has nothing yet, and
   the project's ceiling stays where it was ($0 for a new project). A worker task asks Weave every five minutes and
   writes the held entry, with the approver as its actor, once every member is cleared. The project page shows the
-  held amount, and the project's Slack channel hears when it's held and when it's released.
+  held amount, and the project's Slack channel hears when it's held and when it's released. Each team member it waits
+  on also gets a Slack DM from the app with a link to Weave's verification page (the same words for everyone: Krater
+  doesn't keep why someone isn't cleared). Admins see every held grant at the top of `/admin`.
   - **One at a time.** While a grant is held, nothing else may change the project's budget: amendments can't be
     started or approved, and admins can't adjust or reclaim it. The amount decided at approval stays right.
   - **Cancelled** when the project is withdrawn or completed first. Nothing was granted, so there's nothing to give

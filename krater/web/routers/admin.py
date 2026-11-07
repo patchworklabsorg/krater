@@ -1,6 +1,6 @@
-"""The admin overview: `/admin`, admins only -- every project grouped by status, a read-only table of
-`ApprovalPolicy` rows, how the public gallery names members under 18, and delivery to Quilt (events Quilt refused,
-with Retry and Dismiss)."""
+"""The admin overview: `/admin`, admins only -- the budget grants held for the team's verification in Weave, every
+project grouped by status, a read-only table of `ApprovalPolicy` rows, how the public gallery names members under 18,
+and delivery to Quilt (events Quilt refused, with Retry and Dismiss)."""
 
 from __future__ import annotations
 
@@ -14,10 +14,11 @@ from sqlalchemy.orm import Session
 
 from krater.db import get_session
 from krater.models import ApprovalPolicy, Project, ProjectStatus
+from krater.services import clearance, grants, people, quilt_events, site_settings
 from krater.services import projects as project_service
-from krater.services import quilt_events, site_settings
 from krater.services.actor import Actor
 from krater.services.errors import InvalidState, ValidationFailed
+from krater.weave import WeaveClient, get_weave_client
 from krater.web.csrf import verify_csrf_token
 from krater.web.deps import fresh_actor, require_admin
 from krater.web.flash import flash
@@ -32,7 +33,9 @@ def admin_overview(
     request: Request,
     db_session: Annotated[Session, Depends(get_session)],
     actor: Annotated[Actor, Depends(require_admin)],
+    weave_client: Annotated[WeaveClient, Depends(get_weave_client)],
 ):
+    held = _held_grants(db_session, weave_client)
     all_projects = list(db_session.scalars(sa.select(Project).order_by(Project.created_at.desc())))
     summaries = [project_service.project_summary(db_session, project=project) for project in all_projects]
 
@@ -48,6 +51,7 @@ def admin_overview(
         request,
         "admin/index.html",
         {
+            "held": held,
             "by_status": by_status,
             "policies": policies,
             "statuses": list(ProjectStatus),
@@ -58,6 +62,22 @@ def admin_overview(
             ],
         },
     )
+
+
+def _held_grants(db_session: Session, weave_client: WeaveClient) -> list[dict]:
+    """Each held grant with who decided it and whose verification it waits on now (`krater.services.grants`). The
+    lookups may use the directory cache; `waiting` is `None` when Weave can't say, and the page still loads."""
+    pending = grants.all_pending(db_session)
+    approvers = people.names(weave_client, {held.actor for held in pending})
+    return [
+        {
+            "held": held,
+            "kind": grants.KIND_LABELS.get(held.kind, held.kind.value),
+            "approver": approvers[held.actor_id],
+            "waiting": clearance.pending_for_display(db_session, weave_client, held.project),
+        }
+        for held in pending
+    ]
 
 
 @router.post("/admin/gallery", dependencies=[Depends(verify_csrf_token)])

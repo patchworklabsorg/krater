@@ -41,6 +41,7 @@ from krater.services.grants import AUDIT_GRANT_HELD, AUDIT_GRANT_RELEASED
 from krater.services.slack_membership import slack_id_for
 from krater.slack.client import SlackClient
 from krater.slack.errors import SlackError, SlackRequestFailedError
+from krater.weave import links as weave_links
 from krater.weave.client import WeaveClient
 
 logger = logging.getLogger(__name__)
@@ -416,10 +417,43 @@ def _budget_event_message(event: AuditEvent) -> tuple[list[dict], str]:
     return [{"type": "section", "text": {"type": "mrkdwn", "text": text}}], text
 
 
+def _held_grant_dm(project: Project) -> tuple[list[dict], str]:
+    """The direct message to a team member a held grant waits on. The same words for everyone: Krater doesn't keep
+    why they aren't cleared (it can say they're under 18), and Weave's page tells them what's left."""
+    base = get_settings().base_url.rstrip("/")
+    title = _escape_mrkdwn(project.title or "your project")
+    verify = weave_links.verification_url()
+    where = f"<{verify}|Weave's verification page>" if verify else "Weave's verification page"
+    text = (
+        f":hourglass_flowing_sand: *<{base}/projects/{project.id}|{title}>* is approved, but its budget is held until "
+        "every team member is verified in Weave, you included. That's ID verification, and for anyone under 18 a "
+        f"verified guardian. See what's left on {where}. Krater adds the budget within a few minutes of the last check "
+        "passing."
+    )
+    return [{"type": "section", "text": {"type": "mrkdwn", "text": text}}], text
+
+
+def _dm_waiting_members(session: Session, slack_client: SlackClient, event: AuditEvent, project: Project) -> None:
+    """DM each team member a held grant waits on (`waiting_on`, Patchwork IDs). A member without a Slack id, or one
+    Slack refuses, is skipped and logged: the channel post and the project page still say it."""
+    subs = (event.payload or {}).get("waiting_on") or []
+    if not subs:
+        return
+    blocks, text = _held_grant_dm(project)
+    for user in session.scalars(sa.select(User).where(User.weave_sub.in_(subs))):
+        slack_id = slack_id_for(session, slack_client, user)
+        if not slack_id:
+            continue
+        try:
+            slack_client.post_message(slack_id, blocks=blocks, text=text)
+        except SlackRequestFailedError:
+            logger.exception("krater.slack held-grant DM to %s for project %s failed; continuing", user.id, project.id)
+
+
 def sync_budget_notifications(session: Session, slack_client: SlackClient) -> None:
     """Post every not-yet-posted `budget_warning`/`budget_teardown` `AuditEvent`, and every held or released
     budget grant (`krater.services.grants`), to its project's channel, and record it in `SlackNotification` so it's
-    never posted twice.
+    never posted twice. A held grant also DMs each team member it waits on.
 
     These events are written by `krater.services.budget_alerts` with `actor=None` (a
     system process, not a request), so nothing calls this synchronously the way `notify_decision`/
@@ -456,6 +490,9 @@ def sync_budget_notifications(session: Session, slack_client: SlackClient) -> No
             # One channel Slack refuses (archived by hand, bot kicked) mustn't hold up every other notice.
             logger.exception("krater.slack budget notice %s for project %s failed; continuing", event.id, project.id)
             continue
+        if event.action == AUDIT_GRANT_HELD:
+            # After the channel post, so a retried event doesn't DM twice.
+            _dm_waiting_members(session, slack_client, event, project)
         session.add(SlackNotification(audit_event_id=event.id))
         session.flush()
 

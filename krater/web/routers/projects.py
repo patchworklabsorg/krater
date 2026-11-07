@@ -84,17 +84,41 @@ _SLACK_MEMBERSHIP_REQUIRED_MESSAGE = (
     "Manage your account at {weave_url}, then try again. If your Slack account uses a different email "
     "from your Weave one, link it in Weave."
 )
+#: For a member Weave exempted from the code of conduct who is still a Slack guest: Weave promotes guests only when
+#: they accept the code, so a Slack admin has to make them a full member.
+_SLACK_PROMOTION_REQUIRED_MESSAGE = (
+    "You're exempt from the code of conduct, but you're still a guest in the Patchwork Labs Slack, and Krater needs "
+    "a full member to submit. Ask a Slack admin to make you a full member, then try again."
+)
+
+
+def _decision_message(db_session: Session, project: Project, revision: ProjectRevision, default: str) -> str:
+    """The flash after a decision: says so when this approval's budget is held for the team's verification."""
+    held = grants.pending(db_session, project)
+    if held is not None and held.revision_id == revision.id:
+        return (
+            f"Approved. Its budget of {format_cents(held.amount_cents)} is held until every team member is verified "
+            "in Weave, and is added then."
+        )
+    return default
 
 
 def _enforce_slack_membership(db_session: Session, actor: Actor) -> str | None:
     """`None` if `actor` passes the Slack membership gate (`docs/SPEC.md` "Roles & authentication"),
     else a user-facing error message to flash. Drafts are always allowed; this is only called from the
     submit routes, right before handing off to `project_service`. A Slack outage raises rather than
-    guessing either way."""
+    guessing either way.
+
+    Weave decides who needs Slack at all: a member of a sponsored project whose group waives the Patchwork Slack
+    (`slack_required: false`) passes, and follows the review on the project page. A missing field means required."""
+    if actor.slack_required is False:
+        return None
     if slack_membership.is_full_slack_member(
         db_session, get_slack_client(), actor.user, weave_slack_member=actor.slack_member
     ):
         return None
+    if actor.code_of_conduct_required is False:
+        return _SLACK_PROMOTION_REQUIRED_MESSAGE
     weave_url = get_settings().weave_issuer or "your Weave profile"
     return _SLACK_MEMBERSHIP_REQUIRED_MESSAGE.format(weave_url=weave_url)
 
@@ -928,7 +952,8 @@ def record_review(
         slack_notify_decision.defer(revision_id=str(revision_id))
         slack_archive_channel.defer(project_id=str(project.id))
 
-    return _success_redirect(db_session, request, project_id, "Review recorded.", after_commit=_notify)
+    message = _decision_message(db_session, project, revision, "Review recorded.")
+    return _success_redirect(db_session, request, project_id, message, after_commit=_notify)
 
 
 # --------------------------------------------------------------------------------------------------
@@ -991,7 +1016,8 @@ def admin_decide(
             project_id=str(project.id), action=action, actor_sub=actor.user.weave_sub, reason=reason
         )
 
-    return _success_redirect(db_session, request, project_id, "Decision recorded.", after_commit=_notify)
+    message = _decision_message(db_session, project, revision, "Decision recorded.")
+    return _success_redirect(db_session, request, project_id, message, after_commit=_notify)
 
 
 @router.post("/projects/{project_id}/admin-budget", dependencies=[Depends(verify_csrf_token)])

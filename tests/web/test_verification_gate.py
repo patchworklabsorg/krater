@@ -33,6 +33,7 @@ def test_a_reviewer_approves_a_minors_project_and_the_page_says_its_budget_is_he
     db_session.refresh(project)
     assert project.status is ProjectStatus.APPROVED
     page = client.get(f"/projects/{project.id}").text
+    assert "Approved. Its budget of $" in page and "is held until every team member is verified in Weave" in page
     held = project.approved_revision.budget_requested_cents / 100
     assert f"{held:,.2f} of this project's budget is held until every team member" in page
     assert "Milo Minor (PWLMINORONE): under 18 without a verified guardian in Weave" in page

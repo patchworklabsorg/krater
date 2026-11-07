@@ -110,10 +110,11 @@ Krater calls the directory with an access token of its own OAuth app:
 Endpoints:
 
 - `GET /api/v1/directory/users/{sub}` answers
-  `{sub, name, email, email_verified, slack_id, slack_member, groups, roles, active, minor, guardian_verified,
-  verification_status, demographics_answered, us_resident, us_residency_checked_on}`. A 404 means the user is unknown or may not use Krater:
+  `{sub, name, email, email_verified, slack_id, slack_member, slack_required, code_of_conduct_required, groups, roles,
+  active, minor, guardian_verified, verification_status, demographics_answered, us_resident, us_residency_checked_on}`. A 404 means the user is unknown or may not use Krater:
   Krater treats them as not a member. Only `active: true` counts as active. `minor`, `guardian_verified`,
-  `demographics_answered` and `us_resident` are booleans that older Weave versions leave out. Krater reads a value that
+  `demographics_answered`, `us_resident`, `slack_required` and `code_of_conduct_required` are booleans that older
+  Weave versions leave out (the last two came in weave#274). Krater reads a value that
   isn't a boolean as missing. `us_resident` is also null when the member has no standing residency result.
   `verification_status` is a string (`needs_submission`, `pending`, `verified` or `ineligible`); Krater reads anything
   else as missing. Krater doesn't read `us_residency_checked_on`.
@@ -164,7 +165,14 @@ navigation only.
 ### Slack membership gate
 
 The gate prefers Weave's `slack_member` from the fresh directory record. When Weave doesn't say, Krater asks Slack
-(see [SPEC.md](SPEC.md#roles--authentication)).
+(see [SPEC.md](SPEC.md#roles--authentication)). Weave decides who needs Slack at all:
+
+| Directory record | Krater's answer |
+| --- | --- |
+| `slack_required: false` (a sponsored project's group waives the Patchwork Slack) | Passes, without asking Slack |
+| Not a full member, `code_of_conduct_required: false` (exempt, still a guest) | Refused: ask a Slack admin to promote you |
+| Not a full member, otherwise | Refused: join Slack and accept the code of conduct |
+| Either field missing (a Weave before weave#274) | Read as required |
 
 ### Verification before funding
 

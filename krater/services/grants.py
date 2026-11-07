@@ -64,6 +64,25 @@ def pending(session: Session, project: Project) -> HeldGrant | None:
     )
 
 
+#: How a held grant's kind reads on the admin overview.
+KIND_LABELS = {
+    BudgetEntryKind.INITIAL_APPROVAL: "Approval",
+    BudgetEntryKind.AMENDMENT: "Amendment",
+    BudgetEntryKind.ADMIN_ADJUSTMENT: "Admin increase",
+}
+
+
+def all_pending(session: Session) -> list[HeldGrant]:
+    """Every pending hold, oldest first: what the admin overview lists."""
+    return list(
+        session.scalars(
+            sa.select(HeldGrant)
+            .where(HeldGrant.released_at.is_(None), HeldGrant.cancelled_at.is_(None))
+            .order_by(HeldGrant.created_at)
+        )
+    )
+
+
 def require_none_pending(session: Session, project: Project) -> None:
     """Refuse a budget change while a grant is held: the hold's amount was decided against today's ceiling."""
     if pending(session, project) is not None:
@@ -207,7 +226,9 @@ __all__ = [
     "AUDIT_GRANT_HELD",
     "AUDIT_GRANT_RELEASED",
     "HELD_MESSAGE",
+    "KIND_LABELS",
     "Granted",
+    "all_pending",
     "cancel_pending",
     "grant",
     "pending",
