@@ -16,7 +16,11 @@ name: Deploy
 # Required secrets, in the `staging` environment (not the repository, so a workflow on another branch
 # cannot read them; the environment only allows main):
 #   TS_OAUTH_CLIENT_ID     - client id of the Tailscale federated identity (scope auth_keys, tag:ci-krater,
-#                            issuer GitHub, subject repo:patchworklabsorg/krater:environment:staging)
+#                            issuer GitHub). Its subject, exactly:
+#                              repo:patchworklabsorg@216448207/krater@1388139030:environment:staging
+#                            The repo uses GitHub's immutable subject, so it holds the org and repo ids, not
+#                            only the names (sub_claim_prefix in
+#                            `gh api repos/patchworklabsorg/krater/actions/oidc/customization/sub`).
 #   TS_AUDIENCE            - audience of that federated identity
 #   KRATER_DEPLOY_SSH_KEY  - private key for the krater-deploy user on weft (its public key is in the infra
 #                            repo's hosts/weft/krater.nix, deployAuthorizedKeys)
