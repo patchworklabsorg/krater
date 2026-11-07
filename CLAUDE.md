@@ -108,8 +108,7 @@ tests/             mirrors krater/ layout
 ## Brand
 
 Krater uses the Patchwork palette with the same role tokens as Quilt's stylesheet: Ink `#2a2050` text on Quilt
-`#f7f5fb`, Grape `#6c3ec1` as the primary accent, Deep Purple `#4b006e` for hover, Lavender `#c7b7e2` in the brand
-mark, solid hairline cards, Geist for all text, and a dark mode. The tokens live on `:root` in
+`#f7f5fb`, Grape `#6c3ec1` as the primary accent, Deep Purple `#4b006e` for hover, Lavender `#c7b7e2`, solid hairline cards, Geist for all text, and a dark mode. The tokens live on `:root` in
 `krater/web/static/css/main.css`; components use the role tokens (`--surface`, `--text`, `--accent` ...), never raw
 colors. Style through the existing classes (`.page-head`, `.card`, `.stats`, `.button--primary`, `.badge--<status>`,
 `.table-scroll` ...). Pages give only their own name in `{% block title %}`; `base.html` adds " · Krater". Every
