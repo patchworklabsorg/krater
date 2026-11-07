@@ -24,7 +24,23 @@
   <h2>{{ "Box" if job.kind.value == "box" else "Job" }}</h2>
   <dl class="details">
     <dt>Kind</dt><dd>{{ "Box (SSH workspace)" if job.kind.value == "box" else "Job" }}</dd>
-    <dt>Image</dt><dd><code>{{ job.image }}</code></dd>
+    <dt>Image</dt>
+    <dd>
+      <code class="break">{{ job.image }}</code>
+      {% if instance and instance.image_digest %}
+        <div class="muted">
+          <code class="break" title="{{ instance.image_digest }}">{{ instance.image_digest[:19] }}…</code>,
+          {{ "pinned: exactly this image runs" if instance.image_pinned else "what the tag pointed to when Krater rented the machine" }}
+        </div>
+        {% if is_admin and image_reference %}
+          <form method="post" action="/admin/images/inspect" class="inline-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="image" value="{{ image_reference }}">
+            <button type="submit" class="button button--small">Inspect this image</button>
+          </form>
+        {% endif %}
+      {% endif %}
+    </dd>
     {% if job.command %}<dt>Command</dt><dd><code>{{ job.command }}</code></dd>{% endif %}
     <dt>GPU</dt>
     <dd>

@@ -23,6 +23,7 @@ from krater.db import get_sessionmaker
 from krater.models import Project, ProjectRevision
 from krater.pricing.catalog import CatalogError, get_price_catalog
 from krater.quilt import sender as quilt_sender
+from krater.registry import get_registry
 from krater.services import grants, ops_alerts, people, price_history, slack_notify, slack_reviews
 from krater.services.pricing import refresh_prices
 from krater.slack import SlackError, get_slack_client
@@ -210,6 +211,7 @@ def compute_schedule(timestamp: int) -> None:
             runner_sha256=compute_launch.runner_sha256(settings.compute_runner_binary_path),
             weave_client=get_weave_client(),
             pacer=SEARCH_PACER,
+            registry=get_registry(),
         )
         if result.errors:
             _report_failure("compute_schedule", f"{result.errors} provider errors in one pass; see the worker's log.")

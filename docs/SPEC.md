@@ -473,6 +473,9 @@ That check is for display only: every `/admin` page still checks Weave fresh. Re
   events and its `BudgetEntry` ledger, linked from the project page's Admin card.
 - `/admin/live` lists the jobs and boxes queued or holding a machine on every project, each linked to its job page.
 
+**Container images.** `/admin/images` lists every image members have named, with the digest each machine got, and
+inspects one from its registry: its config and build history (`docs/compute/images.md`).
+
 **Admin SSH access to a box.** From a running box's job page an admin can get SSH access for 2 hours, with a reason
 (`docs/compute/runner.md` "Admin access"). It's an override like the others: an `AuditEvent`, a post in the project's
 channel, and a banner on the job page for the team. Any admin can end it early.

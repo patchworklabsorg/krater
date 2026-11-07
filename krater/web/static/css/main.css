@@ -1796,6 +1796,26 @@ h1 .badge {
   min-width: min(100%, 12rem);
 }
 
+/* Long unbroken values (digests, env lines, build steps) wrap instead of widening the page. */
+.break {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.plain-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--space-1);
+}
+
+/* A one-button form that sits in a line or a table cell. */
+.inline-form {
+  display: inline;
+  margin: 0;
+}
+
 /* Newer / Page n / Older under a paged table (admin activity). */
 .pager {
   display: flex;

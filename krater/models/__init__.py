@@ -26,6 +26,7 @@ from krater.models.enums import (
 from krater.models.gpu_price import GpuPrice
 from krater.models.gpu_price_sample import GpuPriceSample
 from krater.models.held_grant import HeldGrant
+from krater.models.image_inspection import ImageInspection
 from krater.models.ops_alert import OpsAlert, WorkerHeartbeat
 from krater.models.project import Project
 from krater.models.project_member import ProjectMember
@@ -61,6 +62,7 @@ __all__ = [
     "GpuPrice",
     "GpuPriceSample",
     "HeldGrant",
+    "ImageInspection",
     "OpsAlert",
     "Project",
     "ProjectComputeSettings",

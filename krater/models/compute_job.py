@@ -130,6 +130,12 @@ class ComputeInstance(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         pg_enum(ComputeInstanceState, name="compute_instance_state"), nullable=False
     )
 
+    # The image's digest when Krater rented this machine (`krater.registry.resolve_digest`), and whether Krater
+    # launched exactly that digest (`KRATER_COMPUTE_PIN_IMAGE_DIGEST`) rather than the tag. Null if the registry
+    # couldn't say. Unpinned, the machine pulls the tag a moment later, which is normally the same image.
+    image_digest: Mapped[str | None] = mapped_column(sa.String(80), nullable=True)
+    image_pinned: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False, server_default=sa.false())
+
     provider_offer_id: Mapped[str] = mapped_column(sa.String(128), nullable=False)
     provider_machine_id: Mapped[str | None] = mapped_column(sa.String(128), nullable=True)
     gpu_name: Mapped[str] = mapped_column(sa.String(64), nullable=False)

@@ -60,6 +60,7 @@ from krater.providers import (
     ProviderSearchQuotaError,
     ProviderUnavailableError,
 )
+from krater.registry import Registry, RegistryError, parse_reference
 from krater.services import audit, budget, budget_alerts, clearance, compute_jobs, compute_settings
 from krater.services.compute_settings import ComputePolicy
 from krater.services.launch_rules import LAUNCHABLE_STATUSES, hourly_cap_cents
@@ -158,8 +159,12 @@ class Scheduler:
         runner_sha256: str | None,
         weave_client: WeaveClient,
         pacer: SearchPacer | None = None,
+        registry: Registry | None = None,
     ) -> None:
         self.session = session
+        # Asked for each image's digest when renting (`_image_for`); None asks nothing and launches by tag.
+        self.registry = registry
+        self._digests: dict[str, str | None] = {}
         self.client = client
         self.weave_client = weave_client
         # Each project's clearance, asked of Weave once per pass: a reason string while it is held, else `None`.
@@ -1181,6 +1186,22 @@ class Scheduler:
         )
         return sum(max(0, hold - spent) for hold, spent in rows)
 
+    def _image_for(self, job: ComputeJob) -> tuple[str | None, str]:
+        """(the digest `job.image` points to now, the image to launch). The digest is looked up once per pass per
+        image and is None when the registry can't say; then, or with pinning off, the machine gets the tag."""
+        if self.registry is None:
+            return None, job.image
+        if job.image not in self._digests:
+            try:
+                self._digests[job.image] = self.registry.resolve_digest(job.image)
+            except RegistryError as exc:
+                logger.warning("krater.compute: no digest for %s: %s", job.image, exc)
+                self._digests[job.image] = None
+        digest = self._digests[job.image]
+        if digest is None or not self.settings.compute_pin_image_digest:
+            return digest, job.image
+        return digest, parse_reference(job.image).pinned(digest)
+
     def _rent(self, job: ComputeJob, choice: offers.Choice, *, hold_cents: int, taken: set[str]) -> bool:
         if job.kind is ComputeJobKind.BOX and self._account_has_ssh_keys():
             job.state_reason = (
@@ -1190,6 +1211,7 @@ class Scheduler:
             )
             return False
         attempt = job.attempts + 1
+        digest, image = self._image_for(job)
         token, token_hash = runner_api.new_token()
         label = f"{self.prefix}{job.id.hex[:12]}-{attempt}"
         row = ComputeInstance(
@@ -1205,6 +1227,8 @@ class Scheduler:
             gpu_microusd=choice.gpu_microusd,
             disk_microusd=choice.disk_microusd,
             runner_token_hash=token_hash,
+            image_digest=digest,
+            image_pinned=image != job.image,
             # The pass's clock, not the database's: the settle and provision timeouts compare with it.
             created_at=self.now,
         )
@@ -1235,6 +1259,7 @@ class Scheduler:
                 bid_price=choice.bid,
                 env=launch.job_env(job, attempt, runner_url=self.runner_url, token=token),
                 runner_sha256=self.runner_sha256,
+                image=image,
             )
         )
         try:
@@ -1302,7 +1327,15 @@ def run_pass(
     runner_sha256: str | None,
     weave_client: WeaveClient,
     pacer: SearchPacer | None = None,
+    registry: Registry | None = None,
 ) -> PassResult:
     return Scheduler(
-        session, client, settings, now=now, runner_sha256=runner_sha256, weave_client=weave_client, pacer=pacer
+        session,
+        client,
+        settings,
+        now=now,
+        runner_sha256=runner_sha256,
+        weave_client=weave_client,
+        pacer=pacer,
+        registry=registry,
     ).run()

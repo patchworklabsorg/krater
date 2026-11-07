@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+
+{% block title %}Image {{ details.digest[7:19] }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <a class="back-link" href="/admin/images">&larr; Images</a>
+    <h1><code>{{ row.image }}</code></h1>
+    <p class="page-subtitle">
+      Inspected {{ row.created_at.strftime("%Y-%m-%d %H:%M UTC") }}{% if inspector %} by {{ inspector }}{% endif %}.
+      This is the {{ details.platform }} image, which is what Vast's machines run.
+    </p>
+  </div>
+</div>
+
+<section class="card" aria-labelledby="summary">
+  <h2 id="summary">Summary</h2>
+  <dl class="details">
+    <dt>Digest</dt><dd><code class="break">{{ details.digest }}</code></dd>
+    {% if details.platform_digest %}<dt>{{ details.platform }} digest</dt><dd><code class="break">{{ details.platform_digest }}</code></dd>{% endif %}
+    <dt>Built</dt><dd>{{ details.created or "Not recorded" }}</dd>
+    <dt>Size</dt><dd>{{ details.size_bytes | filesize }} compressed, {{ details.layers }} layer{{ "" if details.layers == 1 else "s" }}</dd>
+    <dt>Entrypoint</dt><dd>{% if details.entrypoint %}<code>{{ details.entrypoint | join(" ") }}</code>{% else %}None{% endif %}</dd>
+    <dt>Command</dt><dd>{% if details.cmd %}<code>{{ details.cmd | join(" ") }}</code>{% else %}None{% endif %}</dd>
+    <dt>User</dt><dd>{{ details.user or "root (not set)" }}</dd>
+    <dt>Working directory</dt><dd>{{ details.working_dir or "Not set" }}</dd>
+    {% if details.exposed_ports %}<dt>Exposed ports</dt><dd>{{ details.exposed_ports | join(", ") }}</dd>{% endif %}
+  </dl>
+  <p class="muted">Krater replaces the entrypoint with its bootstrap, which runs the job's command (or keeps a box open).</p>
+</section>
+
+<section class="card" aria-labelledby="env">
+  <h2 id="env">Environment</h2>
+  {% if details.env %}
+    <ul class="plain-list">{% for line in details.env %}<li><code class="break">{{ line }}</code></li>{% endfor %}</ul>
+  {% else %}<p class="muted">None set.</p>{% endif %}
+</section>
+
+{% if details.labels %}
+<section class="card" aria-labelledby="labels">
+  <h2 id="labels">Labels</h2>
+  <dl class="details">
+    {% for key, value in details.labels | dictsort %}<dt><code class="break">{{ key }}</code></dt><dd class="break">{{ value }}</dd>{% endfor %}
+  </dl>
+</section>
+{% endif %}
+
+<section class="card" aria-labelledby="history">
+  <h2 id="history">Build history</h2>
+  <p class="muted">Each step that built the image, oldest first, as the image records it. Steps without a layer change only settings.</p>
+  {% if details.history %}
+    <div class="table-scroll">
+      <table class="table">
+        <thead><tr><th scope="col">When</th><th scope="col">Step</th></tr></thead>
+        <tbody>
+          {% for step in details.history %}
+            <tr>
+              <td class="nowrap">{{ (step.created or "")[:16] | replace("T", " ") }}</td>
+              <td><code class="break">{{ step.created_by }}</code>{% if step.empty_layer %} <span class="muted">(no layer)</span>{% endif %}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}<p class="muted">The image records no history.</p>{% endif %}
+</section>
+
+<section class="card" aria-labelledby="ran">
+  <h2 id="ran">Jobs that got this digest</h2>
+  {% if ran %}
+    <div class="table-scroll">
+      <table class="table">
+        <thead><tr><th scope="col">Job</th><th scope="col">Project</th><th scope="col" class="num">Machines</th><th scope="col">How</th></tr></thead>
+        <tbody>
+          {% for item in ran %}
+            <tr>
+              <td><a href="/projects/{{ item.project.id }}/compute/{{ item.job.id }}">{{ item.job.name }}</a></td>
+              <td><a href="/projects/{{ item.project.id }}">{{ item.project.title or "Untitled proposal" }}</a></td>
+              <td class="num">{{ item.machines }}</td>
+              <td>{{ "Pinned: exactly this" if item.pinned else "By tag, looked up at rental" }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="muted">No machine Krater rented has recorded this digest.</p>
+  {% endif %}
+</section>
+{% endblock %}
