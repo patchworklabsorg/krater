@@ -117,12 +117,23 @@ What each answer does:
 | `201 applied`, `200 duplicate` | `sent` | `sent_at` is set |
 | `409 unknown_submission` | `pending` | Retry with backoff. `submission.created` comes first, so this is usually short |
 | `5xx`, `503 weave_unavailable`, no answer | `pending` | Retry with backoff |
-| `401` | `pending` | Retry with backoff. Krater drops its cached token. The run stops and logs a configuration error |
-| `403`, or another unexpected status such as `404` | `pending` | Retry with backoff. The run stops and logs a configuration error |
+| `401` | `pending` | A configuration error: due again on the next run, with no backoff. Krater drops its cached token. The run stops and logs it |
+| `403`, or another unexpected status such as `404` | `pending` | A configuration error: due again on the next run, with no backoff. The run stops and logs it |
 | `409 id_conflict`, `409 submission_exists`, `413`, `422` | `failed` | No retry. Krater logs an error. The event shows on `/admin` |
 
 The backoff is 30 seconds after the first failed attempt, then twice as long each time, up to 1 hour
-(`next_attempt_at`). Each attempt sets `attempts`, `last_status` and `last_error`.
+(`next_attempt_at`). Each attempt sets `last_status` and `last_error`, and the first one sets `first_attempted_at`.
+Only the event's own failures count in `attempts` and grow the backoff. A configuration error isn't the event's
+fault, so the event goes on the first run after the setup is fixed. Until then the run stops at it, so Quilt gets one
+request a minute.
+
+**Alerts** (`krater.services.ops_alerts`, the admin alerts channel). Once `KRATER_QUILT_URL` is set:
+
+- A run stopped by the setup (no `quilt` token, or a configuration error) counts as a failure of the `quilt` task. Five
+  of them within 15 minutes open the alert, with what to check.
+- A refused event, or an event that Krater has kept trying to send for 30 minutes (from `first_attempted_at`), opens
+  the `quilt_backlog` alert. It's measured from the first attempt, not from `occurred_at`, so the old events queued
+  before sending was switched on don't open it.
 
 ### Failed events
 
@@ -131,7 +142,10 @@ retry, and the rows that Quilt refused. For a refused row, an admin can:
 
 - **Retry**: send it again with the same id and payload. Use this when the cause was fixed in Quilt.
 - **Dismiss**: never send it. The later events of the submission can then go. Later releases are capped to what Quilt
-  has (see the release cap).
+  has (see the release cap). Not for a `submission.created` that Quilt doesn't have: without it, none of the
+  project's later events could apply (they'd retry `409 unknown_submission` for ever). The page shows no Dismiss
+  for it, and Krater refuses one. Fix what Quilt refused, then retry it. Dismissing is fine when Quilt answered
+  `409 submission_exists`: it has the submission already.
 
 Both need a reason and write an `AuditEvent` (`quilt_event_retry`, `quilt_event_dismiss`).
 

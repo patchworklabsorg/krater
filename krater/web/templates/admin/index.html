@@ -236,12 +236,17 @@
               <input type="text" id="quilt-retry-{{ row.id }}" name="reason">
               <button type="submit" class="button button--small">Retry</button>
             </form>
-            <form method="post" action="/admin/quilt/{{ row.id }}/dismiss" class="compact-form">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-              <label for="quilt-dismiss-{{ row.id }}">Reason to dismiss (required)</label>
-              <input type="text" id="quilt-dismiss-{{ row.id }}" name="reason">
-              <button type="submit" class="button button--small button--danger">Dismiss</button>
-            </form>
+            {% if row.id in quilt.dismissable %}
+              <form method="post" action="/admin/quilt/{{ row.id }}/dismiss" class="compact-form">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <label for="quilt-dismiss-{{ row.id }}">Reason to dismiss (required)</label>
+                <input type="text" id="quilt-dismiss-{{ row.id }}" name="reason">
+                <button type="submit" class="button button--small button--danger">Dismiss</button>
+              </form>
+            {% else %}
+              <p class="muted">Quilt needs this event before any other event of this project, so it can't be
+              dismissed. Fix what Quilt refused, then retry it.</p>
+            {% endif %}
           </div>
         </li>
       {% endfor %}

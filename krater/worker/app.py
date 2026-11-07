@@ -539,12 +539,25 @@ def slack_reconcile(timestamp: int) -> None:
 QUILT_KICK_LOCK = "quilt_deliver_now"
 
 
+#: Why a delivery run stopped (`DeliveryResult.stopped`), for the admin alert.
+_QUILT_STOPPED = {
+    "no_token": "Weave gave Krater no `quilt` token: check that Krater's app in Weave allows the `quilt` scope.",
+}
+_QUILT_STOPPED_HTTP = (
+    "Quilt answered {}: check KRATER_QUILT_URL, the `quilt` scope on Krater's app in Weave, and the Weave client id "
+    "on the Ganymede patch in Quilt."
+)
+
+
 def _quilt_deliver() -> None:
     session = get_sessionmaker()()
     try:
         result = quilt_sender.run(session, get_weave_client(), get_settings())
         if result is not None and result.failed:
             _report_failure("quilt", f"Quilt refused {result.failed} events for good; see the outbox on /admin.")
+        if result is not None and result.stopped:
+            # Nothing gets through until someone fixes the setup, so count it towards the alert like a crash.
+            _report_failure("quilt", _QUILT_STOPPED.get(result.stopped, _QUILT_STOPPED_HTTP).format(result.stopped))
         if result is not None and (result.sent or result.retried or result.failed):
             logger.info(
                 "krater quilt_deliver: sent %d, retry %d, failed %d",

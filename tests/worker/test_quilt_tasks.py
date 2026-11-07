@@ -7,8 +7,10 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import procrastinate
+import pytest
 
 from krater.config import Settings
+from krater.quilt.sender import DeliveryResult
 from krater.worker import app as worker_module
 from krater.worker.app import app, kick_quilt_delivery, quilt_deliver, quilt_deliver_now
 
@@ -54,6 +56,36 @@ def test_a_sender_crash_is_logged_and_rolled_back() -> None:
         session.close.assert_called_once()
         # Counted towards the admins' alert for Quilt.
         mock_report.assert_called_once_with("quilt", "RuntimeError: boom")
+
+
+@pytest.mark.parametrize(
+    ("stopped", "says"),
+    [("no_token", "allows the `quilt` scope"), ("http_403", "Quilt answered http_403"), ("http_401", "client id")],
+)
+def test_a_run_stopped_by_the_setup_counts_towards_the_alert(stopped: str, says: str) -> None:
+    with (
+        patch("krater.worker.app.quilt_sender.run", return_value=DeliveryResult(stopped=stopped)),
+        patch("krater.worker.app.get_weave_client"),
+        patch("krater.worker.app.get_sessionmaker"),
+        patch("krater.worker.app._report_failure") as mock_report,
+    ):
+        quilt_deliver.func(timestamp=1)
+
+    [(key, message)] = [call.args for call in mock_report.call_args_list]
+    assert key == "quilt"
+    assert says in message
+
+
+def test_a_run_that_sent_everything_reports_nothing() -> None:
+    with (
+        patch("krater.worker.app.quilt_sender.run", return_value=DeliveryResult(sent=3)),
+        patch("krater.worker.app.get_weave_client"),
+        patch("krater.worker.app.get_sessionmaker"),
+        patch("krater.worker.app._report_failure") as mock_report,
+    ):
+        quilt_deliver.func(timestamp=1)
+
+    mock_report.assert_not_called()
 
 
 def test_the_kick_does_nothing_without_a_quilt_url() -> None:
