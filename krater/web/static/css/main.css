@@ -887,6 +887,12 @@ a.stat .stat__value {
   margin-bottom: 0;
 }
 
+/* The project page's submit form (its criteria box and button) above the other actions. */
+.submit-form {
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+
 /* ── Forms ── */
 
 form {

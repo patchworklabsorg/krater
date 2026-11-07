@@ -315,15 +315,23 @@
 {% if is_team and (can_edit_draft or can_submit or can_submit_completion or can_start_amendment or can_start_completion or can_withdraw) %}
 <section class="card">
   <h2>Your actions</h2>
+  {% if can_submit %}
+    {# The same box as the edit page's submit form: `projects.submit` refuses a submission without it. #}
+    <form method="post" action="/projects/{{ project.id }}/submit" class="form submit-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="field">
+        <label class="choice">
+          <input type="checkbox" name="criteria_read" value="yes" required>
+          <span>I've read the <a href="{{ submission_criteria_url() }}" target="_blank" rel="noopener">Ganymede Submission
+          Criteria</a>, and my project meets them.</span>
+        </label>
+      </div>
+      <button type="submit" class="button button--primary">Submit for review</button>
+    </form>
+  {% endif %}
   <div class="action-row">
     {% if can_edit_draft %}
       <a class="button" href="/projects/{{ project.id }}/edit">Edit draft</a>
-    {% endif %}
-    {% if can_submit %}
-      <form method="post" action="/projects/{{ project.id }}/submit" class="form--inline">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button type="submit" class="button button--primary">Submit for review</button>
-      </form>
     {% endif %}
     {% if can_submit_completion %}
       <form method="post" action="/projects/{{ project.id }}/submit-completion" class="form--inline">
