@@ -34,6 +34,7 @@ from krater.services import (
     clearance,
     compute_files,
     compute_jobs,
+    compute_settings,
     people,
     price_history,
     project_secrets,
@@ -43,7 +44,7 @@ from krater.services import (
 from krater.services import projects as project_service
 from krater.services.actor import Actor
 from krater.services.compute_jobs import JobSpec
-from krater.services.errors import InvalidState, NotAllowed, NotFound, ValidationFailed
+from krater.services.errors import ConfirmationRequired, InvalidState, NotAllowed, NotFound, ValidationFailed
 from krater.services.launch_rules import LAUNCHABLE_STATUSES, hourly_cap_cents
 from krater.storage import StorageError, get_compute_store
 from krater.vast import usd_to_microusd
@@ -207,8 +208,10 @@ def _form_page(
     errors=None,
     posted=None,
     status_code=200,
+    transfer_warning: str | None = None,
 ):
     settings = get_settings()
+    policy = compute_settings.effective_policy(db_session, project)
     return templates.TemplateResponse(
         request,
         "compute/new.html",
@@ -217,6 +220,10 @@ def _form_page(
             "gpus": settings.price_history_gpus,
             "latest": price_history.latest(db_session),
             "cap_cents": hourly_cap_cents(project, settings),
+            "transfer_cap_per_tb": compute_settings.format_value(
+                compute_settings.FIELDS_BY_NAME["transfer_cap_microusd_per_gb"], policy.transfer_cap_microusd_per_gb
+            ),
+            "transfer_warning": transfer_warning,
             "escalations": ESCALATION_LABELS,
             "errors": errors or {},
             "posted": posted or {},
@@ -260,6 +267,7 @@ async def submit_job(
     try:
         kind = ComputeJobKind.BOX if posted.get("kind") == "box" else ComputeJobKind.JOB
         min_vram = posted.get("min_vram", "").strip()
+        data_in, data_out = posted.get("data_in_gb", "").strip(), posted.get("data_out_gb", "").strip()
         if posted.get("order") == "limit":
             target = high = _rate(posted.get("limit", ""), "limit")
             on_outbid = ComputeOutbid.HOLD
@@ -282,6 +290,8 @@ async def submit_job(
             on_max_wait=ComputeEscalation(posted.get("on_max_wait", "keep_waiting")),
             max_runtime_minutes=_int(posted.get("max_runtime_minutes", "480"), "max_runtime_minutes", "max runtime"),
             on_outbid=on_outbid,
+            data_in_gb=_int(data_in, "data_in_gb", "data into the machine") if data_in else None,
+            data_out_gb=_int(data_out, "data_out_gb", "data out of the machine") if data_out else None,
         )
         job = compute_jobs.submit_job(
             db_session,
@@ -291,7 +301,11 @@ async def submit_job(
             cap_cents=hourly_cap_cents(project, get_settings()),
             now=datetime.now(UTC),
             weave_client=weave_client,
+            confirm_transfer_cost=posted.get("confirm_transfer_cost") == "on",
         )
+    except ConfirmationRequired as exc:
+        db_session.rollback()
+        return _form_page(request, db_session, project, weave_client, posted=posted, transfer_warning=str(exc))
     except (ValidationFailed, ValueError) as exc:
         db_session.rollback()
         errors = (
@@ -333,6 +347,7 @@ def job_page(
         )
     )
     live = [row for row in job.instances if row.is_live]
+    charged = [row.transfer_charged_microusd for row in job.instances if row.transfer_charged_microusd is not None]
     is_team = _is_team(actor, project)
     can_read_files = compute_files.can_read(actor, project)
     files, log, files_error = [], None, False
@@ -351,6 +366,7 @@ def job_page(
             "job": job,
             "events": events,
             "instance": live[-1] if live else None,
+            "transfer_charged_cents": -(-sum(charged) // compute_jobs.MICROUSD_PER_CENT) if charged else None,
             "can_cancel": (is_team or actor.is_admin) and (job.is_active or job.state is ComputeJobState.QUEUED),
             "can_stop": is_team and job.kind is ComputeJobKind.BOX and job.state is ComputeJobState.RUNNING,
             "can_resume": is_team and job.kind is ComputeJobKind.BOX and job.state is ComputeJobState.STOPPED,

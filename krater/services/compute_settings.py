@@ -34,6 +34,7 @@ class PolicyField:
     maximum: int
     default: int
     # "bp": stored in basis points, shown and entered as a fraction (9500 <-> 0.95).
+    # "usd_per_tb": stored in micro-dollars per GB, shown and entered in dollars per TB (20000 <-> 20).
     kind: str = "int"
 
 
@@ -155,6 +156,28 @@ POLICY_FIELDS: tuple[PolicyField, ...] = (
         50,
     ),
     PolicyField(
+        "transfer_cap_microusd_per_gb",
+        "Data transfer price cap",
+        "Vast bills data into and out of a machine per GB, at the host's own price, on top of the hourly cost. "
+        "Krater rents no host that charges more than this, each way. On 2026-11-04 the median verified host "
+        "charged $3.91 per TB and one in ten charged $39 to $80; $20 kept four in five offers.",
+        "USD per TB",
+        0,
+        1_000_000,
+        20_000,
+        kind="usd_per_tb",
+    ),
+    PolicyField(
+        "transfer_warn_percent",
+        "Data transfer warning",
+        "Members are warned when a job's data transfer could cost this share of the project's budget: before it is "
+        "queued, from their own estimate at the price cap, and while it runs, from Vast's charges.",
+        "% of budget",
+        1,
+        100,
+        10,
+    ),
+    PolicyField(
         "reconcile_alert_percent",
         "Reconciliation alert",
         "Admins are alerted when Vast's hourly charges differ from Krater's estimate by more than this.",
@@ -184,6 +207,8 @@ class ComputePolicy:
     storage_quota_gb: int
     box_sync_deadline_minutes: int
     box_resume_timeout_minutes: int
+    transfer_cap_microusd_per_gb: int
+    transfer_warn_percent: int
     #: The fields a project overrides (empty for the global policy).
     overridden: frozenset[str] = frozenset()
 
@@ -199,12 +224,17 @@ class ComputePolicy:
 assert {f.name for f in fields(ComputePolicy)} - {"overridden"} == set(FIELDS_BY_NAME)
 
 
+#: What a scaled kind's stored integer is divided by to show it: basis points per 1, micro-dollars per GB per $/TB.
+_SCALED = {"bp": 10_000, "usd_per_tb": 1_000}
+
+
 def format_value(field: PolicyField, value: int | None) -> str:
     """The value as an admin enters it: `0.95` for basis points, the integer otherwise. Blank for `None`."""
     if value is None:
         return ""
-    if field.kind == "bp":
-        return f"{Decimal(value) / 10_000:f}".rstrip("0").rstrip(".") or "0"
+    if field.kind in _SCALED:
+        text = f"{Decimal(value) / _SCALED[field.kind]:f}"
+        return (text.rstrip("0").rstrip(".") if "." in text else text) or "0"
     return str(value)
 
 
@@ -215,9 +245,9 @@ def parse_value(field: PolicyField, raw: str) -> int | None:
     if not text:
         return None
     try:
-        if field.kind == "bp":
-            amount = Decimal(text) * 10_000
-            if amount != amount.to_integral_value():
+        if field.kind in _SCALED:
+            amount = Decimal(text) * _SCALED[field.kind]
+            if not amount.is_finite() or amount != amount.to_integral_value():
                 raise ValueError
             value = int(amount)
         else:

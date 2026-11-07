@@ -69,6 +69,12 @@ def cents_to_input(cents: int) -> str:
 __all__ = ["MAX_AMOUNT_CENTS", "InvalidDollarAmount", "cents_to_input", "format_cents", "parse_dollars"]
 
 
+def format_per_tb(microusd_per_gb: int) -> str:
+    """A data transfer price in integer micro-dollars per GB as dollars per TB (1,000 GB), as Vast shows it:
+    `$3.91/TB`."""
+    return f"${Decimal(int(microusd_per_gb)) / Decimal(1_000):,.2f}/TB"
+
+
 def format_rate(microusd: int) -> str:
     """An hourly rate in integer micro-dollars as `$0.0638/h`: to the tenth of a cent, since bids differ by less
     than a cent."""

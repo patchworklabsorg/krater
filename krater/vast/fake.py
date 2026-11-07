@@ -49,6 +49,8 @@ def _offer(
     num_gpus: int = 1,
     geolocation: str = "US",
     direct_port_count: int = 20,
+    inet_up_cost: float = 0.002,
+    inet_down_cost: float = 0.002,
 ) -> dict[str, Any]:
     return {
         "id": offer_id,
@@ -60,8 +62,8 @@ def _offer(
         "dph_base": dph_base,
         "min_bid": min_bid,
         "storage_cost": storage_cost,
-        "inet_up_cost": 0.002,
-        "inet_down_cost": 0.002,
+        "inet_up_cost": inet_up_cost,
+        "inet_down_cost": inet_down_cost,
         "reliability": reliability,
         "dlperf_per_dphtotal": 100.0,
         "cuda_max_good": 12.4,
@@ -197,10 +199,24 @@ class FakeVast:
         self.instances[instance_id]["actual_status"] = actual_status
         self.instances[instance_id].update(fields)
 
-    def add_charge(self, instance_id: int | str, *, gpu: str, disk: str = "0", start: int = 0, end: int = 0) -> None:
+    def add_charge(
+        self,
+        instance_id: int | str,
+        *,
+        gpu: str,
+        disk: str = "0",
+        data_in: str = "0",
+        data_out: str = "0",
+        start: int = 0,
+        end: int = 0,
+    ) -> None:
+        """One charge row, itemized as the live API does (2026-10-11): `bwd` is data into the machine ("Bandwidth
+        (download)"), `bwu` data out of it."""
         items = [
             {"type": "gpu", "amount": float(gpu), "description": "gpu"},
             {"type": "disk", "amount": float(disk), "description": "disk"},
+            {"type": "bwd", "amount": float(data_in), "description": "Bandwidth (download)"},
+            {"type": "bwu", "amount": float(data_out), "description": "Bandwidth (upload)"},
         ]
         self.charges.append(
             {
@@ -208,7 +224,7 @@ class FakeVast:
                 "type": "instance",
                 "start": start,
                 "end": end,
-                "amount": float(Decimal(gpu) + Decimal(disk)),
+                "amount": float(Decimal(gpu) + Decimal(disk) + Decimal(data_in) + Decimal(data_out)),
                 "metadata": {"label": (self.instances.get(instance_id) or {}).get("label")},
                 "items": items,
             }

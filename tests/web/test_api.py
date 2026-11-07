@@ -221,3 +221,22 @@ def test_a_member_reads_a_jobs_output_and_lists_its_files(client: TestClient, pr
     ]
     assert all("expires=900" in f["url"] for f in files)
     assert refused.status_code == 403
+
+
+def test_a_costly_transfer_estimate_asks_for_confirmation(client: TestClient, project, db_session) -> None:
+    db_session.commit()  # the refusal rolls the request back, which mustn't take the test's project with it
+    order = {**JOB, "data_in_gb": 100_000}
+
+    asked = client.post(f"/api/v1/projects/{project.id}/jobs", json=order, headers=_as(MEMBER_SUB))
+
+    assert asked.status_code == 409
+    assert asked.json()["confirm"] == "confirm_transfer_cost"
+    assert "could cost up to $2,000.00" in asked.json()["error"]
+    assert db_session.scalars(sa.select(ComputeJob)).all() == []
+
+    queued = client.post(
+        f"/api/v1/projects/{project.id}/jobs", json={**order, "confirm_transfer_cost": True}, headers=_as(MEMBER_SUB)
+    )
+
+    assert queued.status_code == 201, queued.text
+    assert queued.json()["data_in_gb"] == 100_000 and queued.json()["data_out_gb"] is None

@@ -37,7 +37,12 @@ from krater.models import (
 from krater.services import funding_holds, grants, teams
 from krater.services.actor import GROUP_REVIEWER
 from krater.services.budget_alerts import AUDIT_BUDGET_TEARDOWN, AUDIT_BUDGET_WARNING
-from krater.services.compute_jobs import AUDIT_BOX_DESTROY_SOON, AUDIT_BOX_DESTROYED, AUDIT_BOX_STOPPED
+from krater.services.compute_jobs import (
+    AUDIT_BOX_DESTROY_SOON,
+    AUDIT_BOX_DESTROYED,
+    AUDIT_BOX_STOPPED,
+    AUDIT_TRANSFER_WARNING,
+)
 from krater.services.grants import AUDIT_GRANT_HELD, AUDIT_GRANT_RELEASED
 from krater.services.slack_membership import slack_id_for
 from krater.slack.client import SlackClient
@@ -523,7 +528,8 @@ def sync_budget_notifications(session: Session, slack_client: SlackClient) -> No
         session.flush()
 
 
-BOX_NOTICES = (AUDIT_BOX_STOPPED, AUDIT_BOX_DESTROY_SOON, AUDIT_BOX_DESTROYED)
+#: Notices about one member's job or box, posted to its project's channel mentioning its owner.
+BOX_NOTICES = (AUDIT_BOX_STOPPED, AUDIT_BOX_DESTROY_SOON, AUDIT_BOX_DESTROYED, AUDIT_TRANSFER_WARNING)
 
 
 def _box_message(session: Session, slack_client: SlackClient, event: AuditEvent, project: Project):
@@ -535,7 +541,14 @@ def _box_message(session: Session, slack_client: SlackClient, event: AuditEvent,
     name = _escape_mrkdwn(payload.get("job_name", "a box"))
     link = f"{get_settings().base_url.rstrip('/')}/projects/{project.id}/compute/{payload.get('job_id', '')}"
     hours = payload.get("destroy_after_hours")
-    if event.action == AUDIT_BOX_STOPPED:
+    if event.action == AUDIT_TRANSFER_WARNING:
+        text = (
+            f":warning: *Data transfer cost*: {who}, data in and out of *{name}*'s machine has cost "
+            f"{_format_cents(payload.get('transfer_cents', 0))} so far, {payload.get('percent', 0)}% of this "
+            f"project's {_format_cents(payload.get('budget_cents', 0))} budget. Vast bills it per GB on top of the "
+            f"hourly price. <{link}|Check the job>, and cancel it if that's more than you expected."
+        )
+    elif event.action == AUDIT_BOX_STOPPED:
         saved = "/workspace is saved" if payload.get("synced") else "/workspace may not have saved"
         text = (
             f":zzz: *Box stopped*: {who}, your box *{name}* stopped ({_escape_mrkdwn(payload.get('reason', ''))}); "
@@ -557,8 +570,8 @@ def _box_message(session: Session, slack_client: SlackClient, event: AuditEvent,
 
 
 def sync_box_notifications(session: Session, slack_client: SlackClient) -> None:
-    """Post every not-yet-posted box notice (stopped by Krater, destroyed soon, destroyed) to its project's channel,
-    mentioning the box's owner, once each (`SlackNotification`)."""
+    """Post every not-yet-posted box notice (stopped by Krater, destroyed soon, destroyed) and data transfer warning
+    to its project's channel, mentioning the box's or job's owner, once each (`SlackNotification`)."""
     already_posted = sa.select(SlackNotification.audit_event_id)
     stmt = sa.select(AuditEvent).where(
         AuditEvent.action.in_(BOX_NOTICES),

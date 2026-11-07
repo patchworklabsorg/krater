@@ -296,7 +296,8 @@ def test_charges_follow_every_page_and_map_to_instances(client: VastClient, fake
     assert len(charges) == 501
     assert charges[0].instance_id == instance_id
     assert charges[0].amount == Decimal("0.012")
-    assert [item.type for item in charges[0].items] == ["gpu", "disk"]
+    # As the live API itemizes a charge: GPU, disk, and data into (bwd) and out of (bwu) the machine.
+    assert [item.type for item in charges[0].items] == ["gpu", "disk", "bwd", "bwu"]
     assert charges[0].label == "krater-test"
 
 

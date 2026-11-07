@@ -490,3 +490,85 @@ def test_reviewers_see_the_job_but_not_its_output(client: TestClient, login_as, 
     assert page.status_code == 200
     assert "private output" not in page.text
     assert download.status_code == 403
+
+
+def test_the_form_asks_for_the_data_a_job_moves_and_names_the_cap(client: TestClient, login_as, project) -> None:
+    login_as(MEMBER_SUB)
+
+    page = client.get(f"/projects/{project.id}/compute/new")
+
+    assert 'name="data_in_gb"' in page.text and 'name="data_out_gb"' in page.text
+    assert "at most $20 per TB each way" in page.text
+    assert 'name="confirm_transfer_cost"' not in page.text
+
+
+def test_a_costly_transfer_estimate_is_confirmed_before_queuing(
+    client: TestClient, login_as, project, db_session
+) -> None:
+    login_as(MEMBER_SUB)
+    page = client.get(f"/projects/{project.id}/compute/new")
+    data = {**FORM, "data_in_gb": "100000", "data_out_gb": "", "csrf_token": get_csrf_token(page.text)}
+
+    warned = client.post(f"/projects/{project.id}/compute", data=data, follow_redirects=False)
+
+    assert warned.status_code == 200
+    assert "Check the data transfer cost." in warned.text and "could cost up to $2,000.00" in warned.text
+    assert 'name="confirm_transfer_cost"' in warned.text
+    assert 'value="100000"' in warned.text  # the form keeps what was entered
+    assert db_session.scalars(sa.select(ComputeJob)).all() == []
+
+    confirmed = client.post(
+        f"/projects/{project.id}/compute",
+        data={**data, "confirm_transfer_cost": "on", "csrf_token": get_csrf_token(warned.text)},
+        follow_redirects=False,
+    )
+
+    assert confirmed.status_code == 303
+    job = db_session.scalars(sa.select(ComputeJob)).one()
+    assert (job.data_in_gb, job.data_out_gb) == (100_000, None)
+
+
+def test_a_bad_transfer_estimate_is_a_field_error(client: TestClient, login_as, project, db_session) -> None:
+    login_as(MEMBER_SUB)
+    page = client.get(f"/projects/{project.id}/compute/new")
+
+    response = client.post(
+        f"/projects/{project.id}/compute",
+        data={**FORM, "data_out_gb": "lots", "csrf_token": get_csrf_token(page.text)},
+    )
+
+    assert response.status_code == 422
+    assert "Enter a whole number for data out of the machine." in response.text
+    assert db_session.scalars(sa.select(ComputeJob)).all() == []
+
+
+def test_the_job_page_shows_the_hosts_transfer_prices_and_charges(
+    client: TestClient, login_as, project, db_session
+) -> None:
+    member = login_as(MEMBER_SUB)
+    job = _job(db_session, project, member, data_in_gb=40)
+    job.state = ComputeJobState.RUNNING
+    db_session.add(
+        ComputeInstance(
+            job_id=job.id,
+            attempt=1,
+            label="krater-job-t-1",
+            provider_instance_id="321",
+            state=ComputeInstanceState.RUNNING,
+            provider_offer_id="1",
+            gpu_name="RTX 3060",
+            interruptible=True,
+            gpu_microusd=55_000,
+            disk_microusd=8_767,
+            transfer_in_microusd_per_gb=3_906,
+            transfer_out_microusd_per_gb=39_063,
+            transfer_charged_microusd=1_234_000,
+        )
+    )
+    db_session.flush()
+
+    page = client.get(f"/projects/{project.id}/compute/{job.id}")
+
+    assert "$3.91/TB in, $39.06/TB out" in page.text
+    assert "$1.24 charged by Vast so far" in page.text
+    assert "estimated 40 GB in, 0 GB out" in page.text

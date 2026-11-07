@@ -40,6 +40,11 @@ class NotFound(DomainError):
     """The requested record doesn't exist (or isn't visible to this actor)."""
 
 
+class ConfirmationRequired(DomainError):
+    """The action is allowed, but costly enough that the member must confirm it first (the message says why). The
+    caller shows the message and asks again with the confirmation set."""
+
+
 class VerificationRequired(InvalidState):
     """A project's compute is held: a team member isn't cleared in Weave (ID verification, a verified guardian for a
     member under 18, or Weave's directory doesn't return them).

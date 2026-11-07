@@ -97,6 +97,22 @@ def test_record_uses_the_admins_reliability_floor(db_session: Session, admin: Ac
     assert fake.search_bodies[0]["reliability"] == {"gte": 0.99}
 
 
+def test_record_shows_only_hosts_under_the_transfer_cap(db_session: Session) -> None:
+    fake = FakeVast()
+    # Cheaper than every RTX 3060 by the hour, but $39 per TB for data out: Krater would never rent it.
+    fake.add_offer(
+        1010, 510, "RTX 3060", dph_base=0.03, min_bid=0.02, storage_cost=0.1, gpu_ram_mb=12288, inet_up_cost=0.039
+    )
+
+    price_history.record(db_session, fake.client(), gpu_names=["RTX 3060"], disk_gb=32, now=NOW)
+
+    assert fake.search_bodies[0]["inet_up_cost"] == {"lte": 0.02}
+    assert fake.search_bodies[0]["inet_down_cost"] == {"lte": 0.02}
+    (sample,) = price_history.series(db_session, gpu_name="RTX 3060", rental_type="bid", since=NOW - timedelta(hours=1))
+    assert sample.offer_count == 3
+    assert sample.min_microusd == usd_to_microusd(Decimal("0.05") + Decimal("0.2") * 32 / 730)
+
+
 def test_one_failing_search_is_skipped(db_session: Session) -> None:
     fake = FakeVast()
     fake.fail_next(502)

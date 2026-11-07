@@ -25,6 +25,8 @@ FORM = {
     "box_sync_deadline_minutes": "10",
     "box_resume_timeout_minutes": "10",
     "storage_quota_gb": "50",
+    "transfer_cap_microusd_per_gb": "20",
+    "transfer_warn_percent": "10",
 }
 
 

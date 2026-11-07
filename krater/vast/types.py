@@ -141,6 +141,16 @@ class Offer:
             verified=raw.get("verification") == "verified" if "verification" in raw else bool(raw.get("verified")),
         )
 
+    @property
+    def transfer_in_microusd_per_gb(self) -> int:
+        """Data into the machine (Vast's `inet_down_cost`: image pulls, datasets, checkpoint restores) per GB."""
+        return usd_to_microusd(self.inet_down_cost)
+
+    @property
+    def transfer_out_microusd_per_gb(self) -> int:
+        """Data out of the machine (Vast's `inet_up_cost`: checkpoints, outputs) per GB."""
+        return usd_to_microusd(self.inet_up_cost)
+
     def gpu_price(self, rental_type: RentalType) -> Decimal:
         """The GPU's own hourly price: the minimum bid for an interruptible rental, `dph_base` on demand."""
         if rental_type == "bid":
@@ -197,6 +207,9 @@ class OfferQuery:
     #: (the GPU alone, so a necessary condition), `dph_total` (GPU plus this query's disk) on demand. A waiting job's
     #: search then returns no rows at all, and rows are what Vast's daily search quota counts.
     max_price_microusd: int | None = None
+    #: Only hosts charging at most this per GB of data into (`inet_down_cost`) and out of (`inet_up_cost`) the
+    #: machine, in micro-dollars per GB. Vast bills transfer per GB on top of `dph_total`.
+    max_transfer_microusd_per_gb: int | None = None
 
     def to_body(self) -> dict[str, Any]:
         body: dict[str, Any] = {
@@ -230,6 +243,10 @@ class OfferQuery:
         if self.max_price_microusd is not None:
             price = float(microusd_to_usd(self.max_price_microusd))
             body["min_bid" if self.rental_type == "bid" else "dph_total"] = {"lte": price}
+        if self.max_transfer_microusd_per_gb is not None:
+            per_gb = float(microusd_to_usd(self.max_transfer_microusd_per_gb))
+            body["inet_down_cost"] = {"lte": per_gb}
+            body["inet_up_cost"] = {"lte": per_gb}
         return body
 
 
