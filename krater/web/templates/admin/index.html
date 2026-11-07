@@ -7,7 +7,7 @@
 <div class="page-head">
   <div>
     <h1>Admin</h1>
-    <p class="page-subtitle">Every project with its budget, the approval policy, the public gallery, and the delivery of events to Quilt.</p>
+    <p class="page-subtitle">Budget held for verification, every project with its budget, the approval policy, the public gallery, and the delivery of events to Quilt.</p>
   </div>
   <div class="page-actions">
     <a class="button" href="/admin/funders/ospool">Share with OSPool</a>
@@ -23,6 +23,52 @@
     </div>
   {% endfor %}
 </dl>
+
+<section aria-labelledby="held-grants">
+  <div class="section-head">
+    <h2 id="held-grants">Budget held for verification</h2>
+  </div>
+  <p class="muted">Approved budget isn't added until Weave has verified every team member, and a guardian for anyone
+    under 18. Krater checks every five minutes and adds it then. Nobody can release it in Krater.</p>
+  {% if held %}
+    <div class="table-scroll">
+      <table class="table">
+        <thead>
+          <tr>
+            <th scope="col">Project</th>
+            <th scope="col" class="num">Held</th>
+            <th scope="col">For</th>
+            <th scope="col">Decided by</th>
+            <th scope="col">Since</th>
+            <th scope="col">Waiting on</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in held %}
+            <tr>
+              <td class="cell-title"><a href="/projects/{{ row.held.project.id }}">{{ row.held.project.title or "Untitled proposal" }}</a></td>
+              <td class="num">{{ row.held.amount_cents | dollars }}</td>
+              <td>{{ row.kind }}</td>
+              <td>{{ row.approver }}</td>
+              <td class="nowrap">{{ row.held.created_at.strftime("%Y-%m-%d") }}</td>
+              <td>
+                {% if row.waiting is none %}
+                  Krater couldn't reach Weave to check.
+                {% elif row.waiting %}
+                  {% for member in row.waiting %}<div>{{ member.label }}: {{ member.reason }}</div>{% endfor %}
+                {% else %}
+                  Everyone is verified. It's added within five minutes.
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="empty-state"><p>No budget is held.</p></div>
+  {% endif %}
+</section>
 
 <section aria-labelledby="all-projects">
   <div class="section-head">

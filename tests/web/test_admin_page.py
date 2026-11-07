@@ -202,3 +202,38 @@ def test_the_gallery_setting_needs_a_reason_and_an_admin(client: TestClient, log
     response = client.post("/admin/gallery", data={"csrf_token": csrf, "gallery_minor_names": "full", "reason": "x"})
     assert response.status_code == 403
     assert site_settings.current(db_session).gallery_minor_names is GalleryMinorNames.FIRST
+
+
+# --------------------------------------------------------------------------------------------------
+# Budget held for verification
+# --------------------------------------------------------------------------------------------------
+
+
+def test_admin_sees_held_budget_and_who_it_waits_on(
+    client: TestClient, login_as, approved_project, weave_stub, monkeypatch
+) -> None:
+    # Fixture users from krater/weave/stub_users.json: a minor without a verified guardian.
+    minor = login_as("PWLMINORONE")
+    reviewer = login_as(REVIEWER_SUB)
+    approved_project(minor, reviewer, title="Held Rover", budget_requested_cents=12_500)
+
+    login_as(ADMIN_SUB)
+    page = client.get("/admin").text
+
+    assert "Budget held for verification" in page
+    assert "Held Rover" in page and "$125.00" in page and "Approval" in page
+    assert "Milo Minor (PWLMINORONE): under 18 without a verified guardian in Weave" in page
+
+    weave_stub.set_guardian_verified("PWLMINORONE", True)
+    assert "Everyone is verified. It's added within five minutes." in client.get("/admin").text
+
+
+def test_the_held_list_is_empty_without_holds(client: TestClient, login_as, approved_project) -> None:
+    member = login_as(MEMBER_SUB)
+    reviewer = login_as(REVIEWER_SUB)
+    approved_project(member, reviewer, title="Funded Rover")
+
+    login_as(ADMIN_SUB)
+    page = client.get("/admin").text
+
+    assert "No budget is held." in page
