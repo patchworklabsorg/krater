@@ -130,17 +130,20 @@ Rules (`krater.services.funder_packet`; how-to in [guides/share-with-ospool.md](
   with nothing ticked; each shows its status, the amounts requested and granted, and whether its whole team is
   verified US residents (the OSPool rule above). The PDF holds exactly the ticked projects. Maintainer decision
   (Oct 31, 2026): a manual selection replaced the automatic list of approved, all-resident teams.
-- **Which fields.** Title, summary (the one sentence), how the compute is used, status, the amount requested (the
-  approved revision's, not an amendment in review; for a project never approved, its newest revision's), the amount
-  granted (the ledger ceiling), the GPU estimate (card, count, hours, interruptible or on-demand), the team's names and
-  size, and whether every team member is a verified US resident. Names follow the gallery's setting for members under
-  18 (`gallery_minor_names`); a member Weave doesn't return is counted, not named. Nothing else: no emails, Patchwork
-  IDs, demographics, experience answers, affiliation details, write-up, repo, secrets or compute logs. Weave never
-  sends a member's country, so the packet gives US residency only.
+- **Which fields.** The admin ticks them on the page too (`funder_packet.FIELDS`); the title always goes. Ticked when
+  the page opens: summary (the one sentence), how the compute is used, where the training data comes from, status
+  (with the funding hold, if any), the amount requested (the approved revision's, not an amendment in review; for a
+  project never approved, its newest revision's), the amount granted (the ledger ceiling), the GPU estimate (card,
+  count, hours, interruptible or on-demand), the team's names and size, and whether every team member is a verified
+  US resident. Unticked until the admin ticks them: the write-up, the experience answer, the contest or professor,
+  the open-source answer, the repo link and the finished-product estimate. Names follow the gallery's setting for
+  members under 18 (`gallery_minor_names`); a member Weave doesn't return is counted, not named. Nothing else, whatever
+  is ticked: no emails, Patchwork IDs, demographics, secrets or compute logs. Weave never sends a member's country, so
+  the packet gives US residency only. Maintainer decision (Nov 7, 2026): the admin picks the fields.
 - **Fresh.** The page may use the directory cache, and still lists every project when Weave is down. The export reads
   names and residency fresh, and makes no file when Weave can't be reached.
 - **Audit.** Each export writes a `funder_packet_export` `AuditEvent`: the admin, the funder, the format (`pdf`), and
-  the projects in the file. Admins may export packets that include their own projects: sharing grants nothing.
+  the projects and the fields in the file. Admins may export packets that include their own projects: sharing grants nothing.
 
 **Demographics gate.** Funders need demographic answers from the members they fund. Weave keeps the answers sealed
 and never sends them to Krater. Weave's directory record says `demographics_answered: true` once the member saved an
