@@ -342,6 +342,18 @@ def test_get_user_reads_the_verification_status(
     assert user.verification_status == read
 
 
+@pytest.mark.parametrize(("sent", "read"), [(True, True), (False, False), (None, None), ("no", None)])
+def test_get_user_reads_whether_slack_and_the_code_of_conduct_apply(
+    fake_weave: FakeWeave, live_client: LiveWeaveClient, sent: object, read: bool | None
+) -> None:
+    extra = {} if sent is None else {"slack_required": sent, "code_of_conduct_required": sent}
+    fake_weave.directory_users["PWLDIR0001"] = {**DIRECTORY_USER, **extra}
+
+    user = live_client.get_user("PWLDIR0001")
+
+    assert (user.slack_required, user.code_of_conduct_required) == (read, read)
+
+
 def test_get_user_reads_the_minor_and_guardian_verified_fields(
     fake_weave: FakeWeave, live_client: LiveWeaveClient
 ) -> None:

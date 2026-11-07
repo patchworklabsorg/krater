@@ -60,6 +60,40 @@ def test_a_slack_guest_cannot_submit(client: TestClient, login_as, create_projec
     assert "code of conduct" in redirected.text.lower()
 
 
+def test_a_sponsored_projects_member_submits_without_slack(
+    client: TestClient, login_as, create_project, db_session: Session, weave_stub: StubWeaveClient
+) -> None:
+    # Weave says the member's group waives the Patchwork Slack (and so the code of conduct).
+    weave_stub.set_onboarding(GUEST_SUB, slack_required=False, code_of_conduct_required=False)
+    guest = login_as(GUEST_SUB)
+    project = create_project(guest, title="T", write_up="W", budget_requested_cents=100)
+    db_session.commit()
+
+    response = _post_submit(client, project.id)
+
+    assert response.status_code == 303
+    db_session.refresh(project)
+    assert project.status is ProjectStatus.PENDING_REVIEW
+
+
+def test_a_code_of_conduct_exempt_guest_is_told_to_ask_a_slack_admin(
+    client: TestClient, login_as, create_project, db_session: Session, weave_stub: StubWeaveClient
+) -> None:
+    weave_stub.set_onboarding(GUEST_SUB, slack_required=True, code_of_conduct_required=False)
+    guest = login_as(GUEST_SUB)
+    project = create_project(guest, title="T", write_up="W", budget_requested_cents=100)
+    db_session.commit()
+
+    response = _post_submit(client, project.id)
+
+    db_session.refresh(project)
+    assert project.status is ProjectStatus.DRAFT
+    page = client.get(response.headers["location"]).text
+    assert "exempt from the code of conduct, but you" in page
+    assert "Ask a Slack admin to make you a full member" in page
+    assert "accept the code of conduct" not in page
+
+
 def test_a_full_member_can_submit(client: TestClient, login_as, create_project, db_session: Session) -> None:
     member = login_as(MEMBER_SUB)
     project = create_project(member, title="T", write_up="W", budget_requested_cents=100)

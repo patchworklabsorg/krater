@@ -54,6 +54,8 @@ class StubUser:
     demographics_answered: bool | None = None  # None: Weave sends no `demographics_answered` field
     us_resident: bool | None = None  # None: no standing US residency result, or no `us_resident` field
     verification_status: str | None = None  # None: Weave sends no `verification_status` field
+    slack_required: bool | None = None  # None: Weave sends no `slack_required` field
+    code_of_conduct_required: bool | None = None  # None: Weave sends no `code_of_conduct_required` field
 
 
 class StubWeaveClient:
@@ -86,6 +88,8 @@ class StubWeaveClient:
                 demographics_answered=entry.get("demographics_answered"),
                 us_resident=entry.get("us_resident"),
                 verification_status=entry.get("verification_status"),
+                slack_required=entry.get("slack_required"),
+                code_of_conduct_required=entry.get("code_of_conduct_required"),
             )
             self._users_by_sub[user.sub] = user
 
@@ -163,6 +167,8 @@ class StubWeaveClient:
         demographics_answered: bool | None = None,
         us_resident: bool | None = None,
         verification_status: str | None = "verified",
+        slack_required: bool | None = None,
+        code_of_conduct_required: bool | None = None,
     ) -> None:
         """Add or replace a user. `roles` are Weave role keys (`None` for no `roles` field at all),
         `groups` are group slugs, and `minor`, `guardian_verified`, `demographics_answered` or
@@ -183,6 +189,8 @@ class StubWeaveClient:
             demographics_answered=demographics_answered,
             us_resident=us_resident,
             verification_status=verification_status,
+            slack_required=slack_required,
+            code_of_conduct_required=code_of_conduct_required,
         )
 
     def set_roles(self, sub: str, roles: Iterable[str] | None, *, groups: Iterable[str] | None = None) -> None:
@@ -218,6 +226,12 @@ class StubWeaveClient:
         """Change Weave's identity verification status for `sub` (`None`: no field)."""
         self._users_by_sub[sub] = dataclasses.replace(self._users_by_sub[sub], verification_status=status)
 
+    def set_onboarding(self, sub: str, *, slack_required: bool | None, code_of_conduct_required: bool | None) -> None:
+        """Change whether Weave says Slack and the code of conduct apply to `sub` (`None`: no field)."""
+        self._users_by_sub[sub] = dataclasses.replace(
+            self._users_by_sub[sub], slack_required=slack_required, code_of_conduct_required=code_of_conduct_required
+        )
+
     def remove_user(self, sub: str) -> None:
         """Make the directory answer 404 for `sub`, as Weave does for a user Krater may not see."""
         self._users_by_sub.pop(sub, None)
@@ -237,6 +251,8 @@ class StubWeaveClient:
             demographics_answered=user.demographics_answered,
             us_resident=user.us_resident,
             verification_status=user.verification_status,
+            slack_required=user.slack_required,
+            code_of_conduct_required=user.code_of_conduct_required,
         )
 
 

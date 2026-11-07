@@ -99,6 +99,11 @@ channel.
 - If Slack can't be reached, the submission fails with an error rather than guessing either way.
 - If the check fails, the user can still save drafts but sees "Join the Patchwork Labs Slack and accept the code of
   conduct to submit", with a link to Weave.
+- Weave decides who needs Slack at all (its directory's `slack_required` and `code_of_conduct_required`, weave#274).
+  A member of a sponsored project whose group waives the Patchwork Slack, such as HackBoston, passes the gate and
+  follows the review on the project page; channel invites skip them like any member Slack refuses. Someone Weave
+  exempts from the code of conduct alone still needs full membership, but Weave promotes guests only when they accept
+  the code, so Krater tells them to ask a Slack admin to make them a full member. A missing field means required.
 - Channel invites use the team's stored Slack ids (from Weave). Reviewers come from Weave's directory (`?role=reviewer`), with Weave's `slack_id`. Krater doesn't pre-filter
   guests: invites use Slack's `force` flag, and anyone Slack refuses (a guest, a deactivated or stale id) is skipped and
   logged, so one person's Slack account never stops the channel, the rest of the team's invites or the review message.
