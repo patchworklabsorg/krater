@@ -7,9 +7,11 @@
 <div class="page-head">
   <div>
     <h1>Admin</h1>
-    <p class="page-subtitle">Budget held for verification, every project with its budget, the approval policy, the public gallery, and the delivery of events to Quilt.</p>
+    <p class="page-subtitle">Budget held for verification, every project with its budget, recent activity, the approval policy, the public gallery, and the delivery of events to Quilt.</p>
   </div>
   <div class="page-actions">
+    <a class="button" href="/admin/activity">Activity</a>
+    <a class="button" href="/admin/live">Live compute</a>
     <a class="button" href="/admin/funders/ospool">Share with OSPool</a>
     <a class="button" href="/admin/compute">Compute settings</a>
   </div>
@@ -19,7 +21,7 @@
   {% for status in statuses %}
     <div class="stat">
       <dt>{{ status.value.replace('_', ' ') | capitalize }}</dt>
-      <dd>{{ by_status[status] | length }}</dd>
+      <dd>{{ counts[status] }}</dd>
     </div>
   {% endfor %}
 </dl>
@@ -74,6 +76,23 @@
   <div class="section-head">
     <h2 id="all-projects">All projects</h2>
   </div>
+  <form method="get" action="/admin#all-projects" class="filter-bar" role="search" aria-label="Projects">
+    <div class="field">
+      <label for="project-search">Title or lead's Patchwork ID</label>
+      <input id="project-search" type="search" name="q" value="{{ query }}" autocomplete="off">
+    </div>
+    <div class="field">
+      <label for="project-status">Status</label>
+      <select id="project-status" name="status">
+        <option value="">Any status</option>
+        {% for status in statuses %}
+          <option value="{{ status.value }}" {% if status.value == status_filter %}selected{% endif %}>{{ status.value.replace('_', ' ') | capitalize }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit" class="button">Search</button>
+    {% if filtered %}<a href="/admin#all-projects">Clear</a>{% endif %}
+  </form>
   {% set ns = namespace(any=false) %}
   {% for status in statuses %}{% if by_status[status] %}{% set ns.any = true %}{% endif %}{% endfor %}
   {% if ns.any %}
@@ -104,8 +123,16 @@
       </table>
     </div>
   {% else %}
-    <div class="empty-state"><p>No projects yet.</p></div>
+    <div class="empty-state"><p>{{ "No project matches." if filtered else "No projects yet." }}</p></div>
   {% endif %}
+</section>
+
+<section aria-labelledby="recent-activity">
+  <div class="section-head">
+    <h2 id="recent-activity">Recent activity</h2>
+    <a href="/admin/activity">All activity</a>
+  </div>
+  {% with rows = recent, project = none %}{% include "admin/_activity_table.html" %}{% endwith %}
 </section>
 
 <section class="card" aria-labelledby="approval-policy">

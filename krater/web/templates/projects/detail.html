@@ -359,7 +359,10 @@
     <h2>Admin</h2>
     <a class="muted" href="/admin">Admin overview</a>
   </div>
-  <p><a href="/admin/compute/projects/{{ project.id }}">Compute settings for this project</a></p>
+  <p>
+    <a href="/admin/activity?project={{ project.id }}">Budget ledger and activity</a> ·
+    <a href="/admin/compute/projects/{{ project.id }}">Compute settings for this project</a>
+  </p>
   {% if admin_own_project %}
     <p class="policy-note">You lead this project or are on its team, so another admin has to decide it, add
       to its budget or raise its hourly cap. You can still cut or reclaim its budget, lower its cap, or withdraw it.</p>

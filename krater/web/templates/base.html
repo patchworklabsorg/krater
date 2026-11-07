@@ -33,10 +33,14 @@
           <span>Krater</span>
         </a>
         <nav class="site-nav" aria-label="Primary">
-          {% set on_home = path == "/" or path.startswith("/projects") or path.startswith("/reviews") or path.startswith("/admin") %}
+          {% set show_admin = nav_is_admin(request) %}
+          {% set on_home = path == "/" or path.startswith("/projects") or path.startswith("/reviews") or (path.startswith("/admin") and not show_admin) %}
           <a class="site-nav__link" href="/"{% if on_home %} aria-current="{{ 'page' if path == '/' else 'true' }}"{% endif %}>{{ "My projects" if signed_in_name else "Home" }}</a>
           <a class="site-nav__link" href="/gallery"{% if path.startswith("/gallery") %} aria-current="{{ 'page' if path == '/gallery' else 'true' }}"{% endif %}>Gallery</a>
           <a class="site-nav__link" href="/pricing"{% if path.startswith("/pricing") %} aria-current="{{ 'page' if path == '/pricing' else 'true' }}"{% endif %}>GPU pricing</a>
+          {% if show_admin %}
+            <a class="site-nav__link" href="/admin"{% if path.startswith("/admin") %} aria-current="{{ 'page' if path == '/admin' else 'true' }}"{% endif %}>Admin</a>
+          {% endif %}
           {% if signed_in_name %}
             <a class="site-nav__link" href="/account/ssh-keys"{% if path.startswith("/account") %} aria-current="page"{% endif %}>SSH keys</a>
           {% endif %}

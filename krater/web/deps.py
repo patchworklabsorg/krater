@@ -43,7 +43,11 @@ def current_user(request: Request, db_session: Annotated[Session, Depends(get_se
         user_id = uuid.UUID(raw_user_id)
     except ValueError:
         return None
-    return db_session.get(User, user_id)
+    user = db_session.get(User, user_id)
+    # For the navigation bar (`nav_is_admin`): read when the page renders, after any directory lookup this request
+    # made has refreshed the user's cached roles.
+    request.state.nav_user = user
+    return user
 
 
 def require_user(request: Request, user: Annotated[User | None, Depends(current_user)]) -> User:

@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+
+{% block title %}{{ "Activity: " ~ (project.title or "Untitled proposal") if project else "Activity" }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    {% if project %}
+      <a class="back-link" href="/projects/{{ project.id }}">&larr; {{ project.title or "Untitled proposal" }}</a>
+      <h1>Activity: {{ project.title or "Untitled proposal" }}</h1>
+      <p class="page-subtitle">This project's budget ledger, and every admin override and team change recorded for it.</p>
+    {% else %}
+      <a class="back-link" href="/admin">&larr; Admin</a>
+      <h1>Activity</h1>
+      <p class="page-subtitle">
+        Every admin override, budget change, team change and compute alert Krater has recorded, newest first.
+        Krater's own events (the worker's) show as Krater.
+      </p>
+    {% endif %}
+  </div>
+  {% if project %}
+    <div class="page-actions"><a class="button" href="/admin/activity">All activity</a></div>
+  {% endif %}
+</div>
+
+{% if ledger %}
+<section class="card" aria-labelledby="ledger">
+  <div class="card-head">
+    <h2 id="ledger">Budget ledger</h2>
+    <span class="muted">Ceiling now {{ ledger.ceiling_cents | dollars }}</span>
+  </div>
+  {% if ledger.rows %}
+    <div class="table-scroll">
+      <table class="table">
+        <thead>
+          <tr>
+            <th scope="col">When</th>
+            <th scope="col">Kind</th>
+            <th scope="col" class="num">Amount</th>
+            <th scope="col">By</th>
+            <th scope="col">Reason</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in ledger.rows %}
+            <tr>
+              <td class="nowrap">{{ row.entry.created_at.strftime("%Y-%m-%d %H:%M UTC") }}</td>
+              <td>{{ row.kind }}</td>
+              <td class="num">{{ ("+" if row.entry.amount_cents > 0 else "") ~ (row.entry.amount_cents | dollars) }}</td>
+              <td>{{ row.actor }}</td>
+              <td>{{ row.entry.reason or "" }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="empty-state"><p>No budget granted yet.</p></div>
+  {% endif %}
+</section>
+{% endif %}
+
+<section class="card" aria-labelledby="events">
+  <h2 id="events">{{ "Events" if project else "All events" }}</h2>
+  {% include "admin/_activity_table.html" %}
+  {% if page > 1 or has_next %}
+    <nav class="pager" aria-label="Pages">
+      {% set base = "/admin/activity?" ~ ("project=" ~ project.id ~ "&" if project else "") %}
+      {% if page > 1 %}<a href="{{ base }}page={{ page - 1 }}">&larr; Newer</a>{% endif %}
+      <span class="muted">Page {{ page }}</span>
+      {% if has_next %}<a href="{{ base }}page={{ page + 1 }}">Older &rarr;</a>{% endif %}
+    </nav>
+  {% endif %}
+</section>
+{% endblock %}
