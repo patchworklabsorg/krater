@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 from krater.config import get_settings
 from krater.models import (
     AuditEvent,
+    FundingHold,
     Project,
     ProjectRevision,
     ProjectStatus,
@@ -81,6 +82,17 @@ def _format_cents(cents: int) -> str:
     sign = "-" if cents < 0 else ""
     whole, remainder = divmod(abs(cents), 100)
     return f"{sign}${whole:,}.{remainder:02d}"
+
+
+def _funding_hold_label(value: str | None) -> str | None:
+    """A held grant's `funding_hold` payload value as the hold reads in a sentence ("awaiting funding"), or `None`
+    when the grant waits on verification. An unknown value still reads as a hold, never as verification."""
+    if not value:
+        return None
+    try:
+        return funding_holds.LABELS[FundingHold(value)].lower()
+    except ValueError:
+        return "on a funding hold"
 
 
 def _slack_ids(session: Session, slack_client: SlackClient, people: list[User]) -> set[str]:
@@ -390,11 +402,21 @@ def _budget_event_message(event: AuditEvent) -> tuple[list[dict], str]:
     payload = event.payload or {}
     if event.action == AUDIT_GRANT_HELD:
         link = f"{get_settings().base_url.rstrip('/')}/projects/{event.project_id}"
-        text = (
-            f":hourglass_flowing_sand: *Budget held*: {_format_cents(payload.get('amount_cents', 0))} of budget is "
-            "held until every team member is verified in Weave (ID verification, and a verified guardian for anyone "
-            f"under 18). <{link}|See who it's waiting on>."
-        )
+        amount = _format_cents(payload.get("amount_cents", 0))
+        hold = _funding_hold_label(payload.get("funding_hold"))
+        if hold:
+            # A funding hold holds every grant whatever the team's verification (`grants._not_cleared`), and Weave
+            # isn't asked, so this says nothing about verification.
+            text = (
+                f":hourglass_flowing_sand: *Budget held*: {amount} of budget is held because the project is {hold}. "
+                f"It's added once an admin clears the hold. <{link}|See the project>."
+            )
+        else:
+            text = (
+                f":hourglass_flowing_sand: *Budget held*: {amount} of budget is held until every team member is "
+                "verified in Weave (ID verification, and a verified guardian for anyone under 18). "
+                f"<{link}|See who it's waiting on>."
+            )
     elif event.action == AUDIT_GRANT_RELEASED:
         text = (
             ":white_check_mark: *Budget released*: every team member is verified in Weave, so the held "

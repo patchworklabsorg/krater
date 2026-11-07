@@ -1182,11 +1182,15 @@ def admin_adjust_budget(
             extra=f"Amount: {amount_cents / 100:+.2f}",
         )
 
-    message = (
-        "Budget increase held until every team member is verified in Weave."
-        if isinstance(result, HeldGrant)
-        else "Budget adjusted."
-    )
+    if not isinstance(result, HeldGrant):
+        message = "Budget adjusted."
+    elif project.funding_hold is not None:
+        message = (
+            f"Budget increase held: the project is {funding_holds.LABELS[project.funding_hold].lower()}, "
+            "so it's added once an admin clears the hold."
+        )
+    else:
+        message = "Budget increase held until every team member is verified in Weave."
     return _success_redirect(db_session, request, project_id, message, after_commit=_notify)
 
 
