@@ -96,10 +96,11 @@ tests/             mirrors krater/ layout
   directory lookups too. Tests change a user mid-test with `StubWeaveClient.set_roles` and friends. The app must
   refuse to start in stub mode when `KRATER_ENV=production`.
 - **Migrations only add.** A migration's `upgrade()` adds tables, columns and indexes; it never drops, renames or
-  deletes. The previous release must still start on the newer database, because a bad release is undone by shipping a
-  revert, not by restoring the database. Remove an old column in a later release, once no deployed code reads it, in a
-  migration marked `# krater: contract-migration (<why it is safe now>)`. `tests/test_migrations_additive.py`
-  enforces this. A new NOT NULL column needs a server default. Details: `docs/dev/production.md` "Migrations".
+  deletes. The previous release must still run on the newer database: a failed deploy starts it again without
+  migrating, and a bad release is undone by reverting its code (keep the migration files), not by restoring the
+  database. Remove an old column in a later release, once no deployed code reads it, in a migration with the line
+  `# krater: contract-migration (<why it is safe now>)`. A new NOT NULL column needs a server default.
+  `tests/test_migrations_additive.py` checks most of this. Details: `docs/dev/production.md` section 0.3.
 - Timestamps are timezone-aware UTC (`DateTime(timezone=True)`).
 - Tests: every service rule gets a unit test; every route gets at least a happy-path and an authz test.
 - Keep comments for the *why*; match the surrounding style.

@@ -46,27 +46,36 @@ all its CI checks passed. The deploy then does these steps:
    If the dump fails, nothing deploys.
 2. It builds the image, then restarts the portal, which runs the migrations. The worker restarts with it.
 3. It waits up to 2 minutes for `/healthz` and `/healthz/worker` to return 200. If they do not, it starts the
-   previous version again.
+   previous version again. The previous version does not migrate: the database is at a newer revision than its
+   code knows, so it starts on the newer schema as it is (section 0.3).
 
 Only admins of this repo can push to `production`. Force pushes and deletion are off. `journalctl -u
 krater-prod-follow` on weft shows what each run did.
 
-**To undo a release, revert it on `main` and ship the revert.** Do not move `production` back to an older commit:
-the database keeps the newer migrations, and the older code may not start on them.
+**To undo a release, revert its code on `main` and ship the revert, but keep its migration files.** The database
+stays at the newer migration either way. If the revert deletes a migration file, a later migration built on the
+older head never runs, because weft sees a database newer than the code and skips `alembic upgrade`. For the same
+reason, do not move `production` back to an older commit.
 
 ### 0.3 Migrations
 
-A release must leave a database that the previous release can still run on. That is what makes "revert and ship"
-safe. So a migration's `upgrade()` only adds:
+A release must leave a database that the previous release can still run on. That is what makes the automatic
+restart of the previous version and "revert and ship" safe. So a migration's `upgrade()` only adds:
 
 - **Add** a table, a column or an index. A new `NOT NULL` column needs a `server_default`, or old code that inserts
   rows without it fails.
 - **Rename** in three releases: add the new column and write both, then move the reads, then drop the old column.
 - **Drop** a column or table only in a later release, after no deployed code reads it. Mark that migration with a line
   `# krater: contract-migration (<why it is safe now>)`.
-- **Change data** (`UPDATE`, `DELETE`) only when the old code still works on the result.
+- **Change data** (`UPDATE`, `DELETE`) only when the old code still works on the result. A backfill of a new
+  column is fine.
 
-`tests/test_migrations_additive.py` fails CI on a drop, a rename or a `DELETE` in `upgrade()` without the marker.
+`tests/test_migrations_additive.py` fails CI, unless the migration has the marker, when its code outside
+`downgrade()` does one of these steps: `op.drop_table`, `op.drop_column`, `op.rename_table`,
+`op.alter_column` with `new_column_name`, `type_` or `nullable=False`, `op.add_column` of a `NOT NULL` column
+without `server_default`, or SQL with `DROP TABLE|COLUMN|CONSTRAINT|TYPE|SCHEMA|VIEW|FUNCTION`, `ALTER TABLE ...
+DROP`, `RENAME TO|COLUMN|CONSTRAINT`, a type change, `SET NOT NULL`, `TRUNCATE` or `DELETE FROM`. It does not
+check data changes or what code reads, so the rules above still need review.
 
 Before a release that changes or deletes data, check that the pre-deploy dump exists, or ask for a manual one:
 `sudo systemctl start krater-prod-backup` on weft. To restore, someone with skein access runs `pg_restore --clean
