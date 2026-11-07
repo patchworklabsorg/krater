@@ -61,7 +61,7 @@ from krater.providers import (
     ProviderUnavailableError,
 )
 from krater.registry import Registry, RegistryError, parse_reference
-from krater.services import audit, budget, budget_alerts, clearance, compute_jobs, compute_settings
+from krater.services import audit, budget, budget_alerts, clearance, compute_jobs, compute_settings, funding_holds
 from krater.services.compute_settings import ComputePolicy
 from krater.services.launch_rules import LAUNCHABLE_STATUSES, hourly_cap_cents
 from krater.vast import Instance, Offer, OfferQuery, RentalType, microusd_to_usd, usd_to_microusd
@@ -1080,6 +1080,10 @@ class Scheduler:
         if project.status not in LAUNCHABLE_STATUSES:
             _finish(job, ComputeJobState.CANCELLED, f"The project is {project.status.value}.", now=self.now)
             _event(self.session, job, "cancelled", "Cancelled: the project can't launch any more.", now=self.now)
+            return False
+        if project.funding_hold is not None:
+            # Queued before an admin set the hold (`krater.services.funding_holds`): it starts once the hold is cleared.
+            job.state_reason = f"Waiting: the project is {funding_holds.LABELS[project.funding_hold].lower()}."
             return False
         held = self._held_for_verification(project)
         if held is not None:

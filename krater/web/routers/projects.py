@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Annotated
 
 import sqlalchemy as sa
@@ -31,7 +32,7 @@ from krater.models import (
     User,
 )
 from krater.services import budget as budget_service
-from krater.services import clearance, demographics, grants, people, residency, slack_membership, teams
+from krater.services import clearance, demographics, funding_holds, grants, people, residency, slack_membership, teams
 from krater.services import projects as project_service
 from krater.services import screenshots as screenshot_service
 from krater.services import users as user_service
@@ -93,8 +94,14 @@ _SLACK_PROMOTION_REQUIRED_MESSAGE = (
 
 
 def _decision_message(db_session: Session, project: Project, revision: ProjectRevision, default: str) -> str:
-    """The flash after a decision: says so when this approval's budget is held for the team's verification."""
+    """The flash after a decision: says so when this approval's budget is held, for a funding hold or for the
+    team's verification."""
     held = grants.pending(db_session, project)
+    if held is not None and held.revision_id == revision.id and project.funding_hold is not None:
+        return (
+            f"Approved as {funding_holds.LABELS[project.funding_hold].lower()}. Its budget of "
+            f"{format_cents(held.amount_cents)} is held until an admin clears the hold."
+        )
     if held is not None and held.revision_id == revision.id:
         return (
             f"Approved. Its budget of {format_cents(held.amount_cents)} is held until every team member is verified "
@@ -596,6 +603,13 @@ def _build_detail_context(
         "can_start_completion": is_team and project.status is ProjectStatus.APPROVED and not has_draft,
         "can_withdraw": is_lead and project.status not in _TERMINAL_STATUSES,
         "can_review": can_review,
+        # A proposal or amendment approval may be held for funding (`krater.services.funding_holds`).
+        "can_hold_funding": current_is_pending and current.kind is not RevisionKind.COMPLETION,
+        "funding_hold_choices": [(hold.value, label) for hold, label in funding_holds.LABELS.items()],
+        "funding_hold_explanation": funding_holds.EXPLANATIONS[project.funding_hold]
+        if project.funding_hold is not None and project.status not in _TERMINAL_STATUSES
+        else None,
+        "can_admin_set_funding_hold": actor.is_admin and project.status in funding_holds.HOLDABLE_STATUSES,
         # Admin overrides on your own project: deciding it is off entirely, and adding budget is refused by the
         # service (cutting it is still allowed), so the page explains why instead of offering the form.
         "admin_own_project": actor.is_admin and conflicted,
@@ -648,6 +662,7 @@ def submit_project(
     actor: Annotated[Actor, Depends(fresh_actor)],
     weave_client: Weave,
     store: Annotated[ObjectStore, Depends(get_object_store)],
+    criteria_read: Annotated[str, Form()] = "",
 ):
     project = _get_visible_project(db_session, actor, project_id)
 
@@ -666,7 +681,7 @@ def submit_project(
         demographics_error = exc
 
     try:
-        project_service.submit(db_session, actor, project=project)
+        project_service.submit(db_session, actor, project=project, criteria_read=criteria_read == "yes")
     except ValidationFailed as exc:
         db_session.rollback()
         flash(request, "Some answers are missing or too long. They're marked below.", "error")
@@ -913,6 +928,7 @@ def record_review(
     weave_client: Weave,
     decision: Annotated[str, Form()],
     reason: Annotated[str, Form()] = "",
+    funding_hold: Annotated[str, Form()] = "",
 ):
     project = _get_visible_project(db_session, actor, project_id)
     try:
@@ -926,6 +942,7 @@ def record_review(
 
     revision = project.current_revision
     try:
+        hold = funding_holds.parse(funding_hold)
         project_service.record_review(
             db_session,
             actor,
@@ -934,6 +951,7 @@ def record_review(
             reason=reason or None,
             source=ReviewSource.WEB,
             weave_client=weave_client,
+            funding_hold=hold,
         )
     except ValidationFailed as exc:
         db_session.rollback()
@@ -970,6 +988,7 @@ def admin_decide(
     weave_client: Weave,
     decision: Annotated[str, Form()],
     reason: Annotated[str, Form()] = "",
+    funding_hold: Annotated[str, Form()] = "",
 ):
     project = _get_visible_project(db_session, actor, project_id)
     try:
@@ -987,9 +1006,18 @@ def admin_decide(
         return templates.TemplateResponse(request, "projects/detail.html", context, status_code=422)
 
     revision = project.current_revision
+    hold = None
     try:
+        # A hold picked with "Admin reject" means nothing: the select sits on the shared form.
+        hold = funding_holds.parse(funding_hold) if decision_enum is ReviewDecision.APPROVE else None
         project_service.admin_decide(
-            db_session, actor, revision=revision, decision=decision_enum, reason=reason, weave_client=weave_client
+            db_session,
+            actor,
+            revision=revision,
+            decision=decision_enum,
+            reason=reason,
+            weave_client=weave_client,
+            funding_hold=hold,
         )
     except ValidationFailed as exc:
         db_session.rollback()
@@ -1008,15 +1036,79 @@ def admin_decide(
 
     revision_id = revision.id
     action = "admin_approve" if decision_enum is ReviewDecision.APPROVE else "admin_reject"
+    extra = f"Approved as {funding_holds.LABELS[hold].lower()}: its budget is held." if hold else None
 
     def _notify() -> None:
         slack_notify_decision.defer(revision_id=str(revision_id))
         slack_archive_channel.defer(project_id=str(project.id))
         slack_post_admin_override.defer(
-            project_id=str(project.id), action=action, actor_sub=actor.user.weave_sub, reason=reason
+            project_id=str(project.id), action=action, actor_sub=actor.user.weave_sub, reason=reason, extra=extra
         )
 
     message = _decision_message(db_session, project, revision, "Decision recorded.")
+    return _success_redirect(db_session, request, project_id, message, after_commit=_notify)
+
+
+@router.post("/projects/{project_id}/admin-funding-hold", dependencies=[Depends(verify_csrf_token)])
+def admin_funding_hold(
+    request: Request,
+    project_id: uuid.UUID,
+    db_session: Annotated[Session, Depends(get_session)],
+    actor: Annotated[Actor, Depends(fresh_actor)],
+    weave_client: Weave,
+    funding_hold: Annotated[str, Form()] = "",
+    reason: Annotated[str, Form()] = "",
+):
+    project = _get_visible_project(db_session, actor, project_id)
+    previous = project.funding_hold
+    try:
+        hold = funding_holds.parse(funding_hold)
+        released = funding_holds.set_hold(
+            db_session,
+            actor,
+            project=project,
+            hold=hold,
+            reason=reason,
+            weave_client=weave_client,
+            now=datetime.now(UTC),
+        )
+    except ValidationFailed as exc:
+        db_session.rollback()
+        context = _build_detail_context(
+            db_session,
+            weave_client,
+            project,
+            actor,
+            errors=exc.errors,
+            error_form="funding_hold",
+            posted={"reason": reason},
+        )
+        return templates.TemplateResponse(request, "projects/detail.html", context, status_code=422)
+    except NotAllowed as exc:
+        if not actor.is_admin:
+            raise
+        db_session.rollback()  # the own-project rule: say so on the page
+        flash(request, str(exc), "error")
+        return _redirect_to_project(project_id)
+    except InvalidState as exc:
+        return _invalid_state_redirect(db_session, request, project_id, exc)
+
+    action = funding_holds.AUDIT_CLEAR if hold is None else funding_holds.AUDIT_SET
+    extra = funding_holds.describe_change(previous, hold)
+
+    def _notify() -> None:
+        slack_post_admin_override.defer(
+            project_id=str(project.id), action=action, actor_sub=actor.user.weave_sub, reason=reason, extra=extra
+        )
+
+    if hold is not None:
+        message = f"Hold saved: the project is {funding_holds.LABELS[hold].lower()}."
+    elif released:
+        message = "Hold cleared. The held budget is added."
+    elif grants.pending(db_session, project) is not None:
+        message = "Hold cleared. The held budget is added once every team member is verified in Weave."
+    else:
+        message = "Hold cleared."
     return _success_redirect(db_session, request, project_id, message, after_commit=_notify)
 
 

@@ -220,7 +220,8 @@ The proposal form (`projects/_application.html`) asks, in three parts:
   contest, a professor or both, and which); *Is there anything that would stop you from open-sourcing the project?*
   (a checkbox that starts at no; ticking it asks what would, which submitting then needs. The gallery shows
   open-source work only, so reviewers see this early).
-- **Compute.** *How are you going to use the compute?*, then two estimates priced at Vast's current rates: the **proof
+- **Compute.** *How are you going to use the compute?*, *Where does your training data come from?* (the
+  Submission Criteria ask applicants to name their data sources), then two estimates priced at Vast's current rates: the **proof
   of concept** and the **finished product**. Each is a card and about how many hours (plus rental type and safety
   margin), and each can be overridden twice over: the team can give its own price per card-hour (also how a card
   Krater has no price for is estimated), and can request a different amount than the estimate. Reviewers see the
@@ -233,6 +234,10 @@ product's estimate), and the amount is the project's new total: the budget appro
 which the team can change, lower included. Drafts can be saved incomplete or over the
 word limits; submitting needs every answer and both estimates (`krater.services.projects.application_errors`). An
 amendment or a reopened draft starts with every answer of the revision it follows.
+
+Submitting a proposal or amendment also needs the box *I've read the Ganymede Submission Criteria, and my project
+meets them* ticked, next to the Submit button; it links the criteria document (`KRATER_SUBMISSION_CRITERIA_URL`). It
+is asked again on every submission, and when it was ticked is kept on the revision (`criteria_read_at`).
 
 ## Proposal & review workflow
 
@@ -250,7 +255,8 @@ amendment or a reopened draft starts with every answer of the revision it follow
    - asks `ApprovalPolicyService` whether the policy is now satisfied.
 4. **Approve.** When the policy is satisfied, the revision is approved and the project moves to `approved`, whether
    or not the team is verified yet. Its `BudgetEntry(initial_approval)` is written then if Weave clears every team
-   member, and is held until it does otherwise (see "Verification before funding").
+   member, and is held until it does otherwise (see "Verification before funding"). A reviewer approving on the web
+   can instead approve it as *awaiting funding* or *awaiting 3rd party review* (see "Funding holds").
 5. **Reject.** A reason is required. The project moves to `changes_requested`, and the submitter edits and resubmits
    (step 2, same project, new revision).
 6. **Amend.** An `approved` project can have its scope or budget amended. This creates an `amendment` revision reviewed
@@ -445,12 +451,34 @@ flowchart TD
 
 Until Nov 6, 2026 the guardian check blocked the approval itself (Oct 12, 2026), and ID verification wasn't checked.
 
+## Funding holds
+
+Some projects are worth approving before Patchwork can pay for them: the money isn't there yet, or a third party
+(a funder such as OSPool) has to review the project first. A reviewer approving on the web, or an admin deciding, picks
+*Fund it now?*: yes, or approve it as **awaiting funding** or **awaiting 3rd party review** (`Project.funding_hold`,
+`krater.services.funding_holds`). Approvals from Slack can't pick one. With more than one approval needed, a hold
+any approving reviewer asked for applies once the approval counts.
+
+While the hold is set:
+- the approval counts and the project is `approved`; the team, reviewers and `/admin` see *Approved · awaiting
+  funding* (or *· awaiting 3rd party review*);
+- every grant (the approval's, an amendment's, an admin increase) is held as a `HeldGrant` whatever the team's
+  verification, so nothing reaches the ledger and Quilt hears of the budget only once it's granted;
+- no compute starts: new jobs and box resumes are refused, and jobs already queued wait. Machines already running
+  are left alone, and budget already granted isn't taken back.
+
+An admin sets, changes or clears the hold on any approved project from its page, with a reason: an `AuditEvent`
+(`admin_set_funding_hold`, `admin_clear_funding_hold`) and a post in the project's channel. Clearing it releases the
+held budget at once if Weave clears the team, and otherwise leaves it on the usual verification hold. An admin can't
+clear the hold on their own project, since that would fund it; another admin has to.
+
 ## Admin overrides
 
 At any point an admin can:
 - approve or reject at either review stage, bypassing `ApprovalPolicy`;
 - adjust an approved project's budget up or down, or reclaim unspent funds;
 - set a project's own hourly cap per rented machine, or put it back to the default;
+- set, change or clear a project's funding hold (see "Funding holds");
 - change Krater Compute's policy numbers, globally or for one project (`/admin/compute`);
 - withdraw a project.
 

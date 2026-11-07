@@ -140,7 +140,9 @@ def _index_page(request: Request, db_session: Session, actor: Actor, project: Pr
             "project": project,
             "jobs": jobs,
             "active_states": ACTIVE_JOB_STATES,
-            "can_launch": _is_team(actor, project) and project.status in LAUNCHABLE_STATUSES,
+            "can_launch": _is_team(actor, project)
+            and project.status in LAUNCHABLE_STATUSES
+            and project.funding_hold is None,  # held: launching is refused (`funding_holds`)
             "secrets": project_secrets.list_secrets(db_session, project),
             "secrets_enabled": project_secrets.enabled(get_settings()),
             "can_manage_secrets": actor.is_member and (_is_team(actor, project) or actor.is_admin),

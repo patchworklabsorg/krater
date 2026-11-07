@@ -90,6 +90,7 @@ def to_pdf(packet: Packet) -> bytes:
         fields = [
             ("Summary", row.summary),
             ("Compute use", row.compute_use),
+            ("Training data", row.training_data or "Not answered"),
             ("Status", row.status_label),
             ("Requested", format_cents(row.requested_cents)),
             ("Granted", format_cents(row.granted_cents)),

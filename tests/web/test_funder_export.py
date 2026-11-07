@@ -17,6 +17,7 @@ def _row(**fields) -> PacketRow:
         "title": "Rover",
         "summary": "Maps caves.",
         "compute_use": "Training a mapping model.",
+        "training_data": "A public cave survey.",
         "status": ProjectStatus.APPROVED,
         "requested_cents": 12_345,
         "granted_cents": 10_000,

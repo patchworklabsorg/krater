@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     secret_key: str = DEFAULT_SECRET_KEY
     base_url: str = "http://localhost:8000"
     session_cookie_max_age_seconds: int = 60 * 60 * 24 * 14  # 14 days
+    # The Ganymede Submission Criteria, which applicants confirm they've read when they submit.
+    submission_criteria_url: str = (
+        "https://docs.google.com/document/d/16mQKrPm1LQabLe05OXBT9vmwiACDw0YGMTt6QOVG-Pk/edit?usp=sharing"
+    )
 
     # Trusted reverse proxies in front of this app (e.g. an nginx/ALB terminating TLS). Each hop is
     # expected to append the client's address to `X-Forwarded-For` -- this is how many trailing hops of

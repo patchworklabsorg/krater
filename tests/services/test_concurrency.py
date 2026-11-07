@@ -79,7 +79,7 @@ def test_two_concurrent_approvals_do_not_double_apply_the_budget(engine: Engine,
         project = new_project(
             setup, Actor(submitter, _MEMBER), title="Race", write_up="w", budget_requested_cents=10_000
         )
-        projects.submit(setup, Actor(submitter, _MEMBER), project=project)
+        projects.submit(setup, Actor(submitter, _MEMBER), project=project, criteria_read=True)
         setup.commit()
         project_id = project.id
         revision_id = project.current_revision_id

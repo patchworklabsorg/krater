@@ -69,7 +69,7 @@ def _approved(db_session: Session, submitter: Actor, reviewer: Actor, weave, *, 
     project = new_project(db_session, submitter, title="Rover", write_up="A rover.", budget_requested_cents=10_000)
     for builder in builders:
         add_to_team(db_session, project, builder)
-    projects.submit(db_session, submitter, project=project)
+    projects.submit(db_session, submitter, project=project, criteria_read=True)
     projects.record_review(
         db_session,
         reviewer,

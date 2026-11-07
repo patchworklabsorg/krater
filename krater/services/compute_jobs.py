@@ -24,7 +24,7 @@ from krater.models import (
     Project,
 )
 from krater.models.compute_job import FINISHED_JOB_STATES
-from krater.services import clearance, teams
+from krater.services import clearance, funding_holds, teams
 from krater.services.actor import Actor
 from krater.services.errors import InvalidState, NotAllowed, ValidationFailed
 from krater.services.launch_rules import LAUNCHABLE_STATUSES
@@ -131,13 +131,15 @@ def submit_job(
     weave_client: WeaveClient,
 ) -> ComputeJob:
     """Queue `spec` for `project`. Only the project's team (lead and accepted members) may, only while the project
-    can launch, and only once Weave has cleared every team member (`clearance.require_team_cleared`, asking
-    `weave_client` fresh). `cap_cents` is the project's hourly cap (`launch_rules.hourly_cap_cents`)."""
+    can launch, not while it has a funding hold (`funding_holds.require_not_held`), and only once Weave has cleared
+    every team member (`clearance.require_team_cleared`, asking `weave_client` fresh). `cap_cents` is the project's
+    hourly cap (`launch_rules.hourly_cap_cents`)."""
     if not _can_launch_for(actor, project):
         raise NotAllowed("Only the project's team can run jobs on its budget.")
     if project.status not in LAUNCHABLE_STATUSES:
         raise InvalidState(f"A {project.status.value} project can't run jobs.")
     _validate(spec, cap_microusd=cap_cents * MICROUSD_PER_CENT)
+    funding_holds.require_not_held(project)
     clearance.require_team_cleared(session, weave_client, project)
     job = ComputeJob(
         project_id=project.id,
@@ -244,6 +246,7 @@ def resume_box(session: Session, actor: Actor, *, job: ComputeJob, now: datetime
         raise InvalidState("Only a stopped box can be resumed.")
     if job.project.status not in LAUNCHABLE_STATUSES:
         raise InvalidState(f"A {job.project.status.value} project can't run boxes.")
+    funding_holds.require_not_held(job.project)
     clearance.require_team_cleared(session, weave_client, job.project)
     row.start_requested_at = now
     job.state_reason = "Resuming on the same machine."

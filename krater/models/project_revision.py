@@ -43,6 +43,11 @@ class ProjectRevision(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     # starts at no; `open_source_obstacles` is asked, and kept, only while it's yes.
     open_source_blocked: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False, server_default="false")
     open_source_obstacles: Mapped[str] = mapped_column(sa.Text, nullable=False, default="", server_default="")
+    # Where the training data comes from: the Submission Criteria ask applicants to name their data sources.
+    training_data: Mapped[str] = mapped_column(sa.Text, nullable=False, default="", server_default="")
+    # When the applicant ticked "I've read the Ganymede Submission Criteria" on this revision. Not carried to the
+    # next draft: every submission confirms it again.
+    criteria_read_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
 
     # What approval funds: the proof of concept for a proposal, the new total for an amendment.
     budget_requested_cents: Mapped[int] = mapped_column(sa.Integer, nullable=False)

@@ -26,6 +26,7 @@ ANSWERS = {
     "open_source_blocked": "yes",
     "open_source_obstacles": "The cup's rules keep entries private until the final.",
     "compute_use": "Training the mapping model.",
+    "training_data": "Lidar scans from the cup's practice caves.",
     "poc_gpu": "A100:1",
     "poc_hours": "40",
     "poc_basis": "on_demand",
@@ -236,7 +237,9 @@ def test_a_saved_application_reloads_into_the_form_and_submits(
 
     detail = client.get(project_url)
     submitted = client.post(
-        f"{project_url}/submit", data={"csrf_token": get_csrf_token(detail.text)}, follow_redirects=False
+        f"{project_url}/submit",
+        data={"csrf_token": get_csrf_token(detail.text), "criteria_read": "yes"},
+        follow_redirects=False,
     )
     assert submitted.status_code == 303
     project = project_service.get_project(db_session, project_id=_revision(db_session, response).project_id)
@@ -251,7 +254,9 @@ def test_submitting_an_unfinished_application_marks_whats_missing(client: TestCl
     project_url = created.headers["location"]
 
     detail = client.get(project_url)
-    response = client.post(f"{project_url}/submit", data={"csrf_token": get_csrf_token(detail.text)})
+    response = client.post(
+        f"{project_url}/submit", data={"csrf_token": get_csrf_token(detail.text), "criteria_read": "yes"}
+    )
 
     assert response.status_code == 422
     for message in (
@@ -325,7 +330,7 @@ def test_an_amendment_adds_its_estimate_to_the_approved_budget(
     assert "adds $100.00 to the $40.00 approved now" in detail
     assert "differs a lot" not in detail
 
-    client.post(f"/projects/{project.id}/submit", data={"csrf_token": get_csrf_token(detail)})
+    client.post(f"/projects/{project.id}/submit", data={"csrf_token": get_csrf_token(detail), "criteria_read": "yes"})
     login_as(REVIEWER_SUB)
     page = client.get(f"/projects/{project.id}")
     client.post(f"/projects/{project.id}/review", data={"csrf_token": get_csrf_token(page.text), "decision": "approve"})

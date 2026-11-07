@@ -94,6 +94,7 @@ class PacketRow:
     title: str
     summary: str
     compute_use: str
+    training_data: str
     status: ProjectStatus
     requested_cents: int
     granted_cents: int
@@ -190,6 +191,7 @@ def _row(
         title=project.title,
         summary=revision.summary if revision else "",
         compute_use=revision.compute_use if revision else "",
+        training_data=revision.training_data if revision else "",
         status=project.status,
         requested_cents=revision.budget_requested_cents if revision else 0,
         granted_cents=budget.ceiling_cents(session, project),

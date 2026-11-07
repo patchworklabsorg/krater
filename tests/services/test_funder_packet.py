@@ -49,7 +49,7 @@ def _draft(db_session: Session, lead: Actor, *team: Actor, title: str = "Rover",
 
 
 def _submitted(db_session: Session, lead: Actor, *team: Actor, **fields):
-    return projects.submit(db_session, lead, project=_draft(db_session, lead, *team, **fields))
+    return projects.submit(db_session, lead, project=_draft(db_session, lead, *team, **fields), criteria_read=True)
 
 
 def _approved(db_session: Session, weave, reviewer: Actor, lead: Actor, *team: Actor, **fields):

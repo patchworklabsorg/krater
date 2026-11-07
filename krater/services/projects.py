@@ -32,6 +32,7 @@ from krater.models import (
     ApprovalStage,
     BudgetEntry,
     BudgetEntryKind,
+    FundingHold,
     HeldGrant,
     Project,
     ProjectMember,
@@ -62,6 +63,7 @@ _ANSWER_FIELDS = (
     "affiliation",
     "affiliation_detail",
     "compute_use",
+    "training_data",
     "open_source_blocked",
     "open_source_obstacles",
     "budget_requested_cents",
@@ -210,8 +212,10 @@ def update_draft(
     affiliation: str | None = None,
     affiliation_detail: str | None = None,
     compute_use: str | None = None,
+    training_data: str | None = None,
     open_source_blocked: bool | None = None,
     open_source_obstacles: str | None = None,
+    criteria_read: bool | None = None,
     budget_requested_cents: int | None = None,
     budget_estimate: dict | None | EllipsisType = ...,
     full_budget_cents: int | None | EllipsisType = ...,
@@ -251,6 +255,7 @@ def update_draft(
         ("affiliation", affiliation),
         ("affiliation_detail", affiliation_detail),
         ("compute_use", compute_use),
+        ("training_data", training_data),
         ("open_source_blocked", open_source_blocked),
         ("open_source_obstacles", open_source_obstacles),
         ("budget_requested_cents", budget_requested_cents),
@@ -259,6 +264,11 @@ def update_draft(
             setattr(draft, field, value)
     if not draft.open_source_blocked:
         draft.open_source_obstacles = ""  # only asked while the answer is yes
+    if criteria_read is not None:
+        if not criteria_read:
+            draft.criteria_read_at = None
+        elif draft.criteria_read_at is None:
+            draft.criteria_read_at = datetime.now(UTC)
     for field, value in (
         ("budget_estimate", budget_estimate),
         ("full_budget_cents", full_budget_cents),
@@ -282,7 +292,7 @@ def update_draft(
 # --------------------------------------------------------------------------------------------------
 
 
-def submit(session: Session, actor: Actor, *, project: Project) -> Project:
+def submit(session: Session, actor: Actor, *, project: Project, criteria_read: bool | None = None) -> Project:
     """Submit the project's draft `proposal`/`amendment` revision for review. The project's team only.
 
     Validates the whole application (`application_errors`; `ValidationFailed` otherwise). Freezes the draft
@@ -291,6 +301,9 @@ def submit(session: Session, actor: Actor, *, project: Project) -> Project:
     `draft`/`changes_requested`, and moves the project to `pending_review`. An `amendment` draft must come from
     status `approved`, and leaves the project `approved` (it's already reviewable while the approval stands).
     `InvalidState` otherwise.
+
+    `criteria_read` is the submit form's "I've read the Ganymede Submission Criteria" box (`None` leaves the draft's
+    answer as `update_draft` set it); it's required.
 
     Use `submit_completion` for a completion revision -- calling this on one raises `InvalidState`.
     """
@@ -309,6 +322,8 @@ def submit(session: Session, actor: Actor, *, project: Project) -> Project:
     elif project.status not in (ProjectStatus.DRAFT, ProjectStatus.CHANGES_REQUESTED):
         raise InvalidState(f"Cannot submit a proposal from status {project.status.value!r}.")
 
+    if criteria_read is not None:
+        draft.criteria_read_at = datetime.now(UTC) if criteria_read else None
     errors = application_errors(project, draft)
     if errors:
         raise ValidationFailed(errors)
@@ -329,7 +344,8 @@ def application_errors(project: Project, draft: ProjectRevision) -> dict[str, st
     """What's missing or too long in a proposal or amendment draft, by form field. Empty when it can be submitted.
 
     Every question needs an answer. Both compute estimates need a card and hours (`budget_estimate`,
-    `full_budget_estimate`); the proof of concept also needs a requested amount above zero.
+    `full_budget_estimate`); the proof of concept also needs a requested amount above zero. The applicant must have
+    ticked that they've read the Submission Criteria (`criteria_read_at`) on this draft.
     """
     errors: dict[str, str] = {}
     required = {
@@ -338,6 +354,7 @@ def application_errors(project: Project, draft: ProjectRevision) -> dict[str, st
         "experience": (draft.experience, "Tell reviewers who you are and what experience you have."),
         "write_up": (draft.write_up, "Explain the project."),
         "compute_use": (draft.compute_use, "Say how you'll use the compute."),
+        "training_data": (draft.training_data, "Say where your training data comes from."),
     }
     for field, (value, message) in required.items():
         if not value.strip():
@@ -358,6 +375,8 @@ def application_errors(project: Project, draft: ProjectRevision) -> dict[str, st
         errors["poc_budget"] = "Requested budget must be greater than zero."
     if not draft.full_budget_estimate:
         errors["full_gpu"] = "Choose the card and hours the finished product needs (a rough guess is fine)."
+    if draft.criteria_read_at is None:
+        errors["criteria_read"] = "Read the Ganymede Submission Criteria, then tick the box."
     return errors
 
 
@@ -575,6 +594,7 @@ def record_review(
     reason: str | None = None,
     source: ReviewSource,
     weave_client: WeaveClient,
+    funding_hold: FundingHold | None = None,
 ) -> Review:
     """Record a reviewer's decision on `revision`, then apply its effect if the decision resolves it.
 
@@ -589,6 +609,10 @@ def record_review(
 
     Approval doesn't wait for the team's verification in Weave. The budget it grants does: it's written to the ledger
     only once Weave clears every team member, and is held until then (`krater.services.grants`).
+
+    `funding_hold` (an approval of a proposal or amendment only) asks for the project to be approved but held
+    (`krater.services.funding_holds`). It's kept on the review, so it applies once the approval policy is met even
+    if a later approval (from Slack, say) doesn't ask again.
     """
     project = revision.project
 
@@ -613,6 +637,7 @@ def record_review(
 
     if decision is ReviewDecision.REJECT and not (reason and reason.strip()):
         raise ValidationFailed({"reason": "A reason is required to reject."})
+    _check_funding_hold(revision, decision, funding_hold)
 
     review = Review(
         revision_id=revision.id,
@@ -621,6 +646,7 @@ def record_review(
         reason=reason,
         source=source,
         reviewer_groups=sorted(actor.groups),
+        funding_hold=funding_hold,
     )
     session.add(review)
     try:
@@ -643,6 +669,30 @@ def record_review(
     return review
 
 
+def _check_funding_hold(revision: ProjectRevision, decision: ReviewDecision, hold: FundingHold | None) -> None:
+    """A funding hold goes only with approving a proposal or an amendment: those are what grant budget."""
+    if hold is None:
+        return
+    if decision is not ReviewDecision.APPROVE:
+        raise ValidationFailed({"funding_hold": "A funding hold goes with an approval."})
+    if approval_policy.stage_for(revision) is ApprovalStage.COMPLETION:
+        raise ValidationFailed({"funding_hold": "A completion grants no budget, so it can't be held."})
+
+
+def _requested_hold(session: Session, revision: ProjectRevision) -> FundingHold | None:
+    """The funding hold the revision's approvals asked for: the latest one that asked."""
+    return session.scalar(
+        sa.select(Review.funding_hold)
+        .where(
+            Review.revision_id == revision.id,
+            Review.decision == ReviewDecision.APPROVE,
+            Review.funding_hold.is_not(None),
+        )
+        .order_by(Review.created_at.desc())
+        .limit(1)
+    )
+
+
 def _apply_reject(session: Session, revision: ProjectRevision) -> None:
     """Apply the effect of a revision being rejected (by a reviewer or an admin override)."""
     revision.outcome = RevisionOutcome.REJECTED
@@ -661,12 +711,20 @@ def _apply_reject(session: Session, revision: ProjectRevision) -> None:
     session.flush()
 
 
-def _apply_approve(session: Session, actor: Actor, revision: ProjectRevision, *, weave_client: WeaveClient) -> None:
+def _apply_approve(
+    session: Session,
+    actor: Actor,
+    revision: ProjectRevision,
+    *,
+    weave_client: WeaveClient,
+    funding_hold: FundingHold | None = None,
+) -> None:
     """Apply the effect of a revision being approved (by policy satisfaction or an admin override).
 
     A proposal approval, and an amendment approval that raises the ceiling, grant budget through `grants.grant`:
     written now if Weave clears the team, held until it does otherwise. The approval itself goes through either way.
-    A completion approval reclaims budget and cancels any held grant.
+    A completion approval reclaims budget and cancels any held grant. A funding hold (the admin's, or one a reviewer
+    asked for) is set before the grant, so the grant is held whatever the team's verification.
     """
     project = revision.project
     stage = approval_policy.stage_for(revision)
@@ -675,6 +733,10 @@ def _apply_approve(session: Session, actor: Actor, revision: ProjectRevision, *,
         grants.require_none_pending(session, project)
 
     revision.outcome = RevisionOutcome.APPROVED
+    if stage is not ApprovalStage.COMPLETION:
+        hold = funding_hold or _requested_hold(session, revision)
+        if hold is not None:
+            project.funding_hold = hold
 
     if stage is ApprovalStage.COMPLETION:
         project.status = ProjectStatus.COMPLETED
@@ -778,6 +840,7 @@ def admin_decide(
     decision: ReviewDecision,
     reason: str,
     weave_client: WeaveClient,
+    funding_hold: FundingHold | None = None,
 ) -> ProjectRevision:
     """Admin override: decide `revision` directly, bypassing `ApprovalPolicy`.
 
@@ -788,7 +851,8 @@ def admin_decide(
     Still requires `revision` to be the project's current, submitted, still-`pending` revision.
 
     The override bypasses the approval policy, not verification: the budget an approval grants is held until Weave
-    clears the team (`krater.services.grants`).
+    clears the team (`krater.services.grants`). `funding_hold` approves it but holds the budget, as for
+    `record_review`.
     """
     if not actor.is_admin:
         raise NotAllowed("Only an admin may override a review decision.")
@@ -808,20 +872,24 @@ def admin_decide(
     if revision.outcome is not RevisionOutcome.PENDING:
         raise InvalidState("This revision has already been decided.")
     _require_project_matches_revision_stage(project, revision)
+    _check_funding_hold(revision, decision, funding_hold)
 
     if decision is ReviewDecision.REJECT:
         _apply_reject(session, revision)
         action = "admin_reject"
     else:
-        _apply_approve(session, actor, revision, weave_client=weave_client)
+        _apply_approve(session, actor, revision, weave_client=weave_client, funding_hold=funding_hold)
         action = "admin_approve"
 
+    payload = {"revision_id": str(revision.id), "decision": decision.value}
+    if funding_hold is not None:
+        payload["funding_hold"] = funding_hold.value
     audit.record(
         session,
         actor,
         action,
         project=project,
-        payload={"revision_id": str(revision.id), "decision": decision.value},
+        payload=payload,
         reason=reason,
     )
     quilt_events.sync_project(session, project)

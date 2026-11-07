@@ -220,7 +220,7 @@ def test_admin_sees_held_budget_and_who_it_waits_on(
     login_as(ADMIN_SUB)
     page = client.get("/admin").text
 
-    assert "Budget held for verification" in page
+    assert "Budget held" in page
     assert "Held Rover" in page and "$125.00" in page and "Approval" in page
     assert "Milo Minor (PWLMINORONE): under 18 without a verified guardian in Weave" in page
 

@@ -41,7 +41,7 @@ def test_happy_path_proposal_amendment_and_completion(
         budget_requested_cents=100_000,
     )
 
-    project = projects.submit(db_session, member, project=project)
+    project = projects.submit(db_session, member, project=project, criteria_read=True)
     assert project.status is ProjectStatus.PENDING_REVIEW
     proposal_revision = project.current_revision
     assert proposal_revision.submitted_at is not None
@@ -73,7 +73,7 @@ def test_happy_path_proposal_amendment_and_completion(
     assert amendment.budget_requested_cents == 110_000
 
     projects.update_draft(db_session, member, project=project, budget_requested_cents=60_000)
-    project = projects.submit(db_session, member, project=project)
+    project = projects.submit(db_session, member, project=project, criteria_read=True)
     # Amendments leave the project approved while under review.
     assert project.status is ProjectStatus.APPROVED
     assert amendment.submitted_at is not None

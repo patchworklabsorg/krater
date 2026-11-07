@@ -61,7 +61,7 @@ def _submitted(db_session: Session, submitter: Actor, *, builders=(), budget_cen
     )
     for builder in builders:
         add_to_team(db_session, project, builder)
-    return projects.submit(db_session, submitter, project=project)
+    return projects.submit(db_session, submitter, project=project, criteria_read=True)
 
 
 def _approve(db_session: Session, reviewer: Actor, project: Project, weave_client) -> Project:
@@ -336,7 +336,7 @@ def test_an_amendment_that_raises_the_ceiling_is_held(
     project = _approved(db_session, member, reviewer, weave)
     draft = projects.start_amendment(db_session, member, project=project)
     projects.update_draft(db_session, member, project=project, budget_requested_cents=25_000)
-    projects.submit(db_session, member, project=project)
+    projects.submit(db_session, member, project=project, criteria_read=True)
     weave.set_verification_status(member.user.weave_sub, "pending")
 
     project = _approve(db_session, reviewer, project, weave)
@@ -353,7 +353,7 @@ def test_an_amendment_that_cuts_the_ceiling_isnt_held(
     project = _approved(db_session, member, reviewer, weave)
     projects.start_amendment(db_session, member, project=project)
     projects.update_draft(db_session, member, project=project, budget_requested_cents=4_000)
-    projects.submit(db_session, member, project=project)
+    projects.submit(db_session, member, project=project, criteria_read=True)
     weave.set_verification_status(member.user.weave_sub, "pending")
 
     project = _approve(db_session, reviewer, project, weave)
@@ -368,7 +368,7 @@ def test_an_amendment_in_review_cant_be_approved_while_an_admin_increase_is_held
     project = _approved(db_session, member, reviewer, weave)
     projects.start_amendment(db_session, member, project=project)
     projects.update_draft(db_session, member, project=project, budget_requested_cents=25_000)
-    projects.submit(db_session, member, project=project)
+    projects.submit(db_session, member, project=project, criteria_read=True)
     projects.admin_adjust_budget(
         db_session, admin, project=project, amount_cents=1_000, reason="More.", weave_client=_DownWeave()
     )

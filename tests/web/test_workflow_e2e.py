@@ -17,6 +17,7 @@ ANSWERS = {
     "affiliation": "professor",
     "affiliation_detail": "Prof. Ada Example, Example University",
     "compute_use": "Training the rover's mapping model.",
+    "training_data": "Lidar scans we took in caves.",
     "poc_gpu": "other",
     "poc_gpu_other": "RTX A4000",
     "poc_gpu_count": "1",
@@ -59,7 +60,9 @@ def test_full_workflow_through_http(client: TestClient, login_as) -> None:
     detail = client.get(project_url)
     assert "Ganymede Rover" in detail.text
     csrf = get_csrf_token(detail.text)
-    submit_response = client.post(f"{project_url}/submit", data={"csrf_token": csrf}, follow_redirects=False)
+    submit_response = client.post(
+        f"{project_url}/submit", data={"csrf_token": csrf, "criteria_read": "yes"}, follow_redirects=False
+    )
     assert submit_response.status_code == 303
 
     pending_page = client.get(project_url)
@@ -107,7 +110,9 @@ def test_full_workflow_through_http(client: TestClient, login_as) -> None:
 
     submit_amend_page = client.get(project_url)
     csrf = get_csrf_token(submit_amend_page.text)
-    submit_amend = client.post(f"{project_url}/submit", data={"csrf_token": csrf}, follow_redirects=False)
+    submit_amend = client.post(
+        f"{project_url}/submit", data={"csrf_token": csrf, "criteria_read": "yes"}, follow_redirects=False
+    )
     assert submit_amend.status_code == 303
 
     # Amendments leave the project approved while it's reviewed.

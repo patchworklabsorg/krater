@@ -1,5 +1,9 @@
-{% macro status_badge(status) %}
+{% macro status_badge(status, hold=none) %}
+{%- if hold and status.value in ("approved", "pending_completion_review", "completion_changes_requested") -%}
+<span class="badge badge--funding-hold">{{ status.value.replace('_', ' ') | capitalize }} · {{ funding_hold_label(hold) }}</span>
+{%- else -%}
 <span class="badge badge--{{ status.value }}">{{ status.value.replace('_', ' ') | capitalize }}</span>
+{%- endif %}
 {%- endmacro %}
 
 {% macro decision_badge(decision) %}

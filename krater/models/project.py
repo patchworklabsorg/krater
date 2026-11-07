@@ -10,7 +10,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from krater.db import Base
-from krater.models.enums import ProjectStatus, pg_enum
+from krater.models.enums import FundingHold, ProjectStatus, pg_enum
 from krater.models.mixins import TimestampMixin, UUIDPrimaryKeyMixin
 
 if TYPE_CHECKING:
@@ -60,6 +60,9 @@ class Project(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # (`krater.services.projects.set_hourly_cost_cap`). `None` means the global default,
     # `Settings.compute_max_hourly_cost_cents`; see `krater.services.launch_rules.hourly_cap_cents`.
     max_hourly_cost_cents: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
+    # Approved, but its budget waits on Patchwork (funding, or a third party's review) until an admin clears this:
+    # every grant is held and no compute starts meanwhile (`krater.services.funding_holds`).
+    funding_hold: Mapped[FundingHold | None] = mapped_column(pg_enum(FundingHold, name="funding_hold"), nullable=True)
 
     submitter: Mapped[User] = relationship(foreign_keys=[submitter_id], back_populates="projects")
     current_revision: Mapped[ProjectRevision | None] = relationship(
