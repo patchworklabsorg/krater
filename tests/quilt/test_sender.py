@@ -264,9 +264,30 @@ def test_a_401_retries_later_drops_the_token_and_stops_the_run(
     assert result.stopped == "http_401"
     assert quilt.sent_ids() == [str(first.id)]
     assert first.state is QuiltOutboxState.PENDING
-    assert first.next_attempt_at == NOW + timedelta(seconds=30)
+    # The setup is at fault, not the event: no attempt counted and no backoff, only what Quilt said.
+    assert (first.attempts, first.next_attempt_at) == (0, None)
+    assert (first.first_attempted_at, first.last_status, first.last_error) == (NOW, 401, "invalid_token")
     assert weave_stub.quilt_token_invalidations == 1
     assert "check KRATER_QUILT_URL" in caplog.text
+
+
+def test_once_the_setup_is_fixed_the_next_run_sends_at_once(
+    db_session: Session, quilt: FakeQuilt, client: QuiltClient, weave_stub: StubWeaveClient, add_row
+) -> None:
+    first = add_row("sub-a")
+    second = add_row("sub-b")
+    quilt.answers[str(first.id)] = (403, "unknown_client")
+    for minute in range(10):  # ten runs while Quilt doesn't know Krater's client id: one request each
+        _deliver(db_session, client, weave_stub, at=NOW + timedelta(minutes=minute))
+    assert quilt.sent_ids() == [str(first.id)] * 10
+
+    del quilt.answers[str(first.id)]  # the client id is fixed in Quilt
+    result = _deliver(db_session, client, weave_stub, at=NOW + timedelta(minutes=10))
+
+    assert result.sent == 2
+    assert (first.state, second.state) == (QuiltOutboxState.SENT, QuiltOutboxState.SENT)
+    assert first.attempts == 1
+    assert first.first_attempted_at == NOW
 
 
 def test_a_403_retries_later_and_keeps_the_token(

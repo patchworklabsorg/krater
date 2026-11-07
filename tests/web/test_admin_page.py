@@ -78,6 +78,28 @@ def test_admin_page_lists_events_quilt_refused(client: TestClient, login_as, sub
     assert "submission_exists" in response.text
 
 
+def test_a_submission_quilt_never_took_has_no_dismiss_button(
+    client: TestClient, login_as, submitted_project, db_session
+) -> None:
+    member = login_as(MEMBER_SUB)
+    row = _failed_quilt_row(db_session, submitted_project(member))
+    row.last_status, row.last_error = 422, "invalid_event"
+    db_session.flush()
+
+    login_as(ADMIN_SUB)
+    page = client.get("/admin").text
+
+    assert f'/admin/quilt/{row.id}/retry"' in page
+    assert f'/admin/quilt/{row.id}/dismiss"' not in page
+    assert "it can&#39;t be" in page or "it can't be" in page
+
+    csrf = get_csrf_token(page)
+    response = client.post(f"/admin/quilt/{row.id}/dismiss", data={"csrf_token": csrf, "reason": "Not needed."})
+    assert "Fix what Quilt refused, then retry it." in response.text
+    db_session.refresh(row)
+    assert row.state is QuiltOutboxState.FAILED
+
+
 def test_the_quilt_section_is_shown_once_and_not_in_the_title(
     client: TestClient, login_as, submitted_project, db_session
 ) -> None:

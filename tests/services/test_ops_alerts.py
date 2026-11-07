@@ -88,15 +88,21 @@ def test_quilts_backlog_and_refused_events_open_an_alert(db_session: Session) ->
             type="project.updated",
             external_id="p1",
             payload={},
-            occurred_at=NOW - ops_alerts.QUILT_BACKLOG_AGE - timedelta(minutes=1),
+            occurred_at=NOW - timedelta(days=30),
         )
     )
     db_session.flush()
+    row = db_session.scalars(sa.select(QuiltOutbox)).one()
 
     # Without a Quilt URL nothing is sent yet, so waiting events are expected.
     assert _watch(db_session, slack, NOW) == []
+    # Old, but never tried: sending was just switched on, and it goes out within minutes.
+    assert _watch(db_session, slack, NOW, settings) == []
+    row.first_attempted_at = NOW - ops_alerts.QUILT_BACKLOG_AGE + timedelta(minutes=1)
+    assert _watch(db_session, slack, NOW, settings) == []
+    row.first_attempted_at = NOW - ops_alerts.QUILT_BACKLOG_AGE - timedelta(minutes=1)
     assert _watch(db_session, slack, NOW, settings) == ["quilt_backlog"]
-    assert "has waited since" in _texts(slack)[-1]
+    assert "trying to send an event since" in _texts(slack)[-1]
     db_session.execute(sa.update(QuiltOutbox).values(state=QuiltOutboxState.SENT))
     assert _watch(db_session, slack, NOW + timedelta(minutes=5), settings) == ["quilt_backlog"]
     assert "cleared" in _texts(slack)[-1]

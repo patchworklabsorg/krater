@@ -527,14 +527,46 @@ def test_backfill_enqueues_existing_projects_once(
 # --------------------------------------------------------------------------------------------------
 
 
-def _failed_row(session: Session, member: Actor) -> QuiltOutbox:
+def _failed_row(session: Session, member: Actor, *, status: int = 409, error: str = "submission_exists") -> QuiltOutbox:
+    """The project's `submission.created`, refused by Quilt. By default for a submission Quilt has already, which an
+    admin may dismiss."""
     project = _submit(session, member)
     [row] = _rows(session, project)
     row.state = QuiltOutboxState.FAILED
-    row.last_status = 422
-    row.last_error = "invalid_event"
+    row.last_status = status
+    row.last_error = error
     session.flush()
     return row
+
+
+def test_a_submission_quilt_never_took_cannot_be_dismissed(db_session: Session, member: Actor, admin: Actor) -> None:
+    row = _failed_row(db_session, member, status=422, error="invalid_event")
+
+    assert not quilt_events.can_dismiss(row)
+    with pytest.raises(InvalidState, match="Fix what Quilt refused, then retry it"):
+        quilt_events.admin_dismiss(db_session, admin, row_id=row.id, reason="Not needed.")
+    assert row.state is QuiltOutboxState.FAILED
+    assert row.id not in quilt_events.delivery_overview(db_session, admin).dismissable
+
+    # Retrying it is still allowed.
+    quilt_events.admin_retry(db_session, admin, row_id=row.id, reason="Fixed in Quilt.")
+    assert row.state is QuiltOutboxState.PENDING
+
+
+def test_a_submission_quilt_has_already_can_be_dismissed(db_session: Session, member: Actor, admin: Actor) -> None:
+    row = _failed_row(db_session, member)
+
+    assert quilt_events.can_dismiss(row)
+    assert row.id in quilt_events.delivery_overview(db_session, admin).dismissable
+
+
+def test_the_overview_lists_a_row_stuck_on_a_setup_error(db_session: Session, member: Actor, admin: Actor) -> None:
+    [row] = _rows(db_session, _submit(db_session, member))
+    row.first_attempted_at, row.last_status, row.last_error = datetime.now(UTC), 403, "unknown_client"
+    db_session.flush()
+
+    assert row.attempts == 0
+    assert row in quilt_events.delivery_overview(db_session, admin).retrying
 
 
 def test_only_an_admin_sees_the_delivery_overview(db_session: Session, member: Actor, reviewer: Actor) -> None:
