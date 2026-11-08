@@ -1,7 +1,7 @@
 """add stash_archives: the URLs of each submission that Krater asks Stash to archive
 
 Revision ID: ebee8a6d6d16
-Revises: e5b7d9f1a3c6
+Revises: b7e2c9d4f1a8
 Create Date: 2026-11-08 12:00:00.000000
 
 `stash_archives` holds one row per project and URL. The services write a row in the same transaction as the
@@ -19,7 +19,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "ebee8a6d6d16"
-down_revision: str | Sequence[str] | None = "e5b7d9f1a3c6"
+down_revision: str | Sequence[str] | None = "b7e2c9d4f1a8"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
