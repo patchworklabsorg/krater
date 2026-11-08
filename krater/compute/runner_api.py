@@ -96,7 +96,7 @@ class StartInfo:
     resumed: bool
     command: str | None
     kind: str
-    # A box's authorized_keys: its submitter's SSH keys, as `type base64` lines.
+    # A box's authorized_keys: its submitter's SSH keys and every admin's (`box_access`), as `type base64` lines.
     ssh_keys: tuple[str, ...] = ()
     heartbeat_seconds: int = HEARTBEAT_SECONDS
     checkpoint_sync_seconds: int = CHECKPOINT_SYNC_SECONDS
@@ -188,7 +188,7 @@ _HEARTBEAT_FIELDS = {
 class HeartbeatReply:
     stop: bool  # the job has ended: stop the command
     sync: bool  # save /workspace and confirm: Krater is about to stop the box
-    # A box's whole authorized_keys: the owner's keys and any admin's with access now. None for a batch job, and the
+    # A box's whole authorized_keys: the owner's keys and every admin's (`box_access`). None for a batch job, and the
     # runner leaves the file alone when the reply has none.
     ssh_keys: tuple[str, ...] | None = None
 
