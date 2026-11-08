@@ -207,6 +207,22 @@
   {% else %}
     <p class="muted">No application yet.</p>
   {% endif %}
+  {% if stash_archives %}
+    {# Reviewers only: Stash's copy of each submitted link, as it was when it was submitted. #}
+    <h3 class="archives__title">Archived copies</h3>
+    <ul class="archives">
+      {% for archive in stash_archives %}
+        <li>
+          <span class="badge badge--{{ archive.tone }}">{{ archive.label }}</span>
+          {% if archive.page_url %}
+            <a href="{{ archive.page_url }}">{{ archive.url }}</a>
+          {% else %}
+            <span>{{ archive.url }}</span>
+          {% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  {% endif %}
 </section>
 
 {% if ospool_grant %}{% include "projects/_ospool.html" %}{% endif %}

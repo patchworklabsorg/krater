@@ -43,6 +43,7 @@ from krater.services import (
     pricing,
     residency,
     slack_membership,
+    stash_archives,
     teams,
 )
 from krater.services import projects as project_service
@@ -75,6 +76,7 @@ from krater.web.routers.gallery import primary_image_url, public_team
 from krater.web.templates import templates
 from krater.worker.app import (
     kick_quilt_delivery,
+    kick_stash_archiving,
     slack_archive_channel,
     slack_invite_team,
     slack_notify_decision,
@@ -185,6 +187,7 @@ def _success_redirect(
     if after_commit is not None:
         after_commit()
     kick_quilt_delivery()
+    kick_stash_archiving()
     flash(request, message, "success")
     return _redirect_to_project(project_id)
 
@@ -596,9 +599,15 @@ def _build_detail_context(
             diff_percent = abs(asked_cents - total_cents) / total_cents * 100
             estimate_mismatch_by_revision[revision.id] = diff_percent > threshold_percent
 
+    # Reviewers and admins see Stash's copy of each submitted link (`krater.services.stash_archives`).
+    archives: list[stash_archives.ArchiveDisplay] = []
+    if actor.is_reviewer or actor.is_admin:
+        archives = [stash_archives.display(row) for row in stash_archives.for_project(session, project)]
+
     return {
         "project": project,
         "summary": summary,
+        "stash_archives": archives,
         "budget_flag": budget_flag,
         "primary_image_url": image_url,
         "verification_pending": verification_pending,

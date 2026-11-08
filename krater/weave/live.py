@@ -6,7 +6,8 @@ that JWKS with `joserfc` (signature, `iss`, `aud`, `exp`, `nonce`); PKCE is S256
 The directory API is called with an access token from Krater's own OAuth app (the client_credentials
 grant, scope `directory`). The token is cached until shortly before it expires, and refetched once if
 Weave answers 401. A second client_credentials token, scope `quilt`, is what Krater shows Quilt (see
-`quilt_token`); each scope has its own cache entry. `get_user` answers are cached for a short TTL to absorb
+`quilt_token`), and a third, scope `stash`, is what it shows Stash (`stash_token`); each scope has its own cache
+entry. `get_user` answers are cached for a short TTL to absorb
 bursts of lookups from page views; `get_user(fresh=True)`, which every state-changing action uses, skips that
 cache. See `docs/weave-integration.md` for the full contract.
 """
@@ -40,6 +41,9 @@ DIRECTORY_SCOPE = "directory"
 
 #: The scope Krater asks for on its client_credentials token for Quilt's patch API.
 QUILT_SCOPE = "quilt"
+
+#: The scope Krater asks for on its client_credentials token for Stash's archive API.
+STASH_SCOPE = "stash"
 
 #: How long a `get_user` answer is trusted before re-fetching. Page views only: `fresh=True` lookups ignore it.
 DIRECTORY_CACHE_TTL_SECONDS = 60.0
@@ -280,6 +284,14 @@ class LiveWeaveClient:
     def invalidate_quilt_token(self) -> None:
         """Forget the cached Quilt token, so the next `quilt_token` call fetches a new one."""
         self._service_tokens.pop(QUILT_SCOPE, None)
+
+    def stash_token(self) -> str:
+        """Krater's client_credentials access token for Stash's archive API (scope `stash`)."""
+        return self._service_token(STASH_SCOPE)
+
+    def invalidate_stash_token(self) -> None:
+        """Forget the cached Stash token, so the next `stash_token` call fetches a new one."""
+        self._service_tokens.pop(STASH_SCOPE, None)
 
     def _service_token(self, scope: str) -> str:
         """Krater's client_credentials access token for `scope`, cached until shortly before it expires."""

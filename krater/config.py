@@ -198,6 +198,16 @@ class Settings(BaseSettings):
     # The most outbox rows one sender run sends. The periodic task runs every minute.
     quilt_batch_size: int = 200
 
+    # Stash (the Patchwork Labs archive): Krater asks Stash to archive each URL of a submission, so a reviewer can
+    # see what was submitted after the member changes it. See docs/stash-integration.md. Blank means "don't
+    # archive": the services still write a `stash_archives` row for each URL, and the worker sends the backlog once
+    # this is set.
+    stash_url: str = ""
+    stash_timeout_seconds: float = 10.0
+    # The most archive requests, and the most status reads, one worker run makes: at most 60 requests a run, under
+    # Stash's limit of 120 a minute per token, with room for a kicked run beside the periodic one.
+    stash_batch_size: int = 30
+
     # OSG's public accounting (GRACC), where Krater reads the usage of OSPool grants run outside Krater
     # (krater.ospool.accounting, docs/SPEC.md "OSPool grants"). A public, read-only Elasticsearch endpoint: no
     # credentials. `fake` answers from memory, for tests.
@@ -261,6 +271,8 @@ class Settings(BaseSettings):
                 )
             if self.quilt_url and not self.quilt_url.startswith("https://"):
                 raise ValueError("KRATER_QUILT_URL must be an https:// URL when KRATER_ENV=production")
+            if self.stash_url and not self.stash_url.startswith("https://"):
+                raise ValueError("KRATER_STASH_URL must be an https:// URL when KRATER_ENV=production")
             if not self.base_url.startswith("https://"):
                 raise ValueError("KRATER_BASE_URL must be an https:// URL when KRATER_ENV=production")
             # The live modes above are mandatory in production, so their secrets must actually be set --

@@ -47,6 +47,16 @@ class WeaveClient(Protocol):
         """Forget the cached Quilt token (Quilt answered 401), so the next call fetches a new one."""
         ...
 
+    def stash_token(self) -> str:
+        """Krater's own access token for Stash's archive API: a client_credentials token with the `stash`
+        scope, cached until shortly before it expires. Raises `WeaveUnavailableError` if Weave can't be
+        reached or refuses the token (for example, the scope isn't allowed on the Krater app)."""
+        ...
+
+    def invalidate_stash_token(self) -> None:
+        """Forget the cached Stash token (Stash answered 401), so the next call fetches a new one."""
+        ...
+
     def cli_token_sub(self, token: str) -> str | None:
         """The Weave `sub` of a user's access token for the Krater CLI's app, or `None` when Weave says the token is
         no good: expired, revoked, issued to another app, or its user may no longer use the app. Raises

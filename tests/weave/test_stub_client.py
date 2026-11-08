@@ -8,7 +8,7 @@ import pytest
 from krater.services.actor import GROUP_ADMIN, GROUP_MEMBER, GROUP_REVIEWER
 from krater.weave.errors import WeaveAuthError
 from krater.weave.roles import RoleMapping
-from krater.weave.stub import STUB_QUILT_TOKEN, StubWeaveClient
+from krater.weave.stub import STUB_QUILT_TOKEN, STUB_STASH_TOKEN, StubWeaveClient
 
 
 @pytest.fixture
@@ -104,6 +104,16 @@ def test_the_stub_quilt_token_is_a_fixed_fake_and_counts_calls() -> None:
     assert stub.quilt_token() == STUB_QUILT_TOKEN
     stub.invalidate_quilt_token()
     assert (stub.quilt_token_requests, stub.quilt_token_invalidations) == (1, 1)
+
+
+def test_the_stub_stash_token_is_a_fixed_fake_and_counts_calls() -> None:
+    stub = StubWeaveClient()
+
+    assert stub.stash_token() == STUB_STASH_TOKEN
+    assert stub.stash_token() != STUB_QUILT_TOKEN
+    stub.invalidate_stash_token()
+    assert (stub.stash_token_requests, stub.stash_token_invalidations) == (2, 1)
+    assert (stub.quilt_token_requests, stub.quilt_token_invalidations) == (0, 0)
 
 
 def test_the_fixture_has_a_minor_with_and_without_a_verified_guardian(stub_client: StubWeaveClient) -> None:

@@ -2374,3 +2374,27 @@ fieldset.choice-list legend {
   font-size: var(--text-lg);
   font-weight: 500;
 }
+
+/* Stash's copies of the submitted links, for reviewers (krater.services.stash_archives). */
+.archives__title {
+  margin: var(--space-4) 0 var(--space-1);
+  font-size: var(--text-sm);
+  font-weight: 650;
+}
+
+.archives {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--space-1);
+}
+
+.archives li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
