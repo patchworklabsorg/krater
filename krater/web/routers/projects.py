@@ -313,7 +313,7 @@ async def create_project(
 def _require_editable_draft(project: Project) -> ProjectRevision | None:
     """The project's current draft, or `None` if there's nothing to edit right now."""
     draft = project.current_revision
-    if draft is None or draft.submitted_at is not None:
+    if draft is None or draft.submitted_at is not None or project.status in _TERMINAL_STATUSES:
         return None
     return draft
 
@@ -524,7 +524,8 @@ def _build_detail_context(
         )
     my_invitation = next((m for m in project.members if m.user_id == actor.user.id and not m.accepted), None)
     current = project.current_revision
-    has_draft = current is not None and current.submitted_at is None
+    # A draft left open when the project was withdrawn is history, not work to carry on.
+    has_draft = current is not None and current.submitted_at is None and project.status not in _TERMINAL_STATUSES
     current_is_pending = (
         current is not None and current.submitted_at is not None and current.outcome is RevisionOutcome.PENDING
     )
@@ -1212,15 +1213,10 @@ def admin_record_ospool_grant(
     }
     errors: dict[str, str] = {}
     rate_microusd = _parse_ospool_rate(rate, errors)
-    counted_from_day = None
     try:
         counted_from_day = date.fromisoformat(counted_from.strip())
     except ValueError:
-        errors["counted_from"] = "Enter the day usage counts from."
-    if errors or counted_from_day is None:
-        return _ospool_form_errors(
-            request, db_session, weave_client, project, actor, errors=errors, form="ospool_grant", posted=posted
-        )
+        counted_from_day = None  # the service says so, with the form's other problems
     try:
         grant = ospool_grants.record_grant(
             db_session,
@@ -1234,6 +1230,7 @@ def admin_record_ospool_grant(
             reason=reason,
             weave_client=weave_client,
             now=datetime.now(UTC),
+            form_errors=errors,
         )
     except ValidationFailed as exc:
         return _ospool_form_errors(
@@ -1282,10 +1279,6 @@ def admin_ospool_valuation(
     posted = {"gpu_name": gpu_name, "rate": rate, "rate_note": rate_note, "reason": reason}
     errors: dict[str, str] = {}
     rate_microusd = _parse_ospool_rate(rate, errors)
-    if errors:
-        return _ospool_form_errors(
-            request, db_session, weave_client, project, actor, errors=errors, form="ospool_valuation", posted=posted
-        )
     try:
         ospool_grants.update_valuation(
             db_session,
@@ -1296,6 +1289,7 @@ def admin_ospool_valuation(
             rate_note=rate_note,
             reason=reason,
             now=datetime.now(UTC),
+            form_errors=errors,
         )
     except ValidationFailed as exc:
         return _ospool_form_errors(

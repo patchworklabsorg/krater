@@ -106,15 +106,15 @@ def test_bad_input_shows_on_the_form(client, login_as, submitted_project, db_ses
     db_session.commit()  # the refused post rolls back to here
     login_as(ADMIN_SUB)
 
-    response = _record(client, project, ospool_project_name="not a name", rate="abc")
+    response = _record(client, project, ospool_project_name="not a name", rate="abc", counted_from="", reason="")
 
+    # Every problem at once: the form's own (price, day) and the service's (name, reason).
     assert response.status_code == 422
     assert "Enter a price like 0.25 or 0.0587." in response.text
-    assert db_session.scalar(sa.select(OspoolGrant)) is None
-
-    response = _record(client, project, ospool_project_name="not a name")
-    assert response.status_code == 422
     assert "as OSG registered it" in response.text
+    assert "Enter the day usage counts from." in response.text
+    assert "A reason is required." in response.text
+    assert db_session.scalar(sa.select(OspoolGrant)) is None
 
 
 def test_a_team_not_all_us_residents_is_refused(client, login_as, submitted_project, db_session, weave_stub):

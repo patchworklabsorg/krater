@@ -38,6 +38,15 @@ def test_update_draft_fails_when_no_draft_exists(db_session: Session, member: Ac
         projects.update_draft(db_session, member, project=project, title="too late")
 
 
+def test_a_draft_left_open_when_the_project_was_withdrawn_cant_be_edited(db_session: Session, member: Actor) -> None:
+    project = new_project(db_session, member, title="x", write_up="y", budget_requested_cents=100)
+    projects.withdraw(db_session, member, project=project)
+
+    with pytest.raises(InvalidState, match="withdrawn"):
+        projects.update_draft(db_session, member, project=project, title="after withdrawing")
+    assert project.title == "x"
+
+
 def test_submit_validates_required_fields(db_session: Session, member: Actor) -> None:
     project = new_project(db_session, member)  # blank title/write-up, budget 0
 

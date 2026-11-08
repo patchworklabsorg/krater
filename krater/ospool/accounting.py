@@ -9,6 +9,9 @@ identity. Its raw index names each job's user, so Krater never reads it.
 - **Days** are UTC, by each record's `EndTime`, so a job counts on the day it ended.
 - **Fields.** `GPUHours`, `CoreHours` and `Njobs`. GRACC doesn't say which GPU a job used.
 - **Lag.** OSG's accounting is about a day behind, and corrects recent days, so the import reads a window again.
+- **Speed.** GRACC is slow (5 to 25 seconds a query, measured Nov 8, 2026), and the summary alias spans 34 shards.
+  `pre_filter_shard_size=1` lets it skip the shards whose dates can't match (31 of them for a recent fortnight), which
+  is quicker and lighter on OSG's server; the timeout is generous.
 """
 
 from __future__ import annotations
@@ -21,6 +24,9 @@ from functools import lru_cache
 import httpx
 
 from krater.config import get_settings
+
+#: Skip the shards whose date range can't match before searching them (see "Speed" above).
+SEARCH_PARAMS = {"pre_filter_shard_size": "1"}
 
 
 class AccountingError(Exception):
@@ -97,7 +103,12 @@ class LiveAccounting:
     def daily_usage(self, project_name: str, start: date, end: date) -> list[DayUsage]:
         """`project_name`'s usage on each day in `[start, end)`."""
         try:
-            response = self._http.post(self._url, json=usage_query(project_name, start, end), timeout=self._timeout)
+            response = self._http.post(
+                self._url,
+                params=SEARCH_PARAMS,
+                json=usage_query(project_name, start, end),
+                timeout=self._timeout,
+            )
         except httpx.HTTPError as exc:
             raise AccountingError(f"could not reach OSG's accounting: {exc}") from exc
         if response.status_code >= 400:

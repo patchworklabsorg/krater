@@ -31,7 +31,7 @@ def test_it_asks_for_the_projects_user_jobs_per_utc_day() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(json.loads(request.content))
-        assert str(request.url) == URL
+        assert str(request.url) == f"{URL}?pre_filter_shard_size=1"
         body = {"aggregations": {"days": {"buckets": [_bucket(date(2026, 11, 3), 10.123456, 84.0, 12.0)]}}}
         return httpx.Response(200, json=body)
 

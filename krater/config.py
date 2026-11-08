@@ -203,7 +203,8 @@ class Settings(BaseSettings):
     # credentials. `fake` answers from memory, for tests.
     ospool_accounting_mode: Literal["fake", "live"] = "live"
     ospool_accounting_url: str = "https://gracc.opensciencegrid.org/q/gracc.osg.summary/_search"
-    ospool_accounting_timeout_seconds: float = 30.0
+    # GRACC is slow: 5 to 25 seconds for one project's fortnight, measured 2026-11-08.
+    ospool_accounting_timeout_seconds: float = 120.0
     ospool_usage_import_cron: str = "41 8 * * *"  # daily; OSG's accounting is about a day behind
 
     @property
