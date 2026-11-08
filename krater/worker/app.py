@@ -25,7 +25,16 @@ from krater.ospool.accounting import get_accounting_client
 from krater.pricing.catalog import CatalogError, get_price_catalog
 from krater.quilt import sender as quilt_sender
 from krater.registry import get_registry
-from krater.services import grants, ops_alerts, ospool_grants, people, price_history, slack_notify, slack_reviews
+from krater.services import (
+    box_access,
+    grants,
+    ops_alerts,
+    ospool_grants,
+    people,
+    price_history,
+    slack_notify,
+    slack_reviews,
+)
 from krater.services.pricing import refresh_prices
 from krater.slack import SlackError, get_slack_client
 from krater.stash import sender as stash_sender
@@ -314,6 +323,32 @@ def grant_release(timestamp: int) -> None:
         logger.exception("krater.grant_release failed")
         session.rollback()
         _report_failure("grant_release", _failure(exc))
+    finally:
+        session.close()
+
+
+# --------------------------------------------------------------------------------------------------
+# Admins' SSH access to every box (`krater.services.box_access`): Weave's admin list, copied for the heartbeat.
+# --------------------------------------------------------------------------------------------------
+
+BOX_ADMINS_LOCK = "box_admins_sync"
+
+
+@app.periodic(cron="*/5 * * * *")
+@app.task(name="box_admins_sync", lock=BOX_ADMINS_LOCK, queueing_lock=BOX_ADMINS_LOCK)
+def box_admins_sync(timestamp: int) -> None:
+    """Every five minutes: copy Weave's admin list into `BoxAdmin`, whose keys go on every box. Runs whatever
+    KRATER_COMPUTE_MODE says, so the list is current when compute is turned on. On a failure the last list stands,
+    but only for `box_access.ROSTER_STALE`."""
+    now = max(datetime.now(UTC), datetime.fromtimestamp(timestamp, tz=UTC))
+    session = get_sessionmaker()()
+    try:
+        box_access.sync_admins(session, get_weave_client(), now=now)
+        session.commit()
+    except Exception as exc:
+        logger.exception("krater.box_admins_sync failed")
+        session.rollback()
+        _report_failure("box_admins", _failure(exc))
     finally:
         session.close()
 
