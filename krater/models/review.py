@@ -10,7 +10,7 @@ from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from krater.db import Base
-from krater.models.enums import ReviewDecision, ReviewSource, pg_enum
+from krater.models.enums import FundingHold, ReviewDecision, ReviewSource, pg_enum
 from krater.models.mixins import CreatedAtMixin, UUIDPrimaryKeyMixin
 
 if TYPE_CHECKING:
@@ -38,6 +38,8 @@ class Review(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     source: Mapped[ReviewSource] = mapped_column(pg_enum(ReviewSource, name="review_source"), nullable=False)
     # Snapshot of the reviewer's roles (from Weave) *at review time*, so a later change to their roles (or to
     # an ApprovalPolicy's `required_group`) can't retroactively change whether a past review counts.
+    # The funding hold an approving reviewer asked for (web only), applied to the project once the approval counts.
+    funding_hold: Mapped[FundingHold | None] = mapped_column(pg_enum(FundingHold, name="funding_hold"), nullable=True)
     reviewer_groups: Mapped[list[str]] = mapped_column(
         ARRAY(sa.String), nullable=False, default=list, server_default="{}"
     )

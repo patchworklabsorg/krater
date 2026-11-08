@@ -10,6 +10,7 @@ from krater.services import compute_files, compute_jobs
 from krater.services.compute_jobs import JobSpec
 from krater.services.errors import NotAllowed, NotFound
 from krater.storage.fake import FakeObjectStore
+from krater.weave import StubWeaveClient
 from tests.conftest import MEMBER_SUB, OTHER_MEMBER_SUB, REVIEWER_SUB
 from tests.web.conftest import actor_for
 
@@ -30,7 +31,15 @@ def job(db_session, project, login_as):
         max_microusd=100_000,
     )
     member = actor_for(login_as(MEMBER_SUB))
-    return compute_jobs.submit_job(db_session, member, project=project, spec=spec, cap_cents=500, now=datetime.now(UTC))
+    return compute_jobs.submit_job(
+        db_session,
+        member,
+        project=project,
+        spec=spec,
+        cap_cents=500,
+        now=datetime.now(UTC),
+        weave_client=StubWeaveClient(),  # the bundled fixture: every member there is verified
+    )
 
 
 def _put(store, job, area, name, content: bytes) -> None:

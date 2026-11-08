@@ -19,6 +19,7 @@ from krater.models import (
     ApprovalStage,
     AuditEvent,
     BudgetEntry,
+    BudgetEntryKind,
     Project,
     ProjectStatus,
     QuiltOutbox,
@@ -28,7 +29,7 @@ from krater.models import (
     SpendSnapshot,
     SpendSource,
 )
-from krater.services import projects, quilt_events
+from krater.services import budget, projects, quilt_events
 from krater.services.actor import Actor
 from krater.services.errors import InvalidState, NotAllowed, ValidationFailed
 from krater.services.quilt_events import (
@@ -58,7 +59,7 @@ def _types(session: Session, project: Project) -> list[str]:
 
 def _submit(session: Session, member: Actor, *, budget_cents: int = 100_000, title: str = "Rover") -> Project:
     project = new_project(session, member, title=title, write_up="A rover.", budget_requested_cents=budget_cents)
-    return projects.submit(session, member, project=project)
+    return projects.submit(session, member, project=project, criteria_read=True)
 
 
 def _approve(session: Session, reviewer: Actor, project: Project, weave) -> Project:
@@ -83,6 +84,16 @@ def _spend(session: Session, project: Project, cents: int) -> None:
         SpendSnapshot(project_id=project.id, estimated_spend_cents=cents, source=SpendSource.SKYPILOT_COST_REPORT)
     )
     session.flush()
+    quilt_events.sync_project(session, project)
+
+
+def _cut(session: Session, project: Project, admin: Actor, cents: int) -> None:
+    """A cut written straight to the ledger. Admin cuts and reclaims stop at the spend
+    (`projects._require_spend_floor`), which is what Quilt still has committed, so they never reach the outbox's
+    release cap; these tests check the cap still holds for a cut that does."""
+    budget.add_entry(
+        session, project=project, kind=BudgetEntryKind.RECLAIM, amount_cents=-cents, actor=admin, reason="Cut."
+    )
     quilt_events.sync_project(session, project)
 
 
@@ -149,7 +160,7 @@ def test_a_rejection_and_resubmission_send_updates_not_a_second_created(
         weave_client=weave,
     )
     projects.update_draft(db_session, member, project=project, title="Rover 2", budget_requested_cents=20_000)
-    projects.submit(db_session, member, project=project)
+    projects.submit(db_session, member, project=project, criteria_read=True)
 
     rows = _rows(db_session, project)
     assert [row.type for row in rows] == [SUBMISSION_CREATED, SUBMISSION_UPDATED, SUBMISSION_UPDATED]
@@ -199,7 +210,7 @@ def test_an_amendment_increase_sends_the_new_request_then_the_added_budget(
     project = _approved(db_session, member, reviewer, budget_cents=100_000, weave=weave)
     projects.start_amendment(db_session, member, project=project)
     projects.update_draft(db_session, member, project=project, budget_requested_cents=150_000)
-    projects.submit(db_session, member, project=project)
+    projects.submit(db_session, member, project=project, criteria_read=True)
     _approve(db_session, reviewer, project, weave=weave)
 
     rows = _rows(db_session, project)[3:]
@@ -214,7 +225,7 @@ def test_an_amendment_decrease_sends_budget_released(
     project = _approved(db_session, member, reviewer, budget_cents=100_000, weave=weave)
     projects.start_amendment(db_session, member, project=project)
     projects.update_draft(db_session, member, project=project, budget_requested_cents=60_000)
-    projects.submit(db_session, member, project=project)
+    projects.submit(db_session, member, project=project, criteria_read=True)
     _approve(db_session, reviewer, project, weave=weave)
 
     last = _rows(db_session, project)[-1]
@@ -232,7 +243,7 @@ def test_an_unchanged_amendment_budget_is_skipped(db_session: Session, member: A
     projects.update_draft(
         db_session, member, project=project, write_up="A bigger rover.", budget_requested_cents=100_000
     )
-    projects.submit(db_session, member, project=project)
+    projects.submit(db_session, member, project=project, criteria_read=True)
     _approve(db_session, reviewer, project, weave=weave)
 
     zero = db_session.scalars(
@@ -249,7 +260,7 @@ def test_a_rejected_amendment_puts_the_approved_request_back(
     project = _approved(db_session, member, reviewer, budget_cents=100_000, weave=weave)
     projects.start_amendment(db_session, member, project=project)
     projects.update_draft(db_session, member, project=project, budget_requested_cents=150_000)
-    projects.submit(db_session, member, project=project)
+    projects.submit(db_session, member, project=project, criteria_read=True)
     projects.record_review(
         db_session,
         reviewer,
@@ -379,9 +390,7 @@ def test_a_correction_takes_off_the_overspend_first_as_quilt_does(
     _spend(db_session, project, 12_000)
     _spend(db_session, project, 9_000)
     # Releasing more than Quilt's remaining 1000 is capped at 1000.
-    projects.admin_adjust_budget(
-        db_session, admin, project=project, amount_cents=-5_000, reason="Cut.", weave_client=weave
-    )
+    _cut(db_session, project, admin, 5_000)
 
     last = _rows(db_session, project)[-1]
     assert (last.type, last.payload["amount_cents"]) == (BUDGET_RELEASED, 1_000)
@@ -397,15 +406,13 @@ def test_a_release_is_capped_at_what_quilt_still_has_committed(
 ) -> None:
     project = _approved(db_session, member, reviewer, budget_cents=100_000, weave=weave)
     _spend(db_session, project, 80_000)  # Quilt draws down 80_000; 20_000 stays committed
-    projects.admin_adjust_budget(
-        db_session, admin, project=project, amount_cents=-50_000, reason="Cut.", weave_client=weave
-    )
+    _cut(db_session, project, admin, 50_000)
 
     last = _rows(db_session, project)[-1]
     assert (last.type, last.payload["amount_cents"], last.state) == (BUDGET_RELEASED, 20_000, QuiltOutboxState.PENDING)
 
     # Nothing is left in Quilt, so a further release is stored as skipped and never sent.
-    projects.reclaim_budget(db_session, admin, project=project, amount_cents=10_000, reason="More cut.")
+    _cut(db_session, project, admin, 10_000)
     last = _rows(db_session, project)[-1]
     assert last.state is QuiltOutboxState.SKIPPED
     assert last.last_error == "Nothing left to release in Quilt."
@@ -416,7 +423,7 @@ def test_a_skipped_release_is_never_sent_later(
 ) -> None:
     project = _approved(db_session, member, reviewer, budget_cents=10_000, weave=weave)
     _spend(db_session, project, 10_000)
-    projects.reclaim_budget(db_session, admin, project=project, amount_cents=5_000, reason="Cut.")
+    _cut(db_session, project, admin, 5_000)
     projects.admin_adjust_budget(
         db_session, admin, project=project, amount_cents=50_000, reason="More.", weave_client=weave
     )
@@ -440,9 +447,7 @@ def test_a_new_commitment_covers_earlier_overspend_before_the_release_cap(
         db_session, admin, project=project, amount_cents=5_000, reason="More.", weave_client=weave
     )
     # Quilt uses 2_000 of the new 5_000 to cover the overspend, so 3_000 stays committed.
-    projects.admin_adjust_budget(
-        db_session, admin, project=project, amount_cents=-4_000, reason="Cut.", weave_client=weave
-    )
+    _cut(db_session, project, admin, 4_000)
 
     last = _rows(db_session, project)[-1]
     assert (last.type, last.payload["amount_cents"], last.state) == (BUDGET_RELEASED, 3_000, QuiltOutboxState.PENDING)
@@ -456,7 +461,7 @@ def test_a_new_commitment_covers_earlier_overspend_before_the_release_cap(
 def test_the_outbox_row_is_part_of_the_callers_transaction(db_session: Session, member: Actor) -> None:
     project = new_project(db_session, member, title="Rover", write_up="x", budget_requested_cents=5)
     nested = db_session.begin_nested()
-    projects.submit(db_session, member, project=project)
+    projects.submit(db_session, member, project=project, criteria_read=True)
     assert len(_rows(db_session, project)) == 1
 
     nested.rollback()
@@ -469,7 +474,7 @@ def test_the_outbox_row_is_part_of_the_callers_transaction(db_session: Session, 
 def test_a_failed_submit_writes_nothing(db_session: Session, member: Actor) -> None:
     project = new_project(db_session, member, title="", write_up="x", budget_requested_cents=5)
     with pytest.raises(ValidationFailed):
-        projects.submit(db_session, member, project=project)
+        projects.submit(db_session, member, project=project, criteria_read=True)
 
     assert _rows(db_session, project) == []
 
@@ -522,14 +527,46 @@ def test_backfill_enqueues_existing_projects_once(
 # --------------------------------------------------------------------------------------------------
 
 
-def _failed_row(session: Session, member: Actor) -> QuiltOutbox:
+def _failed_row(session: Session, member: Actor, *, status: int = 409, error: str = "submission_exists") -> QuiltOutbox:
+    """The project's `submission.created`, refused by Quilt. By default for a submission Quilt has already, which an
+    admin may dismiss."""
     project = _submit(session, member)
     [row] = _rows(session, project)
     row.state = QuiltOutboxState.FAILED
-    row.last_status = 422
-    row.last_error = "invalid_event"
+    row.last_status = status
+    row.last_error = error
     session.flush()
     return row
+
+
+def test_a_submission_quilt_never_took_cannot_be_dismissed(db_session: Session, member: Actor, admin: Actor) -> None:
+    row = _failed_row(db_session, member, status=422, error="invalid_event")
+
+    assert not quilt_events.can_dismiss(row)
+    with pytest.raises(InvalidState, match="Fix what Quilt refused, then retry it"):
+        quilt_events.admin_dismiss(db_session, admin, row_id=row.id, reason="Not needed.")
+    assert row.state is QuiltOutboxState.FAILED
+    assert row.id not in quilt_events.delivery_overview(db_session, admin).dismissable
+
+    # Retrying it is still allowed.
+    quilt_events.admin_retry(db_session, admin, row_id=row.id, reason="Fixed in Quilt.")
+    assert row.state is QuiltOutboxState.PENDING
+
+
+def test_a_submission_quilt_has_already_can_be_dismissed(db_session: Session, member: Actor, admin: Actor) -> None:
+    row = _failed_row(db_session, member)
+
+    assert quilt_events.can_dismiss(row)
+    assert row.id in quilt_events.delivery_overview(db_session, admin).dismissable
+
+
+def test_the_overview_lists_a_row_stuck_on_a_setup_error(db_session: Session, member: Actor, admin: Actor) -> None:
+    [row] = _rows(db_session, _submit(db_session, member))
+    row.first_attempted_at, row.last_status, row.last_error = datetime.now(UTC), 403, "unknown_client"
+    db_session.flush()
+
+    assert row.attempts == 0
+    assert row in quilt_events.delivery_overview(db_session, admin).retrying
 
 
 def test_only_an_admin_sees_the_delivery_overview(db_session: Session, member: Actor, reviewer: Actor) -> None:

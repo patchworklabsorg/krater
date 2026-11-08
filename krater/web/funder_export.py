@@ -16,7 +16,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import KeepTogether, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
-from krater.services.funder_packet import Packet, PacketRow
+from krater.services.funder_packet import FIELDS, Packet, PacketRow
 from krater.web.money import format_cents
 
 FUNDER_NAMES = {"ospool": "OSPool"}
@@ -47,6 +47,45 @@ def team_text(row: PacketRow) -> str:
         others = f"{row.unnamed} member{'s' if row.unnamed != 1 else ''} not named"
         names = f"{names} and {others}" if names else others.capitalize()
     return names
+
+
+def full_estimate_text(row: PacketRow) -> str:
+    parts = []
+    if row.full_budget_cents:
+        parts.append(f"{format_cents(row.full_budget_cents)}, roughly")
+    if row.full_gpu:
+        parts.append(row.full_gpu.text)
+    return "; ".join(parts) or "None given"
+
+
+#: Each field's text in the PDF, by `funder_packet.FIELDS` key.
+_VALUES = {
+    "summary": lambda row: row.summary,
+    "write_up": lambda row: row.write_up,
+    "experience": lambda row: row.experience,
+    "affiliation": lambda row: row.affiliation,
+    "open_source": lambda row: row.open_source,
+    "repo_url": lambda row: row.repo_url or "None given",
+    "compute_use": lambda row: row.compute_use,
+    "training_data": lambda row: row.training_data or "Not answered",
+    "status": lambda row: row.status_label,
+    "requested": lambda row: format_cents(row.requested_cents),
+    "granted": lambda row: format_cents(row.granted_cents),
+    "gpu": lambda row: row.gpu.text if row.gpu else "None given",
+    "full_estimate": full_estimate_text,
+    "team": team_text,
+    "residency": residency_text,
+    "ospool_usage": lambda row: row.ospool_usage,
+}
+#: Fields left out of a project's entry when it has nothing for them, rather than printed blank.
+_ONLY_WHEN_SET = frozenset({"ospool_usage"})
+
+
+def row_fields(packet: Packet, row: PacketRow) -> list[tuple[str, str]]:
+    """What the PDF prints about `row`: (label, text) for each of the packet's fields, in order."""
+    labels = {field.key: field.label for field in FIELDS}
+    values = [(key, _VALUES[key](row)) for key in packet.fields]
+    return [(labels[key], text) for key, text in values if text or key not in _ONLY_WHEN_SET]
 
 
 def _register_fonts() -> None:
@@ -87,16 +126,11 @@ def to_pdf(packet: Packet) -> bytes:
         Spacer(1, 0.2 * inch),
     ]
     for row in packet.rows:
-        fields = [
-            ("Summary", row.summary),
-            ("Compute use", row.compute_use),
-            ("Status", row.status_label),
-            ("Requested", format_cents(row.requested_cents)),
-            ("Granted", format_cents(row.granted_cents)),
-            ("GPU estimate", row.gpu.text if row.gpu else "None given"),
-            ("Team", team_text(row)),
-            ("US residency", residency_text(row)),
-        ]
+        fields = row_fields(packet, row)
+        if not fields:  # the title alone: reportlab can't draw an empty table
+            story.append(Paragraph(_printable(row.title or "Untitled"), heading))
+            story.append(Spacer(1, 0.15 * inch))
+            continue
         table = Table(
             [
                 [Paragraph(_printable(name), label), Paragraph(_printable(value or "None given"), body)]
@@ -141,4 +175,13 @@ def to_pdf(packet: Packet) -> bytes:
     return out.getvalue()
 
 
-__all__ = ["NOT_RESIDENTS_TEXT", "RESIDENTS_TEXT", "filename", "residency_text", "team_text", "to_pdf"]
+__all__ = [
+    "NOT_RESIDENTS_TEXT",
+    "RESIDENTS_TEXT",
+    "filename",
+    "full_estimate_text",
+    "residency_text",
+    "row_fields",
+    "team_text",
+    "to_pdf",
+]

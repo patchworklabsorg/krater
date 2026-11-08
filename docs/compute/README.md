@@ -15,9 +15,13 @@ behaviours that cost money to get wrong. Only the worker builds a client. See [v
 protocol the scheduler calls, neutral errors, and `KRATER_COMPUTE_MODE` naming the provider. Vast is the only one.
 [providers.md](providers.md) says how to add one, maps AWS and GCP onto it, and summarises the OSPool; [ospool.md](ospool.md) is the full integration report.
 
+**Images** (`krater/registry/`). The only code that talks to container registries: the digest each machine got,
+optional pinning to it, and the admin images page. See [images.md](images.md).
+
 **Settings** (`/admin/compute`). Every policy number is a global default with per-project overrides, changed with a
-reason and an audit event: reliability floor, bid margin, pause grace, move after, box idle, destroy after, reconcile
-alert, runner start deadline, heartbeat timeout, storage quota, box sync deadline, box resume timeout.
+reason and an audit event: reliability floor, bid margin, pause grace, move after, box idle, destroy after, data
+transfer price cap, data transfer warning, reconcile alert, runner start deadline, heartbeat timeout, storage quota,
+box sync deadline, box resume timeout.
 
 **Price history** (`/pricing/history`). Every hour, whenever it has a Vast key, the worker samples 18 GPU models, bid and on demand: min, p10
 and median full hourly cost of 1-GPU offers with 32 GB of disk. Members pick targets from the chart. A run stops when less than

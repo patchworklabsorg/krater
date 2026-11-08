@@ -40,9 +40,19 @@
     });
   }
 
+  function setUpOpenSource() {
+    var detail = document.querySelector('[data-role="open-source-obstacles"]');
+    var box = document.querySelector('[data-role="open-source-blocked"]');
+    if (!detail || !box) return;
+    box.addEventListener("change", function () {
+      detail.hidden = !box.checked;
+    });
+  }
+
   function init() {
     Array.prototype.forEach.call(document.querySelectorAll("textarea[data-word-limit]"), setUpCounter);
     setUpAffiliation();
+    setUpOpenSource();
   }
 
   if (document.readyState === "loading") {

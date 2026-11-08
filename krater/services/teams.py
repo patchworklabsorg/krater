@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 
 from krater.models import ComputeJob, Project, ProjectMember, ProjectStatus
 from krater.models.compute_job import FINISHED_JOB_STATES
-from krater.services import audit, budget, guardian, people
+from krater.services import audit, budget, clearance, people
 from krater.services.actor import Actor
 from krater.services.errors import InvalidState, NotAllowed, NotFound, ValidationFailed
 from krater.weave import WeaveClient
@@ -111,18 +111,19 @@ def accept(
     now: datetime | None = None,
 ) -> ProjectMember:
     """Accept the actor's own invitation. Only a Ganymede member can join a team, and joining a project that already
-    has budget passes the guardian gate (`guardian.require_member_cleared`), as the grant itself did."""
+    has budget needs the joiner cleared in Weave (`clearance.require_member_cleared`): they could reach a machine
+    that's already running, which the compute gate never sees."""
     member = _own_invitation(session, actor, member_id)
     if not actor.is_member:
         raise NotAllowed("Only Ganymede members can join a project team.")
     # The project row lock every grant takes first (`projects._lock_project`): without it, a join racing an approval
-    # could read the budget as 0 and skip the gate while the approval checked the team from before the join.
+    # could read the budget as 0 and skip the check.
     session.refresh(member.project, with_for_update=True)
     _require_open(member.project)
     if member.accepted:
         raise InvalidState("You're on this team already.")
     if budget.ceiling_cents(session, member.project) > 0:
-        guardian.require_member_cleared(weave_client, actor.user, member.project)
+        clearance.require_member_cleared(weave_client, actor.user, member.project)
     member.accepted_at = now or datetime.now(UTC)
     session.flush()
     audit.record(session, actor, "team_join", project=member.project, payload={"member_sub": actor.user.weave_sub})

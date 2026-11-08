@@ -33,10 +33,15 @@ type fakeKrater struct {
 	stopAfter int // heartbeats before answering stop (0 = never)
 	kind      string
 	sshKeys   []string
-	syncAt    int // answer sync on this heartbeat (0 = never)
-	secrets   map[string]string
-	refuse    string
-	synced    int
+	// The ssh_keys to answer heartbeat n (1-based) with; a nil entry, or n past the end, leaves the field out.
+	beatKeys [][]string
+	// With home set, each heartbeat records the authorized_keys the box had when it arrived.
+	home     string
+	keysSeen []string
+	syncAt   int // answer sync on this heartbeat (0 = never)
+	secrets  map[string]string
+	refuse   string
+	synced   int
 	// Storage answers 503 to this many PUTs before working, to stand in for a transient storage outage.
 	storageFails int
 
@@ -98,10 +103,19 @@ func (f *fakeKrater) handle(w http.ResponseWriter, r *http.Request) {
 			"secrets": f.secrets})
 	case path == "/runner/v1/heartbeat":
 		f.heartbeats = append(f.heartbeats, body)
-		f.writeJSON(w, map[string]any{
-			"stop": f.stopAfter > 0 && len(f.heartbeats) >= f.stopAfter,
-			"sync": f.syncAt > 0 && len(f.heartbeats) == f.syncAt,
-		})
+		n := len(f.heartbeats)
+		if f.home != "" {
+			seen, _ := os.ReadFile(filepath.Join(f.home, ".ssh", "authorized_keys"))
+			f.keysSeen = append(f.keysSeen, string(seen))
+		}
+		reply := map[string]any{
+			"stop": f.stopAfter > 0 && n >= f.stopAfter,
+			"sync": f.syncAt > 0 && n == f.syncAt,
+		}
+		if n <= len(f.beatKeys) && f.beatKeys[n-1] != nil {
+			reply["ssh_keys"] = f.beatKeys[n-1]
+		}
+		f.writeJSON(w, reply)
 	case path == "/runner/v1/synced":
 		f.synced++
 		f.writeJSON(w, map[string]any{"ok": true})
@@ -365,6 +379,50 @@ func TestABoxInstallsKeysCountsSessionsAndSavesItsWorkspaceWhenAsked(t *testing.
 	}
 	if f.synced != 1 || string(f.objects["workspace/notes.txt"]) != "new notes" {
 		t.Errorf("synced %d, workspace %q", f.synced, f.objects["workspace/notes.txt"])
+	}
+}
+
+func TestABoxAppliesTheKeyListEachHeartbeatCarries(t *testing.T) {
+	f := newFakeKrater(t)
+	f.kind = "box"
+	f.sshKeys = []string{"ssh-ed25519 OWNER"}
+	f.beatKeys = [][]string{
+		{"ssh-ed25519 OWNER", "ssh-ed25519 ADMIN"}, // an admin gets access
+		nil,                   // a reply without the field leaves the file alone
+		{"ssh-ed25519 OWNER"}, // the access ends
+		{},                    // an empty list empties it
+	}
+	cfg := f.cfg(t)
+	cfg.Home = t.TempDir()
+	cfg.WorkspaceDir = t.TempDir()
+	cfg.ProcNet = t.TempDir()
+	f.home = cfg.Home
+	ctx, cancel := context.WithTimeout(context.Background(), 5500*time.Millisecond)
+	defer cancel()
+
+	if code, err := Run(ctx, cfg, http.DefaultClient, http.DefaultClient, noGPU); err != nil || code != 0 {
+		t.Fatalf("Run = %d, %v", code, err)
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.keysSeen) < 5 {
+		t.Fatalf("only %d heartbeats", len(f.keysSeen))
+	}
+	want := []string{
+		"ssh-ed25519 OWNER\n",
+		"ssh-ed25519 OWNER\nssh-ed25519 ADMIN\n",
+		"ssh-ed25519 OWNER\nssh-ed25519 ADMIN\n",
+		"ssh-ed25519 OWNER\n",
+		"\n",
+	}
+	for i, w := range want {
+		if f.keysSeen[i] != w {
+			t.Errorf("before heartbeat %d authorized_keys = %q, want %q", i+1, f.keysSeen[i], w)
+		}
+	}
+	if f.heartbeats[0]["key_updates"] != true {
+		t.Errorf("a box heartbeat should say it takes key updates: %v", f.heartbeats[0])
 	}
 }
 

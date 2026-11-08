@@ -34,6 +34,8 @@ APPLICATION = {
     "experience": "I build robots.",
     "affiliation": "none",
     "compute_use": "Training a mapping model.",
+    "training_data": "Cave scans we took ourselves.",
+    "criteria_read": True,
     "budget_estimate": estimate(),
     "full_budget_cents": 10_000,
     "full_budget_estimate": estimate(10_000, hours=100.0),

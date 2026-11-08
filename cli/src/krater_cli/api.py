@@ -11,12 +11,14 @@ from krater_cli import auth
 
 
 class KraterError(Exception):
-    """Krater refused or failed a request. `fields` holds per-field problems for a job or a secret."""
+    """Krater refused or failed a request. `fields` holds per-field problems for a job or a secret. `confirm` names
+    the field to set to `true` when Krater only asks for a confirmation (a job's data transfer could cost a lot)."""
 
-    def __init__(self, message: str, *, status: int, fields: dict | None = None) -> None:
+    def __init__(self, message: str, *, status: int, fields: dict | None = None, confirm: str | None = None) -> None:
         super().__init__(message)
         self.status = status
         self.fields = fields or {}
+        self.confirm = confirm
 
 
 def _problem(status: int, path: str, data: Any) -> tuple[str, dict]:
@@ -64,7 +66,8 @@ class Krater:
             data = {}
         if response.status_code >= 400:
             message, fields = _problem(response.status_code, path, data)
-            raise KraterError(message, status=response.status_code, fields=fields)
+            confirm = data.get("confirm") if isinstance(data, dict) and isinstance(data.get("confirm"), str) else None
+            raise KraterError(message, status=response.status_code, fields=fields, confirm=confirm)
         return data
 
     def _send(self, method: str, path: str, json: Any) -> httpx.Response:

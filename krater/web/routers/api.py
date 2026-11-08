@@ -30,7 +30,15 @@ from krater.services import projects as project_service
 from krater.services import users as user_service
 from krater.services.actor import Actor
 from krater.services.compute_jobs import JobSpec
-from krater.services.errors import DomainError, InvalidState, NotAllowed, NotAMember, NotFound, ValidationFailed
+from krater.services.errors import (
+    ConfirmationRequired,
+    DomainError,
+    InvalidState,
+    NotAllowed,
+    NotAMember,
+    NotFound,
+    ValidationFailed,
+)
 from krater.services.launch_rules import LAUNCHABLE_STATUSES, hourly_cap_cents
 from krater.storage import StorageError, get_compute_store
 from krater.vast import microusd_to_usd, usd_to_microusd
@@ -138,6 +146,8 @@ def _job_json(job: ComputeJob, *, detail: bool = False, session: Session | None 
         "gpu_names": list(job.gpu_names),
         "num_gpus": job.num_gpus,
         "disk_gb": job.disk_gb,
+        "data_in_gb": job.data_in_gb,
+        "data_out_gb": job.data_out_gb,
         "target_usd_per_hour": _rate(job.target_microusd),
         "max_usd_per_hour": _rate(job.max_microusd),
         "limit_order": job.is_limit_order,
@@ -209,7 +219,7 @@ def my_projects(actor: Me, db_session: Db):
                 "id": str(p.id),
                 "title": p.title,
                 "status": p.status.value,
-                "can_launch": p.status in LAUNCHABLE_STATUSES,
+                "can_launch": p.status in LAUNCHABLE_STATUSES and p.funding_hold is None,
                 "hourly_cap_cents": hourly_cap_cents(p, get_settings()),
             }
             for p in projects
@@ -254,7 +264,13 @@ def _int(body: dict, field: str, default: int | None) -> int | None:
 
 
 @router.post("/projects/{project_id}/jobs", status_code=201)
-async def submit(project_id: uuid.UUID, request: Request, actor: Me, db_session: Db):
+async def submit(
+    project_id: uuid.UUID,
+    request: Request,
+    actor: Me,
+    db_session: Db,
+    weave_client: Annotated[WeaveClient, Depends(get_weave_client)],
+):
     project = _project(db_session, actor, project_id)
     try:
         body = await request.json()
@@ -295,6 +311,8 @@ async def submit(project_id: uuid.UUID, request: Request, actor: Me, db_session:
             on_max_wait=_choice(body, "on_max_wait", ComputeEscalation, "keep_waiting"),
             max_runtime_minutes=_int(body, "max_runtime_minutes", 8 * 60),
             on_outbid=_choice(body, "on_outbid", ComputeOutbid, outbid_default),
+            data_in_gb=_int(body, "data_in_gb", None),
+            data_out_gb=_int(body, "data_out_gb", None),
         )
         job = compute_jobs.submit_job(
             db_session,
@@ -303,7 +321,13 @@ async def submit(project_id: uuid.UUID, request: Request, actor: Me, db_session:
             spec=spec,
             cap_cents=hourly_cap_cents(project, get_settings()),
             now=datetime.now(UTC),
+            weave_client=weave_client,
+            confirm_transfer_cost=body.get("confirm_transfer_cost") is True,
         )
+    except ConfirmationRequired as exc:
+        db_session.rollback()
+        # Sent again with `"confirm_transfer_cost": true`, the job is queued.
+        return _error(409, str(exc), confirm="confirm_transfer_cost")
     except ValidationFailed as exc:
         db_session.rollback()
         return _error(422, "Check the job's fields.", fields=exc.errors)
@@ -364,12 +388,20 @@ _ACTIONS = {
 
 
 @router.post("/jobs/{job_id}/{action}")
-def job_action(job_id: uuid.UUID, action: str, actor: Me, db_session: Db):
+def job_action(
+    job_id: uuid.UUID,
+    action: str,
+    actor: Me,
+    db_session: Db,
+    weave_client: Annotated[WeaveClient, Depends(get_weave_client)],
+):
     if action not in _ACTIONS:
         return _error(404, f"No action {action!r}.")
     job = _job(db_session, actor, job_id)
     try:
-        _ACTIONS[action](db_session, actor, job=job, now=datetime.now(UTC))
+        # Resuming starts paying for the GPU again, so it checks the team's verification in Weave.
+        extra = {"weave_client": weave_client} if action == "resume" else {}
+        _ACTIONS[action](db_session, actor, job=job, now=datetime.now(UTC), **extra)
     except NotAllowed as exc:
         db_session.rollback()
         return _error(403, str(exc))

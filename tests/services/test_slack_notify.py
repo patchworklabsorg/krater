@@ -6,8 +6,8 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from krater.models import AuditEvent, ProjectStatus, ReviewDecision, ReviewSource, RevisionOutcome
-from krater.services import projects, slack_notify
+from krater.models import AuditEvent, FundingHold, ProjectStatus, ReviewDecision, ReviewSource, RevisionOutcome
+from krater.services import grants, projects, slack_notify
 from krater.services.actor import GROUP_MEMBER, GROUP_REVIEWER, Actor
 from krater.slack.errors import SlackRequestFailedError
 from krater.slack.fake import FakeSlackClient
@@ -49,7 +49,7 @@ def test_notify_revision_submitted_posts_a_review_message_and_a_feed_line(
     db_session: Session, member: Actor, reviewer: Actor, weave: StubWeaveClient
 ) -> None:
     project = new_project(db_session, member, title="Rover", write_up="A rover.", budget_requested_cents=5000)
-    project = projects.submit(db_session, member, project=project)
+    project = projects.submit(db_session, member, project=project, criteria_read=True)
     revision = project.current_revision
     reviewer.user.slack_user_id = "U_REVIEWER"
     slack_client = FakeSlackClient()
@@ -71,7 +71,7 @@ def test_notify_revision_submitted_is_idempotent(
     db_session: Session, member: Actor, reviewer: Actor, weave: StubWeaveClient
 ) -> None:
     project = new_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=5000)
-    project = projects.submit(db_session, member, project=project)
+    project = projects.submit(db_session, member, project=project, criteria_read=True)
     revision = project.current_revision
     reviewer.user.slack_user_id = "U_REVIEWER"
     slack_client = FakeSlackClient()
@@ -87,7 +87,7 @@ def test_no_feed_line_for_a_resubmission_after_rejection(
     db_session: Session, member: Actor, reviewer: Actor, weave: StubWeaveClient
 ) -> None:
     project = new_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=5000)
-    project = projects.submit(db_session, member, project=project)
+    project = projects.submit(db_session, member, project=project, criteria_read=True)
     projects.record_review(
         db_session,
         reviewer,
@@ -99,7 +99,7 @@ def test_no_feed_line_for_a_resubmission_after_rejection(
     )
     db_session.refresh(project)
     projects.update_draft(db_session, member, project=project, write_up="revised")
-    project = projects.submit(db_session, member, project=project)
+    project = projects.submit(db_session, member, project=project, criteria_read=True)
     revision = project.current_revision
     assert revision.number == 2
 
@@ -114,7 +114,7 @@ def test_no_feed_line_for_an_amendment(
     db_session: Session, member: Actor, reviewer: Actor, weave: StubWeaveClient
 ) -> None:
     project = new_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=5000)
-    project = projects.submit(db_session, member, project=project)
+    project = projects.submit(db_session, member, project=project, criteria_read=True)
     projects.record_review(
         db_session,
         reviewer,
@@ -125,7 +125,7 @@ def test_no_feed_line_for_an_amendment(
     )
     db_session.refresh(project)
     projects.start_amendment(db_session, member, project=project)
-    project = projects.submit(db_session, member, project=project)
+    project = projects.submit(db_session, member, project=project, criteria_read=True)
     revision = project.current_revision
 
     slack_client = FakeSlackClient()
@@ -139,7 +139,7 @@ def test_notify_decision_updates_the_message_and_drops_the_buttons(
     db_session: Session, member: Actor, reviewer: Actor, weave: StubWeaveClient
 ) -> None:
     project = new_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=5000)
-    project = projects.submit(db_session, member, project=project)
+    project = projects.submit(db_session, member, project=project, criteria_read=True)
     revision = project.current_revision
     slack_client = FakeSlackClient()
     slack_notify.notify_revision_submitted(db_session, slack_client, weave, revision=revision, feed_channel_id=None)
@@ -162,11 +162,36 @@ def test_notify_decision_updates_the_message_and_drops_the_buttons(
     assert "Approved" in updated["text"]
 
 
+def test_notify_decision_says_an_approval_is_awaiting_funding(
+    db_session: Session, member: Actor, reviewer: Actor, weave: StubWeaveClient
+) -> None:
+    project = new_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=5000)
+    project = projects.submit(db_session, member, project=project, criteria_read=True)
+    revision = project.current_revision
+    slack_client = FakeSlackClient()
+    slack_notify.notify_revision_submitted(db_session, slack_client, weave, revision=revision, feed_channel_id=None)
+    projects.record_review(
+        db_session,
+        reviewer,
+        revision=revision,
+        decision=ReviewDecision.APPROVE,
+        source=ReviewSource.WEB,
+        weave_client=weave,
+        funding_hold=FundingHold.AWAITING_FUNDING,
+    )
+    db_session.refresh(revision)
+
+    slack_notify.notify_decision(db_session, slack_client, revision=revision)
+
+    updated = slack_client.messages[(revision.slack_message_channel_id, revision.slack_message_ts)]
+    assert "Approved · awaiting funding" in updated["text"]
+
+
 def test_notify_decision_is_a_no_op_while_still_pending(
     db_session: Session, member: Actor, weave: StubWeaveClient
 ) -> None:
     project = new_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=5000)
-    project = projects.submit(db_session, member, project=project)
+    project = projects.submit(db_session, member, project=project, criteria_read=True)
     revision = project.current_revision
     slack_client = FakeSlackClient()
     slack_notify.notify_revision_submitted(db_session, slack_client, weave, revision=revision, feed_channel_id=None)
@@ -398,6 +423,78 @@ def test_sync_budget_notifications_posts_a_warning_once(db_session: Session, mem
     assert len(slack_client.messages) == 1
 
 
+def test_a_held_and_a_released_grant_are_posted_to_the_channel(db_session: Session, member: Actor) -> None:
+    project = new_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=5000)
+    slack_client = FakeSlackClient()
+    project.slack_channel_id = slack_client.create_channel("ganymede-rover-test")
+    for action in (grants.AUDIT_GRANT_HELD, grants.AUDIT_GRANT_RELEASED):
+        db_session.add(AuditEvent(actor_id=None, action=action, project_id=project.id, payload={"amount_cents": 5000}))
+        db_session.flush()
+
+    slack_notify.sync_budget_notifications(db_session, slack_client)
+
+    texts = sorted(message["text"] for message in slack_client.messages.values())
+    assert len(texts) == 2
+    held = next(text for text in texts if "Budget held" in text)
+    released = next(text for text in texts if "Budget released" in text)
+    assert "$50.00" in held and f"/projects/{project.id}" in held
+    assert "$50.00" in released
+
+
+def test_a_grant_held_by_a_funding_hold_doesnt_blame_verification(db_session: Session, member: Actor) -> None:
+    project = new_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=5000)
+    slack_client = FakeSlackClient()
+    project.slack_channel_id = slack_client.create_channel("ganymede-rover-test")
+    db_session.add(
+        AuditEvent(
+            actor_id=None,
+            action=grants.AUDIT_GRANT_HELD,
+            project_id=project.id,
+            payload={"amount_cents": 5000, "funding_hold": "awaiting_third_party_review"},
+        )
+    )
+    db_session.flush()
+
+    slack_notify.sync_budget_notifications(db_session, slack_client)
+
+    (message,) = slack_client.messages.values()
+    assert "Budget held" in message["text"] and "$50.00" in message["text"]
+    assert "awaiting 3rd party review" in message["text"]
+    assert "once an admin clears the hold" in message["text"]
+    assert "verified" not in message["text"]
+
+
+def test_a_held_grant_dms_each_member_it_waits_on(db_session: Session, member: Actor, make_actor) -> None:
+    waiting = make_actor(slack_user_id="U_WAITING")
+    make_actor(slack_user_id="U_CLEARED")  # Weave cleared them, so not in `waiting_on`
+    no_slack = make_actor()
+    project = new_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=5000)
+    slack_client = FakeSlackClient()
+    project.slack_channel_id = slack_client.create_channel("ganymede-rover-test")
+    db_session.add(
+        AuditEvent(
+            actor_id=None,
+            action=grants.AUDIT_GRANT_HELD,
+            project_id=project.id,
+            payload={"amount_cents": 5000, "waiting_on": [waiting.user.weave_sub, no_slack.user.weave_sub]},
+        )
+    )
+    db_session.flush()
+
+    slack_notify.sync_budget_notifications(db_session, slack_client)
+
+    by_channel = {channel: message["text"] for (channel, _ts), message in slack_client.messages.items()}
+    assert set(by_channel) == {project.slack_channel_id, "U_WAITING"}
+    assert "U_CLEARED" not in by_channel
+    dm = by_channel["U_WAITING"]
+    assert "budget is held until every team member is verified in Weave, you included" in dm
+    assert f"/projects/{project.id}" in dm
+
+    # The next reconcile pass posts neither again.
+    slack_notify.sync_budget_notifications(db_session, slack_client)
+    assert len(slack_client.messages) == 2
+
+
 def test_the_final_budget_warning_tells_members_to_save_their_work(db_session: Session, member: Actor) -> None:
     project = new_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=5000)
     slack_client = FakeSlackClient()
@@ -501,7 +598,7 @@ def test_review_message_escapes_the_project_title_and_write_up(
     project = new_project(
         db_session, member, title=_INJECTION, summary=_INJECTION, write_up=_INJECTION, budget_requested_cents=5000
     )
-    project = projects.submit(db_session, member, project=project)
+    project = projects.submit(db_session, member, project=project, criteria_read=True)
     revision = project.current_revision
     slack_client = FakeSlackClient()
 
@@ -518,7 +615,7 @@ def test_review_message_escapes_the_project_title_and_write_up(
 
 def test_feed_line_escapes_the_project_title(db_session: Session, member: Actor, weave: StubWeaveClient) -> None:
     project = new_project(db_session, member, title=_INJECTION, write_up="w", budget_requested_cents=5000)
-    project = projects.submit(db_session, member, project=project)
+    project = projects.submit(db_session, member, project=project, criteria_read=True)
     revision = project.current_revision
     slack_client = FakeSlackClient()
 
@@ -536,7 +633,7 @@ def test_notify_decision_escapes_the_title_and_reject_reason(
     db_session: Session, member: Actor, reviewer: Actor, weave: StubWeaveClient
 ) -> None:
     project = new_project(db_session, member, title=_INJECTION, write_up="w", budget_requested_cents=5000)
-    project = projects.submit(db_session, member, project=project)
+    project = projects.submit(db_session, member, project=project, criteria_read=True)
     revision = project.current_revision
     slack_client = FakeSlackClient()
     slack_notify.notify_revision_submitted(db_session, slack_client, weave, revision=revision, feed_channel_id=None)
@@ -705,3 +802,64 @@ def test_someone_back_on_the_team_is_not_taken_out(
     )
 
     assert not removed and "U_TEAMMATE" in slack_client.channels[channel_id]["members"]
+
+
+def test_notify_decision_says_an_unverified_teams_approval_is_awaiting_verification(
+    db_session: Session, member: Actor, reviewer: Actor, weave: StubWeaveClient
+) -> None:
+    weave.set_minor(member.user.weave_sub, True)
+    project = new_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=5000)
+    project = projects.submit(db_session, member, project=project, criteria_read=True)
+    revision = project.current_revision
+    slack_client = FakeSlackClient()
+    slack_notify.notify_revision_submitted(db_session, slack_client, weave, revision=revision, feed_channel_id=None)
+    projects.record_review(
+        db_session,
+        reviewer,
+        revision=revision,
+        decision=ReviewDecision.APPROVE,
+        source=ReviewSource.WEB,
+        weave_client=weave,
+    )
+    db_session.refresh(revision)
+
+    slack_notify.notify_decision(db_session, slack_client, revision=revision)
+
+    updated = slack_client.messages[(revision.slack_message_channel_id, revision.slack_message_ts)]
+    assert "Approved · awaiting verification" in updated["text"]
+
+
+def test_a_transfer_warning_mentions_the_jobs_owner_once(db_session: Session, member: Actor) -> None:
+    from krater.services.compute_jobs import AUDIT_TRANSFER_WARNING
+
+    project = new_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=10_000)
+    member.user.slack_user_id = "U_OWNER"
+    slack_client = FakeSlackClient()
+    project.slack_channel_id = slack_client.create_channel("ganymede-rover-test")
+    db_session.add(
+        AuditEvent(
+            actor_id=None,
+            action=AUDIT_TRANSFER_WARNING,
+            project_id=project.id,
+            payload={
+                "job_id": "00000000-0000-0000-0000-000000000002",
+                "job_name": "train",
+                "owner_id": str(member.user.id),
+                "level": 1,
+                "transfer_cents": 1_100,
+                "budget_cents": 10_000,
+                "percent": 11,
+            },
+        )
+    )
+    db_session.flush()
+
+    slack_notify.sync_box_notifications(db_session, slack_client)
+    slack_notify.sync_box_notifications(db_session, slack_client)
+
+    assert len(slack_client.messages) == 1
+    (message,) = slack_client.messages.values()
+    text = message["blocks"][0]["text"]["text"]
+    assert "*Data transfer cost*: <@U_OWNER>" in text
+    assert "has cost $11.00 so far, 11% of this project's $100.00 budget" in text
+    assert "/compute/00000000-0000-0000-0000-000000000002|Check the job>" in text

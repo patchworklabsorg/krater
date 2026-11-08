@@ -38,10 +38,6 @@
   --link-hover: var(--deep-purple);
   --focus: var(--grape);
   --header-bg: rgb(255 255 255 / 0.88);
-  --quilt-1: var(--grape);
-  --quilt-2: var(--lavender);
-  --quilt-3: var(--deep-purple);
-  --quilt-4: #9b7ad9;
 
   --good: #1d6b47;
   --good-soft: #e3f4ea;
@@ -104,10 +100,6 @@
   --link-hover: #d4c4f7;
   --focus: #b79cf2;
   --header-bg: rgb(28 23 41 / 0.88);
-  --quilt-1: #7d52d6;
-  --quilt-2: #c7b7e2;
-  --quilt-3: #9b7ad9;
-  --quilt-4: #4b2a8a;
 
   --good: #7fd6a6;
   --good-soft: #15301f;
@@ -145,10 +137,6 @@
     --link-hover: #d4c4f7;
     --focus: #b79cf2;
     --header-bg: rgb(28 23 41 / 0.88);
-    --quilt-1: #7d52d6;
-    --quilt-2: #c7b7e2;
-    --quilt-3: #9b7ad9;
-    --quilt-4: #4b2a8a;
 
     --good: #7fd6a6;
     --good-soft: #15301f;
@@ -355,31 +343,13 @@ img {
   color: var(--heading);
 }
 
+/* The Krater mark is the favicon itself (static/icon.svg), so the tab and the page show the same logo. The
+   four-square quilt mark is Weave's. */
 .brand-mark {
   display: block;
   flex: none;
   width: 28px;
   height: 28px;
-}
-
-.brand-mark .q1 {
-  fill: var(--quilt-1);
-}
-.brand-mark .q2 {
-  fill: var(--quilt-2);
-}
-.brand-mark .q3 {
-  fill: var(--quilt-3);
-}
-.brand-mark .q4 {
-  fill: var(--quilt-4);
-}
-
-.brand-mark .stitch {
-  fill: none;
-  stroke: var(--surface);
-  stroke-dasharray: 2 2;
-  stroke-width: 1;
 }
 
 .site-nav {
@@ -761,6 +731,16 @@ a.stat .stat__value {
   font-size: var(--text-sm);
 }
 
+.notice--warn {
+  border-color: var(--warn-soft);
+  border-left-color: var(--warn);
+  background: var(--warn-soft);
+}
+
+.notice p {
+  margin: 0 0 var(--space-2);
+}
+
 .compute-hint {
   border-left-color: var(--accent);
   background: var(--surface-sunken);
@@ -915,6 +895,12 @@ a.stat .stat__value {
 
 .action-row:last-child {
   margin-bottom: 0;
+}
+
+/* The project page's submit form (its criteria box and button) above the other actions. */
+.submit-form {
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
 }
 
 /* ── Forms ── */
@@ -1189,6 +1175,7 @@ form {
   color: var(--good);
 }
 
+.badge--funding-hold,
 .badge--changes_requested,
 .badge--completion_changes_requested {
   background: var(--warn-soft);
@@ -1824,6 +1811,35 @@ h1 .badge {
 
 .filter-bar .field {
   min-width: min(100%, 12rem);
+}
+
+/* Long unbroken values (digests, env lines, build steps) wrap instead of widening the page. */
+.break {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.plain-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--space-1);
+}
+
+/* A one-button form that sits in a line or a table cell. */
+.inline-form {
+  display: inline;
+  margin: 0;
+}
+
+/* Newer / Page n / Older under a paged table (admin activity). */
+.pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
 }
 
 /* Events Quilt refused (the admin page): one block per event, with its two forms side by side. */

@@ -12,6 +12,7 @@ import pytest
 from krater.compute import submit
 from krater.config import Settings
 from krater.vast import CreateInstance
+from tests.compute.conftest import current_weave
 from tests.compute.test_scheduler import NOW, SETTINGS, _pass
 
 
@@ -49,6 +50,7 @@ def test_submit_list_and_cancel(db_session, project, client, fake) -> None:  # n
         db_session,
         Settings(),
         now=NOW,
+        weave_client=current_weave[0],
     )
     assert out.startswith("Queued ")
     job_id = out.split()[1].rstrip(".")

@@ -15,7 +15,7 @@ from tests.factories import new_project
 
 def _submitted_revision(db_session: Session, member: Actor):
     project = new_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=5000)
-    project = projects.submit(db_session, member, project=project)
+    project = projects.submit(db_session, member, project=project, criteria_read=True)
     # Mirrors production: the submitting web request commits before the Slack job (which may itself
     # roll back on a domain error) ever runs, in a fresh session of its own.
     db_session.commit()
@@ -139,7 +139,7 @@ def test_approve_that_completes_the_project_archives_the_channel(
 ) -> None:
     reviewer.user.slack_user_id = "U_REVIEWER"
     project = new_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=5000)
-    project = projects.submit(db_session, member, project=project)
+    project = projects.submit(db_session, member, project=project, criteria_read=True)
     projects.record_review(
         db_session,
         reviewer,
@@ -230,10 +230,10 @@ def test_a_click_while_weave_is_down_is_refused(
     assert "Weave" in slack_client.ephemeral_messages[0][1]
 
 
-def test_a_slack_approval_is_refused_while_a_minor_has_no_verified_guardian(
+def test_a_slack_approval_goes_through_before_a_minors_guardian_is_verified(
     db_session: Session, member: Actor, reviewer: Actor, weave: StubWeaveClient
 ) -> None:
-    # The same service rule as the web path: `record_review` runs the guardian gate.
+    # The same service rule as the web path: approval doesn't wait for verification; the project's compute does.
     reviewer.user.slack_user_id = "U_REVIEWER"
     weave.set_minor(member.user.weave_sub, True)
     project, revision = _submitted_revision(db_session, member)
@@ -243,13 +243,9 @@ def test_a_slack_approval_is_refused_while_a_minor_has_no_verified_guardian(
 
     db_session.refresh(revision)
     db_session.refresh(project)
-    assert revision.outcome is RevisionOutcome.PENDING
-    assert project.status is ProjectStatus.PENDING_REVIEW
-    assert revision.reviews == []
-    assert len(slack_client.ephemeral_messages) == 1
-    text = slack_client.ephemeral_messages[0][1]
-    assert "verified guardian in Weave" in text
-    assert member.user.weave_sub in text
+    assert revision.outcome is RevisionOutcome.APPROVED
+    assert project.status is ProjectStatus.APPROVED
+    assert slack_client.ephemeral_messages == []
 
 
 def test_a_slack_approval_goes_through_once_weave_verifies_the_guardian(

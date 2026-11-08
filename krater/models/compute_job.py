@@ -69,6 +69,10 @@ class ComputeJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         pg_enum(ComputeOutbid, name="compute_outbid"), nullable=False, default=ComputeOutbid.MOVE
     )
     max_runtime_minutes: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    # The member's own estimate of the data the job moves into and out of its machine, in GB (blank: no estimate).
+    # Krater warns before queuing when it could cost a large share of the budget, and counts it when choosing a host.
+    data_in_gb: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
+    data_out_gb: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
 
     state: Mapped[ComputeJobState] = mapped_column(pg_enum(ComputeJobState, name="compute_job_state"), nullable=False)
     # Why the job is where it is, for the member: "waiting for an RTX 4090 bid at or under $0.20/h", ...
@@ -130,6 +134,12 @@ class ComputeInstance(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         pg_enum(ComputeInstanceState, name="compute_instance_state"), nullable=False
     )
 
+    # The image's digest when Krater rented this machine (`krater.registry.resolve_digest`), and whether Krater
+    # launched exactly that digest (`KRATER_COMPUTE_PIN_IMAGE_DIGEST`) rather than the tag. Null if the registry
+    # couldn't say. Unpinned, the machine pulls the tag a moment later, which is normally the same image.
+    image_digest: Mapped[str | None] = mapped_column(sa.String(80), nullable=True)
+    image_pinned: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False, server_default=sa.false())
+
     provider_offer_id: Mapped[str] = mapped_column(sa.String(128), nullable=False)
     provider_machine_id: Mapped[str | None] = mapped_column(sa.String(128), nullable=True)
     gpu_name: Mapped[str] = mapped_column(sa.String(64), nullable=False)
@@ -137,6 +147,12 @@ class ComputeInstance(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # The GPU price per hour Krater rented at (the bid for interruptible), the disk per hour, and their sum.
     gpu_microusd: Mapped[int] = mapped_column(sa.BigInteger, nullable=False)
     disk_microusd: Mapped[int] = mapped_column(sa.BigInteger, nullable=False)
+    # The host's prices for data into the machine (Vast's `inet_down_cost`: the image pull, datasets, checkpoint
+    # restores) and out of it (`inet_up_cost`: checkpoints, outputs), in micro-dollars per GB, and what Vast had
+    # charged for transfer at the last hourly reconciliation. Billed per GB on top of the hourly cost.
+    transfer_in_microusd_per_gb: Mapped[int | None] = mapped_column(sa.BigInteger, nullable=True)
+    transfer_out_microusd_per_gb: Mapped[int | None] = mapped_column(sa.BigInteger, nullable=True)
+    transfer_charged_microusd: Mapped[int | None] = mapped_column(sa.BigInteger, nullable=True)
 
     last_provider_status: Mapped[str | None] = mapped_column(sa.String(64), nullable=True)
     last_seen_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)

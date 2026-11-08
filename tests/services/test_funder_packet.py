@@ -49,7 +49,7 @@ def _draft(db_session: Session, lead: Actor, *team: Actor, title: str = "Rover",
 
 
 def _submitted(db_session: Session, lead: Actor, *team: Actor, **fields):
-    return projects.submit(db_session, lead, project=_draft(db_session, lead, *team, **fields))
+    return projects.submit(db_session, lead, project=_draft(db_session, lead, *team, **fields), criteria_read=True)
 
 
 def _approved(db_session: Session, weave, reviewer: Actor, lead: Actor, *team: Actor, **fields):
@@ -241,7 +241,12 @@ def test_an_export_is_audited_with_its_projects(
 
     event = db_session.scalars(sa.select(AuditEvent).where(AuditEvent.action == funder_packet.AUDIT_EXPORT)).one()
     assert event.actor_id == admin.user.id
-    assert event.payload == {"funder": "ospool", "format": "pdf", "project_ids": [str(project.id)]}
+    assert event.payload == {
+        "funder": "ospool",
+        "format": "pdf",
+        "project_ids": [str(project.id)],
+        "fields": list(funder_packet.DEFAULT_FIELDS),
+    }
 
 
 def test_an_empty_packet_is_refused(db_session: Session, weave, admin: Actor) -> None:
@@ -265,3 +270,92 @@ def test_only_an_admin_may_record_an_export(
 
     with pytest.raises(NotAllowed):
         funder_packet.record_export(db_session, reviewer, packet)
+
+
+# -- Which fields --------------------------------------------------------------------------------------------------
+
+
+def test_the_usual_fields_are_ticked_and_the_teams_other_answers_are_not() -> None:
+    assert funder_packet.DEFAULT_FIELDS == (
+        "summary",
+        "compute_use",
+        "training_data",
+        "status",
+        "requested",
+        "granted",
+        "gpu",
+        "team",
+        "residency",
+        "ospool_usage",
+    )
+    unticked = set(funder_packet.FIELD_KEYS) - set(funder_packet.DEFAULT_FIELDS)
+    assert unticked == {"write_up", "experience", "affiliation", "open_source", "repo_url", "full_estimate"}
+
+
+def test_the_packet_keeps_the_ticked_fields_in_order(
+    db_session: Session, weave, admin: Actor, reviewer: Actor, lead: Actor
+) -> None:
+    project = _approved(db_session, weave, reviewer, lead)
+
+    packet = funder_packet.build(db_session, weave, admin, project_ids=[project.id], fields=["team", "write_up"])
+
+    assert packet.fields == ("write_up", "team")
+
+
+def test_an_unknown_field_is_refused(db_session: Session, weave, admin: Actor, reviewer: Actor, lead: Actor) -> None:
+    project = _approved(db_session, weave, reviewer, lead)
+
+    with pytest.raises(ValidationFailed):
+        funder_packet.build(db_session, weave, admin, project_ids=[project.id], fields=["summary", "email"])
+
+
+def test_without_team_or_residency_weave_isnt_asked(
+    db_session: Session, weave, admin: Actor, reviewer: Actor, lead: Actor
+) -> None:
+    project = _approved(db_session, weave, reviewer, lead)
+
+    packet = funder_packet.build(db_session, _DownWeave(), admin, project_ids=[project.id], fields=["summary"])
+
+    [row] = packet.rows
+    assert row.team_names == []
+    with pytest.raises(FunderPacketUnavailable):
+        funder_packet.build(db_session, _DownWeave(), admin, project_ids=[project.id], fields=["residency"])
+
+
+def test_the_opt_in_answers_come_from_the_application(
+    db_session: Session, weave, admin: Actor, reviewer: Actor, lead: Actor
+) -> None:
+    project = _approved(
+        db_session,
+        weave,
+        reviewer,
+        lead,
+        affiliation="contest",
+        affiliation_detail="Example Robotics Cup",
+        open_source_blocked=True,
+        open_source_obstacles="The cup keeps entries private.",
+        repo_url="https://github.com/ada/rover",
+    )
+
+    [row] = funder_packet.build(db_session, weave, admin, project_ids=[project.id], fields=["write_up"]).rows
+
+    assert row.write_up == "A rover."
+    assert row.experience == "I build robots."
+    assert row.affiliation == "A contest: Example Robotics Cup"
+    assert row.open_source == "Something might stop it: The cup keeps entries private."
+    assert row.repo_url == "https://github.com/ada/rover"
+    assert row.full_budget_cents == 10_000
+    assert row.full_gpu is not None
+
+
+def test_a_held_project_says_so_in_its_status(
+    db_session: Session, weave, admin: Actor, reviewer: Actor, lead: Actor
+) -> None:
+    from krater.models import FundingHold
+
+    project = _approved(db_session, weave, reviewer, lead)
+    project.funding_hold = FundingHold.AWAITING_THIRD_PARTY_REVIEW
+
+    [row] = funder_packet.build(db_session, weave, admin, project_ids=[project.id]).rows
+
+    assert row.status_label == "Approved, awaiting 3rd party review"

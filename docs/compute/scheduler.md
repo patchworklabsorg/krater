@@ -32,7 +32,10 @@ minute (`compute_schedule`), under a procrastinate lock so passes never overlap,
    - not looked at for 5 minutes or more (Krater was down) → its runner deadlines count from now;
    - gone from Vast unexpectedly → job requeued;
    - job finished (cancelled, failed, succeeded) → machine destroyed.
-5. **Start** queued jobs, oldest first. For each, search offers for its shape (GPU models or minimum VRAM, GPU
+5. **Start** queued jobs, oldest first. A job whose team Weave hasn't cleared (ID verification, and a verified
+   guardian for a member under 18; `krater.services.clearance`, docs/SPEC.md "Verification before funding") waits
+   with the reason on its page and isn't searched for. Weave is asked once per project per pass, fresh; Weave down
+   holds it too. Running machines aren't stopped for it. For each other job, search offers for its shape (GPU models or minimum VRAM, GPU
    count, disk, the reliability floor), price every offer at full hourly cost (the bid, min bid plus the margin, or
    `dph_base` on demand, plus disk), and take the cheapest at or under the target (several GPU models: best
    performance per dollar). After `max_wait_minutes` the job does what the member chose: keep waiting, accept up to
@@ -55,6 +58,27 @@ while outbid; moving with nothing free to move to would throw that away and leav
 Every price limit is also capped by the project's hourly cap. A rental needs budget for at least one hour, under
 the project's row lock; it then holds the cost of its max runtime (or whatever is left), so two jobs can't spend
 the same dollars.
+
+### Data transfer
+
+Vast bills data into and out of a machine per GB at the host's price ([vast-api.md](vast-api.md)), and one member
+spent half a budget on it renting directly. So:
+
+- **A price cap.** The setting "Data transfer price cap" (default $20/TB, stored as micro-dollars per GB; it kept
+  four in five offers on 2026-11-04) goes into every search and is checked again on each offer, for the scheduler
+  and the price history alike. Krater rents no host above it, either way.
+- **The member's estimate.** A job may say how many GB it moves in and out (`data_in_gb`, `data_out_gb`; the form,
+  the API and `krater submit --data-in --data-out`). The scheduler adds the estimate's cost, spread over the max
+  runtime, to each offer's hourly price when ranking, and breaks ties on transfer price, so it prefers hosts where
+  the data is cheap. The instance records the prices it was rented at.
+- **A warning before queuing.** If the estimate at the cap would cost the setting "Data transfer warning" (default
+  10%) of the project's budget, or more than is left, submit refuses with `ConfirmationRequired`: the form shows the
+  cost with a checkbox, the API answers 409 with `"confirm": "confirm_transfer_cost"`, and the CLI asks (or takes
+  `--confirm-transfer-cost`). It is a warning, not a limit: the budget's hard stop still applies.
+- **A warning while it runs.** Reconciliation splits `bwd` and `bwu` out of each machine's charges into
+  `transfer_charged_microusd`. Each time a job's transfer passes another multiple of the warning share of the budget,
+  it logs a `transfer_warning` event and an audit event, which posts to the project's Slack channel mentioning the
+  job's owner.
 
 Every destroy is confirmed with `show_instance(...) is None`. Until it is, the row keeps `destroy_requested_at` and
 the next pass tries again.

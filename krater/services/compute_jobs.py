@@ -2,10 +2,15 @@
 
 Members choose their own target and max prices, within their project's hourly cap. Cancelling only changes the job's
 state; the scheduler destroys any machine a finished job still has on its next pass.
+
+Vast bills data into and out of a machine per GB on top of the hourly price. A member may estimate the data their
+job moves; when that could cost a large share of the budget at the transfer price cap (the most Krater pays per GB),
+submitting needs their confirmation (`transfer_estimate`, `ConfirmationRequired`).
 """
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -24,10 +29,11 @@ from krater.models import (
     Project,
 )
 from krater.models.compute_job import FINISHED_JOB_STATES
-from krater.services import teams
+from krater.services import budget, clearance, compute_settings, funding_holds, teams
 from krater.services.actor import Actor
-from krater.services.errors import InvalidState, NotAllowed, ValidationFailed
+from krater.services.errors import ConfirmationRequired, InvalidState, NotAllowed, ValidationFailed
 from krater.services.launch_rules import LAUNCHABLE_STATUSES
+from krater.weave import WeaveClient
 
 MICROUSD_PER_CENT = 10_000
 #: How a stop the member asked for is described; a stop Krater decided on (idle, a silent runner) gets a Slack notice.
@@ -36,7 +42,11 @@ MEMBER_STOP_PREFIX = "stopped by "
 AUDIT_BOX_STOPPED = "compute_box_stopped"
 AUDIT_BOX_DESTROY_SOON = "compute_box_destroy_soon"
 AUDIT_BOX_DESTROYED = "compute_box_destroyed"
+#: `actor=None`: a job's data transfer has cost a large share of its project's budget (`krater.compute.reconcile`).
+AUDIT_TRANSFER_WARNING = "compute_transfer_warning"
 _IMAGE_RE = re.compile(r"^[a-z0-9][a-z0-9._\-/:@]*$")
+#: The most data a job may say it moves each way, in GB (100 TB).
+MAX_DATA_GB = 100_000
 
 
 @dataclass(frozen=True)
@@ -58,6 +68,65 @@ class JobSpec:
     on_max_wait: ComputeEscalation = ComputeEscalation.KEEP_WAITING
     max_runtime_minutes: int = 8 * 60
     on_outbid: ComputeOutbid = ComputeOutbid.MOVE
+    # The member's estimate of the data moved into and out of the machine, in GB; `None` for no estimate.
+    data_in_gb: int | None = None
+    data_out_gb: int | None = None
+
+
+@dataclass(frozen=True)
+class TransferEstimate:
+    """The most a job's estimated data transfer can cost: its GB in and out at the transfer price cap."""
+
+    in_gb: int
+    out_gb: int
+    cap_microusd_per_gb: int
+    cost_cents: int
+    budget_cents: int
+    remaining_cents: int
+    warn_percent: int
+
+    @property
+    def percent_of_budget(self) -> int:
+        return math.ceil(self.cost_cents * 100 / self.budget_cents) if self.budget_cents > 0 else 100
+
+    @property
+    def needs_confirmation(self) -> bool:
+        if self.cost_cents <= 0:
+            return False
+        return self.percent_of_budget >= self.warn_percent or self.cost_cents > max(self.remaining_cents, 0)
+
+    def message(self) -> str:
+        per_tb = self.cap_microusd_per_gb / 1_000
+        text = (
+            f"This job's data transfer could cost up to ${self.cost_cents / 100:,.2f}: {self.in_gb:,} GB into the "
+            f"machine and {self.out_gb:,} GB out, at up to ${per_tb:,.2f} per TB each way (the most Krater pays). "
+        )
+        if self.cost_cents > max(self.remaining_cents, 0):
+            text += f"That's more than the ${max(self.remaining_cents, 0) / 100:,.2f} left in the project's budget. "
+        else:
+            text += f"That's {self.percent_of_budget}% of the project's ${self.budget_cents / 100:,.2f} budget. "
+        return text + (
+            "Vast bills it on top of the hourly price, and each move to another machine pulls the image and "
+            "restores checkpoints again."
+        )
+
+
+def transfer_estimate(session: Session, project: Project, spec: JobSpec) -> TransferEstimate | None:
+    """What `spec`'s estimated data transfer could cost at most, or `None` without an estimate."""
+    if spec.data_in_gb is None and spec.data_out_gb is None:
+        return None
+    policy = compute_settings.effective_policy(session, project)
+    in_gb, out_gb = spec.data_in_gb or 0, spec.data_out_gb or 0
+    cost_microusd = (in_gb + out_gb) * policy.transfer_cap_microusd_per_gb
+    return TransferEstimate(
+        in_gb=in_gb,
+        out_gb=out_gb,
+        cap_microusd_per_gb=policy.transfer_cap_microusd_per_gb,
+        cost_cents=math.ceil(cost_microusd / MICROUSD_PER_CENT),
+        budget_cents=budget.ceiling_cents(session, project),
+        remaining_cents=budget.remaining_cents(session, project),
+        warn_percent=policy.transfer_warn_percent,
+    )
 
 
 def _can_launch_for(actor: Actor, project: Project) -> bool:
@@ -92,6 +161,9 @@ def _validate(spec: JobSpec, *, cap_microusd: int) -> None:
         errors["max_wait_minutes"] = "Choose a max wait of 1 minute to 7 days."
     if not 1 <= spec.max_runtime_minutes <= 7 * 24 * 60:
         errors["max_runtime_minutes"] = "Choose a max runtime of 1 minute to 7 days."
+    for name, value, way in (("data_in_gb", spec.data_in_gb, "into"), ("data_out_gb", spec.data_out_gb, "out of")):
+        if value is not None and not 0 <= value <= MAX_DATA_GB:
+            errors[name] = f"Estimate 0 to {MAX_DATA_GB:,} GB of data {way} the machine, or leave it blank."
     if spec.on_outbid is ComputeOutbid.HOLD and not spec.interruptible:
         errors["on_outbid"] = "Only interruptible machines are outbid: a limit order needs interruptible."
     _check_provider(spec, errors)
@@ -120,15 +192,31 @@ def _check_provider(spec: JobSpec, errors: dict[str, str]) -> None:
 
 
 def submit_job(
-    session: Session, actor: Actor, *, project: Project, spec: JobSpec, cap_cents: int, now: datetime
+    session: Session,
+    actor: Actor,
+    *,
+    project: Project,
+    spec: JobSpec,
+    cap_cents: int,
+    now: datetime,
+    weave_client: WeaveClient,
+    confirm_transfer_cost: bool = False,
 ) -> ComputeJob:
-    """Queue `spec` for `project`. Only the project's team (lead and accepted members) may, and only while the project
-    can launch. `cap_cents` is the project's hourly cap (`launch_rules.hourly_cap_cents`)."""
+    """Queue `spec` for `project`. Only the project's team (lead and accepted members) may, only while the project
+    can launch, not while it has a funding hold (`funding_holds.require_not_held`), and only once Weave has cleared
+    every team member (`clearance.require_team_cleared`, asking `weave_client` fresh). `cap_cents` is the project's
+    hourly cap (`launch_rules.hourly_cap_cents`). Raises `ConfirmationRequired` when the job's estimated data
+    transfer could cost a large share of the budget, unless `confirm_transfer_cost`."""
     if not _can_launch_for(actor, project):
         raise NotAllowed("Only the project's team can run jobs on its budget.")
     if project.status not in LAUNCHABLE_STATUSES:
         raise InvalidState(f"A {project.status.value} project can't run jobs.")
     _validate(spec, cap_microusd=cap_cents * MICROUSD_PER_CENT)
+    funding_holds.require_not_held(project)
+    clearance.require_team_cleared(session, weave_client, project)
+    estimate = transfer_estimate(session, project, spec)
+    if estimate is not None and estimate.needs_confirmation and not confirm_transfer_cost:
+        raise ConfirmationRequired(estimate.message())
     job = ComputeJob(
         project_id=project.id,
         submitter_id=actor.user.id,
@@ -147,6 +235,8 @@ def submit_job(
         on_max_wait=spec.on_max_wait,
         max_runtime_minutes=spec.max_runtime_minutes,
         on_outbid=spec.on_outbid,
+        data_in_gb=spec.data_in_gb,
+        data_out_gb=spec.data_out_gb,
         state=ComputeJobState.QUEUED,
         state_reason="Waiting for an offer at or under its "
         + (
@@ -225,14 +315,17 @@ def stop_box(session: Session, actor: Actor, *, job: ComputeJob, now: datetime) 
     session.flush()
 
 
-def resume_box(session: Session, actor: Actor, *, job: ComputeJob, now: datetime) -> None:
-    """Ask the scheduler to start a stopped box on its machine again (only works while the machine's GPU is free)."""
+def resume_box(session: Session, actor: Actor, *, job: ComputeJob, now: datetime, weave_client: WeaveClient) -> None:
+    """Ask the scheduler to start a stopped box on its machine again (only works while the machine's GPU is free).
+    Starting it pays for its GPU again, so the team must be cleared in Weave, as for a new job."""
     _box_for(actor, job)
     row = _live_instance(job)
     if job.state is not ComputeJobState.STOPPED or row is None:
         raise InvalidState("Only a stopped box can be resumed.")
     if job.project.status not in LAUNCHABLE_STATUSES:
         raise InvalidState(f"A {job.project.status.value} project can't run boxes.")
+    funding_holds.require_not_held(job.project)
+    clearance.require_team_cleared(session, weave_client, job.project)
     row.start_requested_at = now
     job.state_reason = "Resuming on the same machine."
     session.add(

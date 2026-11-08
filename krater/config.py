@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     secret_key: str = DEFAULT_SECRET_KEY
     base_url: str = "http://localhost:8000"
     session_cookie_max_age_seconds: int = 60 * 60 * 24 * 14  # 14 days
+    # The Ganymede Submission Criteria, which applicants confirm they've read when they submit.
+    submission_criteria_url: str = (
+        "https://docs.google.com/document/d/16mQKrPm1LQabLe05OXBT9vmwiACDw0YGMTt6QOVG-Pk/edit?usp=sharing"
+    )
 
     # Trusted reverse proxies in front of this app (e.g. an nginx/ALB terminating TLS). Each hop is
     # expected to append the client's address to `X-Forwarded-For` -- this is how many trailing hops of
@@ -74,6 +78,10 @@ class Settings(BaseSettings):
     # Where a rented machine reaches Krater: the runner downloads itself from here and reports to it. Blank means
     # `base_url`; local staging sets its public tunnel URL.
     compute_runner_url: str = ""
+    # Launch each machine with the exact image digest Krater looked up when renting it (`name@sha256:...`), so what an
+    # admin inspects is what ran. Off until a real rental shows the provider pulls a digest reference
+    # (docs/compute/images.md); Krater records the digest either way.
+    compute_pin_image_digest: bool = False
     # The runner binary the portal serves and the worker checksums (built by the Dockerfile's runner stage).
     compute_runner_binary_path: str = "/app/runner/dist/krater-runner-linux-amd64"
     # The bucket for job checkpoints and outputs, on the same S3 storage as screenshots. Machines only ever get
@@ -189,6 +197,15 @@ class Settings(BaseSettings):
     quilt_timeout_seconds: float = 10.0
     # The most outbox rows one sender run sends. The periodic task runs every minute.
     quilt_batch_size: int = 200
+
+    # OSG's public accounting (GRACC), where Krater reads the usage of OSPool grants run outside Krater
+    # (krater.ospool.accounting, docs/SPEC.md "OSPool grants"). A public, read-only Elasticsearch endpoint: no
+    # credentials. `fake` answers from memory, for tests.
+    ospool_accounting_mode: Literal["fake", "live"] = "live"
+    ospool_accounting_url: str = "https://gracc.opensciencegrid.org/q/gracc.osg.summary/_search"
+    # GRACC is slow: 5 to 25 seconds for one project's fortnight, measured 2026-11-08.
+    ospool_accounting_timeout_seconds: float = 120.0
+    ospool_usage_import_cron: str = "41 8 * * *"  # daily; OSG's accounting is about a day behind
 
     @property
     def compute_on(self) -> bool:

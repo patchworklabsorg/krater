@@ -393,6 +393,8 @@ class DeliveryOverview:
     retrying: list[QuiltOutbox]
     #: Rows Quilt refused for good. Each one blocks the later events of its submission.
     failed: list[QuiltOutbox]
+    #: Of `failed`, the ids an admin may dismiss (`can_dismiss`).
+    dismissable: frozenset[uuid.UUID] = frozenset()
 
 
 def delivery_overview(session: Session, actor: Actor) -> DeliveryOverview:
@@ -404,14 +406,36 @@ def delivery_overview(session: Session, actor: Actor) -> DeliveryOverview:
     )
     retrying = session.scalars(
         sa.select(QuiltOutbox)
-        .where(QuiltOutbox.state == QuiltOutboxState.PENDING, QuiltOutbox.attempts > 0)
+        # Tried at least once: a setup error (401, 403) isn't counted in `attempts`, but it's still waiting.
+        .where(
+            QuiltOutbox.state == QuiltOutboxState.PENDING,
+            sa.or_(QuiltOutbox.attempts > 0, QuiltOutbox.first_attempted_at.is_not(None)),
+        )
         .order_by(QuiltOutbox.seq)
         .limit(100)
     ).all()
     failed = session.scalars(
         sa.select(QuiltOutbox).where(QuiltOutbox.state == QuiltOutboxState.FAILED).order_by(QuiltOutbox.seq)
     ).all()
-    return DeliveryOverview(pending_count=int(pending_count or 0), retrying=list(retrying), failed=list(failed))
+    return DeliveryOverview(
+        pending_count=int(pending_count or 0),
+        retrying=list(retrying),
+        failed=list(failed),
+        dismissable=frozenset(row.id for row in failed if can_dismiss(row)),
+    )
+
+
+#: Quilt's answer to a `submission.created` it has already: the submission is there, so later events can apply.
+_QUILT_HAS_THE_SUBMISSION = "submission_exists"
+
+
+def can_dismiss(row: QuiltOutbox) -> bool:
+    """Whether an admin may give up on `row`. Not a `submission.created` Quilt doesn't have: without it Quilt can
+    never apply the project's later events (they'd retry `unknown_submission` for ever), so fix the cause and retry
+    it instead. Fine when Quilt answered that it has the submission already."""
+    if row.state not in (QuiltOutboxState.FAILED, QuiltOutboxState.PENDING):
+        return False
+    return row.type != SUBMISSION_CREATED or row.last_error == _QUILT_HAS_THE_SUBMISSION
 
 
 def _admin_row(session: Session, actor: Actor, row_id: uuid.UUID, reason: str) -> QuiltOutbox:
@@ -461,6 +485,11 @@ def admin_dismiss(session: Session, actor: Actor, *, row_id: uuid.UUID, reason: 
     row = _admin_row(session, actor, row_id, reason)
     if row.state not in (QuiltOutboxState.FAILED, QuiltOutboxState.PENDING):
         raise InvalidState("Only a failed or pending event can be dismissed.")
+    if not can_dismiss(row):
+        raise InvalidState(
+            "Quilt doesn't have this project without this event, so none of its later events could reach Quilt. "
+            "Fix what Quilt refused, then retry it."
+        )
     row.state = QuiltOutboxState.SKIPPED
     row.next_attempt_at = None
     session.flush()
@@ -472,6 +501,7 @@ __all__ = [
     "DeliveryOverview",
     "admin_dismiss",
     "admin_retry",
+    "can_dismiss",
     "delivery_overview",
     "BUDGET_COMMITTED",
     "BUDGET_RELEASED",

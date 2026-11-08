@@ -22,13 +22,64 @@ repo's `Dockerfile` and tags it `krater:<sha>`. Staging deploys itself: the `Dep
 these steps over SSH (port 2222) as the `krater-deploy` user. Its key may only run that deploy command, which
 also puts the old commit back in `source-rev` if the build fails. It deploys only the tip of `main`: if the tip's CI
 fails, staging stays on the last good deploy until a fix lands. Run it by hand from the Actions tab to deploy the tip
-of `main` again. Production has no CI deploy yet.
+of `main` again.
 
 ```bash
 echo <full sha> > /var/lib/krater/source-rev
 sudo systemctl start krater-build     # the running site keeps serving meanwhile
 sudo systemctl restart krater-web     # migrates, then starts; krater-worker follows
 ```
+
+### 0.2 Shipping to production
+
+Production does not follow `main`. It follows this repo's `production` branch. To ship, move the branch to a commit
+of `main` that staging already runs:
+
+```bash
+git push origin <sha>:production
+```
+
+Every 5 minutes `krater-prod-follow` on weft reads the branch. A new commit deploys only when it is also on `main` and
+all its CI checks passed. The deploy then does these steps:
+
+1. It dumps the `krater` schema to `/var/lib/krater-prod/backups` on weft (`krater-prod-backup`, the last 14 dumps).
+   If the dump fails, nothing deploys.
+2. It builds the image, then restarts the portal, which runs the migrations. The worker restarts with it.
+3. It waits up to 2 minutes for `/healthz` and `/healthz/worker` to return 200. If they do not, it starts the
+   previous version again. The previous version does not migrate: the database is at a newer revision than its
+   code knows, so it starts on the newer schema as it is (section 0.3).
+
+Only admins of this repo can push to `production`. Force pushes and deletion are off. `journalctl -u
+krater-prod-follow` on weft shows what each run did.
+
+**To undo a release, revert its code on `main` and ship the revert, but keep its migration files.** The database
+stays at the newer migration either way. If the revert deletes a migration file, a later migration built on the
+older head never runs, because weft sees a database newer than the code and skips `alembic upgrade`. For the same
+reason, do not move `production` back to an older commit.
+
+### 0.3 Migrations
+
+A release must leave a database that the previous release can still run on. That is what makes the automatic
+restart of the previous version and "revert and ship" safe. So a migration's `upgrade()` only adds:
+
+- **Add** a table, a column or an index. A new `NOT NULL` column needs a `server_default`, or old code that inserts
+  rows without it fails.
+- **Rename** in three releases: add the new column and write both, then move the reads, then drop the old column.
+- **Drop** a column or table only in a later release, after no deployed code reads it. Mark that migration with a line
+  `# krater: contract-migration (<why it is safe now>)`.
+- **Change data** (`UPDATE`, `DELETE`) only when the old code still works on the result. A backfill of a new
+  column is fine.
+
+`tests/test_migrations_additive.py` fails CI, unless the migration has the marker, when its code outside
+`downgrade()` does one of these steps: `op.drop_table`, `op.drop_column`, `op.rename_table`,
+`op.alter_column` with `new_column_name`, `type_` or `nullable=False`, `op.add_column` of a `NOT NULL` column
+without `server_default`, or SQL with `DROP TABLE|COLUMN|CONSTRAINT|TYPE|SCHEMA|VIEW|FUNCTION`, `ALTER TABLE ...
+DROP`, `RENAME TO|COLUMN|CONSTRAINT`, a type change, `SET NOT NULL`, `TRUNCATE` or `DELETE FROM`. It does not
+check data changes or what code reads, so the rules above still need review.
+
+Before a release that changes or deletes data, check that the pre-deploy dump exists, or ask for a manual one:
+`sudo systemctl start krater-prod-backup` on weft. To restore, someone with skein access runs `pg_restore --clean
+--schema=krater` from that dump.
 
 Settings live in `hosts/weft/krater.nix` (hostnames, Weave client id, the fallback commit); production's one switch
 is `hosts/weft/krater-production.nix`. Production's hostnames are `krater` and `krater-storage` under
@@ -40,14 +91,15 @@ nginx on weft each add one address (see the host file). Secrets are the agenix f
 `secrets/central-prod-krater.age` (the database password alone, for skein); infra's `bin/new-krater-secrets` writes
 both. The module splits the env file so each container gets only its own. Getting a module change
 onto weft takes a merge in `patchworklabsorg/infra` and `deploy .#weft` from that repo. Krater releases don't need
-that, only the `Deploy` workflow.
+that: staging takes the `Deploy` workflow, production a push to `production` (section 0.2).
 
 The database is Krater's schema `krater` in `patchwork_central` on skein (infra's `modules/central-db`), not a
 Postgres of its own: the role `krater` has `search_path = krater`, so Krater's tables, its procrastinate queue and
 `alembic_version` all live in that schema, and nothing changes in Krater's code. `KRATER_DATABASE_URL` points at skein
-(its tailnet name, pinned in the host file's `extraHosts` because weft has no MagicDNS). Staging does the same with its
-own schema on hem. skein's nightly dump is the backup; a restore is of the schema `krater` and goes
-through whoever runs skein.
+(its tailnet name, pinned in the host file's `extraHosts` because weft has no MagicDNS; staging does the same with
+its own schema on hem). Backups are skein's nightly dump of the whole database (it stays on skein) and the dump
+before each production deploy (on weft, section 0.2). A restore is of the schema `krater` and goes through whoever
+runs skein.
 
 **Compute off (the first deploy).** Krater ships to production with `KRATER_COMPUTE_MODE=off`: proposals, review,
 budgets, Slack, the gallery and Quilt events, but no rented machines, until the paid checks in
@@ -68,56 +120,21 @@ the file, restart, run `python -m krater.rotate_project_secrets` in the portal c
 `KRATER_PROJECT_SECRETS_KEY_FILE`: a Fernet key file (an agenix secret) mounted into the portal only. Without it the
 feature is off. Losing the key loses every stored secret, so back it up with the other agenix secrets.
 
-### 0.2 Turning production on
+### 0.4 Open decisions
 
-The state on 2026-11-03. Staging on weft has run the whole flow live: a member's proposal, an amendment and a
-completion, each approved by another account, the budget granted and reclaimed, the gallery and the OSPool PDF.
-Production is the same module behind `hosts/weft/krater-production.nix`, which is still `enable = false`. The host
-file's "Turn on production" comment is the short form of these steps, in this order:
-
-**Progress on 2026-11-04.** The first launch is the approval pipeline only; compute stays off. Steps 2, 3 (except the
-Weave client secret) and 5 are done on patchworklabsorg/infra#73. That PR has the Ganymede Review app's feed and
-alerts channel ids, the new secrets, and the rev. The DNS records are patchworklabsorg/dns#18, which replaces dns#12.
-Jasper's steps are left: checking the Weave app and setting `KRATER_WEAVE_CLIENT_SECRET` (`agenix -e krater-env.age`),
-then steps 4 and 6–9.
-
-1. **Weave production.** Krater's app exists (its client id is in the host file). Check on its app page: redirect
-   URI `https://krater.patchworklabs.org/auth/callback`, scopes `openid profile email groups roles slack directory`,
-   access "everyone", and the roles `reviewer` and `admin` given to the Ganymede Reviewer and Ganymede Admin groups
-   ([weave-integration.md](../weave-integration.md)).
-2. **Slack.** Krater's app in the real Patchwork workspace ([slack-setup.md](slack-setup.md)), with interactivity URL
-   `https://krater.patchworklabs.org/slack/interactions`. Note the feed and alerts channel ids: they aren't secret and
-   go in the host file (`slackFeedChannelId`, and `KRATER_SLACK_ALERTS_CHANNEL_ID` in `extraEnv`).
-3. **Secrets.** `secrets/krater-env.age` exists, but its `KRATER_WEAVE_CLIENT_SECRET`, `KRATER_SLACK_BOT_TOKEN` and
-   `KRATER_SLACK_SIGNING_SECRET` are empty, and Krater refuses to start until they're set. Only the file's recipients
-   (Jasper, weft) can edit it. But production has never run, so nothing in it or in `central-prod-krater.age` is in
-   use yet: anyone who can push to infra can replace both instead, without reading them. On a branch, delete the two
-   files, then run infra's `bin/new-krater-secrets production` in a shell with agenix (WSL with Nix works), with the
-   three values in its environment, typed into that shell and never into a file in the repo. It writes both files
-   with a new database password. Once production has started, only the recipients can change them.
-4. **Tailnet.** In `jaspermayone/infra` `tailscale/policy.hujson`, give `tag:patchwork-krater` `pw-skein:5432` again
-   (Jasper; the grant and test lines are in infra#32's body).
-5. **The first build.** Production has no CI deploy, so its first build is the host file's fallback `rev`. Point it
-   at a current `main` commit first; the old one predates the launch hardening, the funder packet and every fix
-   since.
-6. **Switch on.** Set `enable = true` in `krater-production.nix`, deploy skein (the role and its password), then weft,
-   then run `systemctl start krater-prod-build` on weft by hand.
-7. **DNS.** The `krater` and `krater-storage` records in patchworklabsorg/dns, proxied to alastor like staging's.
-8. **The edge.** Bump `patchwork-infra` in `jaspermayone/infra` and deploy alastor, which adds the public routes.
-9. **Check it** (section 3, "Check it"): `/healthz` and `/healthz/worker` answer 200, an admin signs in and sees
-   Review and Admin, a TEST proposal opens its Slack channel, and an outside uptime check watches `/healthz/worker`.
-
-Decide before members apply (none of these blocks the switch):
+Production runs `hosts/weft/krater-production.nix` with compute off, and ships by the `production` branch (section
+0.2). These are still open:
 
 - **Large requests.** Krater has no ceiling on one grant. The default policy is one approval from any reviewer, and
   the hourly cap limits only how fast a budget is spent. Add an approval policy on `/admin` with a `min_budget_cents`
   floor (more approvals, or the admin group) for large requests.
-- **Weave's one-grant cap.** Weave records Ganymede grants by hand on a member's identity record, one per person for
-  life (`config/kyc/knot.yml`). Krater doesn't read or write it, and a member can hold several approved projects.
-- **Members exempt from the code of conduct** stay Slack guests, so Krater's Slack membership gate blocks their
-  submissions until they're full members of the Slack.
-- **Production CI deploys.** Give production its own deploy key and user (`krater-prod-deploy`) when releases should
-  follow `main`, as staging's do.
+- **Members exempt from the code of conduct.** Krater skips its Slack membership gate when Weave says
+  `slack_required: false`, which a sponsored group that waives Slack gives its members. A person an admin exempts
+  from the code of conduct alone still has `slack_required: true`, and Weave keeps them a Slack guest until they
+  accept the code of conduct in Slack, so Krater blocks their submissions until a Slack admin makes them a full
+  member.
+- **Compute.** Production turns compute on only after the paid checks in [compute/README.md](../compute/README.md)
+  pass on staging, with its own Vast key, label prefix and runner URL (see "Compute off" above).
 
 ## 1. Before the first deploy
 

@@ -76,6 +76,14 @@ model with offers if you named none; on demand with `--on-demand`, otherwise int
 and exits with 2 without queueing anything. `krater prices` is the whole list, cheapest first, with only the models that have offers now unless
 you pass `--all`, and `--gpu 4090` narrows it to names containing that.
 
+### Data transfer
+
+Vast bills data into and out of the machine per GB on top of the hourly price. `--data-in 400 --data-out 100` (GB)
+tells Krater roughly how much the job moves, so it prefers hosts where that is cheap. If that much data at the
+transfer price cap would cost a large share of the project's budget, Krater asks before queueing: `krater submit`
+shows the cost and asks `Queue it anyway? [y/N]`, and without a terminal the answer is no. `--confirm-transfer-cost`
+queues it without asking.
+
 ### Downloading
 
 `krater download <job> results/` fetches every file again each time: the file list has no modified time or checksum, and

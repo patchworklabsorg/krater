@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from krater.db import get_session
 from krater.models import User
-from krater.services import ops_alerts, people, teams
+from krater.services import funding_holds, grants, ops_alerts, ospool_grants, people, teams
 from krater.services import projects as project_service
 from krater.services import users as user_service
 from krater.weave import WeaveClient, get_weave_client
@@ -39,6 +39,8 @@ def home(
     invitations = teams.pending_invitations(db_session, user.id)
     leads = people.names(weave_client, [invitation.project.submitter for invitation in invitations])
     review_queue_count = len(project_service.review_queue(db_session, actor)) if actor.is_reviewer else 0
+    held = grants.held_project_ids(db_session, [project.id for project in my_projects])
+    ospool = ospool_grants.project_ids_with_grants(db_session, [project.id for project in my_projects])
 
     return templates.TemplateResponse(
         request,
@@ -46,6 +48,15 @@ def home(
         {
             "signed_in": True,
             "my_projects": my_projects,
+            "holds": {
+                project.id: label
+                for project in my_projects
+                if (
+                    label := funding_holds.approval_label(
+                        project, verification_held=project.id in held, ospool=project.id in ospool
+                    )
+                )
+            },
             "invitations": [(invitation, leads[invitation.project.submitter_id]) for invitation in invitations],
             "is_reviewer": actor.is_reviewer,
             "is_admin": actor.is_admin,

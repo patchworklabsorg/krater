@@ -98,7 +98,15 @@ def authorize(session: Session, weave_client: WeaveClient, user: User, *, fresh:
     if record is None or not record.active:
         raise NotAMember("Weave no longer lists you as an active Ganymede member")
     refresh_user_from_weave(session, user, record)
-    return Actor(user=user, groups=record.roles, slack_member=record.slack_member, name=record.name, email=record.email)
+    return Actor(
+        user=user,
+        groups=record.roles,
+        slack_member=record.slack_member,
+        slack_required=record.slack_required,
+        code_of_conduct_required=record.code_of_conduct_required,
+        name=record.name,
+        email=record.email,
+    )
 
 
 def cached_actor(user: User) -> Actor:

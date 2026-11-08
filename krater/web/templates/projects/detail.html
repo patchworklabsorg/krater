@@ -3,11 +3,23 @@
 
 {% block title %}{{ project.title or "Untitled proposal" }}{% endblock %}
 
+{% macro funding_hold_field(field_id, form) %}
+  <div class="field">
+    <label for="{{ field_id }}">Fund it now?</label>
+    <select id="{{ field_id }}" name="funding_hold">
+      <option value="">Yes: add the budget once the team is verified</option>
+      {% for value, label in funding_hold_choices %}<option value="{{ value }}">No: approve as {{ label | lower }}</option>{% endfor %}
+    </select>
+    <p class="field-hint">A hold approves it but keeps its budget and compute back until an admin clears the hold.</p>
+    {% if error_form == form and errors.funding_hold %}<p class="field-error">{{ errors.funding_hold }}</p>{% endif %}
+  </div>
+{% endmacro %}
+
 {% block content %}
 <div class="page-head">
   <div>
     <a class="back-link" href="/">&larr; My projects</a>
-    <h1>{{ project.title or "Untitled proposal" }} {{ macros.status_badge(project.status) }}</h1>
+    <h1>{{ project.title or "Untitled proposal" }} {{ macros.status_badge(project.status, approval_hold) }}</h1>
     {% if project.repo_url %}
       <p class="page-subtitle project-link"><a href="{{ project.repo_url }}">{{ project.repo_url }}</a></p>
     {% endif %}
@@ -53,22 +65,41 @@
   </p>
 {% endif %}
 
-{% if guardian_pending %}
+{% if funding_hold_explanation %}
+  <p class="guardian-banner" role="status"><strong>{{ funding_hold_explanation }}</strong>
+    {% if held_grant %}Its {{ held_grant.amount_cents | dollars }} of budget{% else %}Its budget{% endif %} isn't
+    added and no compute starts until an admin clears the hold.
+    {% if verification_pending %}Every team member also needs to be verified in Weave:
+      {% for member in verification_pending %}{{ member.label }} ({{ member.reason }}){{ "; " if not loop.last else "." }}{% endfor %}
+    {% endif %}</p>
+{% elif held_grant and verification_pending == [] %}
+  <p class="guardian-banner" role="status">Every team member is now verified in Weave. The held
+    {{ held_grant.amount_cents | dollars }} of budget is released within a few minutes.</p>
+{% elif verification_pending %}
   <div class="guardian-banner" role="status">
-    <p><strong>Krater can't grant budget to this project yet.</strong> These team members must be cleared in
-      Weave first:</p>
+    {% if held_grant %}
+      <p><strong>{{ held_grant.amount_cents | dollars }} of this project's budget is held until every team member is
+        verified in Weave.</strong> Until then the budget isn't added and no compute runs. Waiting on:</p>
+    {% else %}
+      <p><strong>This project's budget and compute are held until every team member is verified in Weave.</strong> It
+        can still be reviewed and approved. Waiting on:</p>
+    {% endif %}
     <ul>
-      {% for member in guardian_pending %}
+      {% for member in verification_pending %}
         <li>{{ member.label }}: {{ member.reason }}</li>
       {% endfor %}
     </ul>
-    <p>For a member under 18, a Weave admin records the signed guardian form and the call or video check on the
-      member's Weave admin page. A member who is not available in Weave needs their access to Krater back in Weave.
-      Then a reviewer or admin can approve again.</p>
+    <p>Each member does ID verification on
+      {% if weave_verification_url %}<a href="{{ weave_verification_url }}">Weave's verification page</a>{% else %}Weave's verification page{% endif %}.
+      For a member under 18, a Weave admin also records the signed guardian form and the call or video check. A member
+      who is not available in Weave needs their access to Krater back in Weave.</p>
   </div>
-{% elif guardian_pending is none %}
-  <p class="guardian-banner">Krater couldn't reach Weave to check whether a team member needs a verified guardian.
-    Krater checks again before it grants budget.</p>
+{% elif verification_pending is none %}
+  <p class="guardian-banner">
+    {% if held_grant %}{{ held_grant.amount_cents | dollars }} of this project's budget is held until every team
+      member is verified in Weave.{% endif %}
+    Krater couldn't reach Weave to check that the team is verified. Krater checks again before it adds any budget or
+    starts any compute.</p>
 {% endif %}
 
 {% if show_residency %}
@@ -137,8 +168,20 @@
           </p>
         </div>
         <div>
+          <h3>Anything stopping them open-sourcing it</h3>
+          {% if rev.open_source_blocked %}
+            <p class="write-up">Yes: {{ rev.open_source_obstacles | nl2br if rev.open_source_obstacles else "not said yet." }}</p>
+          {% else %}
+            <p>No</p>
+          {% endif %}
+        </div>
+        <div>
           <h3>How they'll use the compute</h3>
           <p class="write-up">{{ rev.compute_use | nl2br if rev.compute_use else "Not answered yet." }}</p>
+        </div>
+        <div>
+          <h3>Where their training data comes from</h3>
+          <p class="write-up">{{ rev.training_data | nl2br if rev.training_data else "Not answered yet." }}</p>
         </div>
         <div>
           <h3>{{ "What they need now" if rev.kind.value == "amendment" else "Proof of concept (what approval funds)" }}</h3>
@@ -165,6 +208,8 @@
     <p class="muted">No application yet.</p>
   {% endif %}
 </section>
+
+{% if ospool_grant %}{% include "projects/_ospool.html" %}{% endif %}
 
 {% if primary_image_url %}
 <section class="card">
@@ -272,15 +317,23 @@
 {% if is_team and (can_edit_draft or can_submit or can_submit_completion or can_start_amendment or can_start_completion or can_withdraw) %}
 <section class="card">
   <h2>Your actions</h2>
+  {% if can_submit %}
+    {# The same box as the edit page's submit form: `projects.submit` refuses a submission without it. #}
+    <form method="post" action="/projects/{{ project.id }}/submit" class="form submit-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="field">
+        <label class="choice">
+          <input type="checkbox" name="criteria_read" value="yes" required>
+          <span>I've read the <a href="{{ submission_criteria_url() }}" target="_blank" rel="noopener">Ganymede Submission
+          Criteria</a>, and my project meets them.</span>
+        </label>
+      </div>
+      <button type="submit" class="button button--primary">Submit for review</button>
+    </form>
+  {% endif %}
   <div class="action-row">
     {% if can_edit_draft %}
       <a class="button" href="/projects/{{ project.id }}/edit">Edit draft</a>
-    {% endif %}
-    {% if can_submit %}
-      <form method="post" action="/projects/{{ project.id }}/submit" class="form--inline">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button type="submit" class="button button--primary">Submit for review</button>
-      </form>
     {% endif %}
     {% if can_submit_completion %}
       <form method="post" action="/projects/{{ project.id }}/submit-completion" class="form--inline">
@@ -314,9 +367,10 @@
 <section class="card">
   <h2>Review this proposal</h2>
   <div class="action-row">
-    <form method="post" action="/projects/{{ project.id }}/review" class="form--inline">
+    <form method="post" action="/projects/{{ project.id }}/review" class="form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="decision" value="approve">
+      {% if can_hold_funding %}{{ funding_hold_field("review-funding-hold", "review") }}{% endif %}
       <button type="submit" class="button button--primary">Approve</button>
     </form>
   </div>
@@ -339,7 +393,10 @@
     <h2>Admin</h2>
     <a class="muted" href="/admin">Admin overview</a>
   </div>
-  <p><a href="/admin/compute/projects/{{ project.id }}">Compute settings for this project</a></p>
+  <p>
+    <a href="/admin/activity?project={{ project.id }}">Budget ledger and activity</a> ·
+    <a href="/admin/compute/projects/{{ project.id }}">Compute settings for this project</a>
+  </p>
   {% if admin_own_project %}
     <p class="policy-note">You lead this project or are on its team, so another admin has to decide it, add
       to its budget or raise its hourly cap. You can still cut or reclaim its budget, lower its cap, or withdraw it.</p>
@@ -354,6 +411,7 @@
         <textarea id="admin-decide-reason" name="reason" rows="2">{{ posted.reason if error_form == "admin_decide" else "" }}</textarea>
         {% if error_form == "admin_decide" and errors.reason %}<p class="field-error">{{ errors.reason }}</p>{% endif %}
       </div>
+      {% if can_hold_funding %}{{ funding_hold_field("admin-decide-funding-hold", "admin_decide") }}{% endif %}
       <div class="action-row">
         <button type="submit" name="decision" value="approve" class="button button--primary">Admin approve</button>
         <button type="submit" name="decision" value="reject" class="button button--danger">Admin reject</button>
@@ -361,6 +419,40 @@
     </form>
     </div>
   {% endif %}
+
+  {% if can_admin_set_funding_hold %}
+    <div class="admin-action">
+    <h3>Funding hold</h3>
+    {% if project.funding_hold %}
+      <p>This project is <strong>{{ funding_hold_label(project.funding_hold) }}</strong>: its budget is held and no
+        compute starts. Clearing it adds the held budget once every team member is verified in Weave.</p>
+    {% else %}
+      <p class="muted">Hold the budget of an approved project, and stop new compute, until Patchwork has the funding or
+        a third party has reviewed it.</p>
+    {% endif %}
+    <form method="post" action="/projects/{{ project.id }}/admin-funding-hold" class="form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="field">
+        <label for="admin-hold-value">Hold</label>
+        <select id="admin-hold-value" name="funding_hold">
+          {% if not admin_own_project %}<option value="">No hold (clear it)</option>{% endif %}
+          {% for value, label in funding_hold_choices %}
+            <option value="{{ value }}"{% if project.funding_hold and project.funding_hold.value == value %} selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+        {% if error_form == "funding_hold" and errors.funding_hold %}<p class="field-error">{{ errors.funding_hold }}</p>{% endif %}
+      </div>
+      <div class="field">
+        <label for="admin-hold-reason">Reason (required)</label>
+        <textarea id="admin-hold-reason" name="reason" rows="2">{{ posted.reason if error_form == "funding_hold" else "" }}</textarea>
+        {% if error_form == "funding_hold" and errors.reason %}<p class="field-error">{{ errors.reason }}</p>{% endif %}
+      </div>
+      <button type="submit" class="button">Save hold</button>
+    </form>
+    </div>
+  {% endif %}
+
+  {% include "projects/_ospool_admin.html" %}
 
   {% if can_admin_adjust_budget %}
     <div class="admin-action">
@@ -392,6 +484,10 @@
   {% if can_admin_reclaim %}
     <div class="admin-action">
     <h3>Reclaim unspent budget</h3>
+    <p class="muted">
+      {% if summary.remaining_cents > 0 %}Up to {{ summary.remaining_cents | dollars }} is unspent.{% else %}Nothing is unspent: spent money can't be taken back.{% endif %}
+      A cut with Adjust budget stops at the spend too.
+    </p>
     <form method="post" action="/projects/{{ project.id }}/admin-reclaim" class="form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="field">

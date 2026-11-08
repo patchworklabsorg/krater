@@ -34,7 +34,7 @@ _VALID_SIGNATURES: dict[str, bytes] = {
 def _completion_draft(db_session: Session, member: Actor, reviewer: Actor, weave):
     """An approved project with a fresh, unsubmitted completion draft."""
     project = new_project(db_session, member, title="Rover", write_up="A rover.", budget_requested_cents=100_000)
-    project = projects.submit(db_session, member, project=project)
+    project = projects.submit(db_session, member, project=project, criteria_read=True)
     projects.record_review(
         db_session,
         reviewer,

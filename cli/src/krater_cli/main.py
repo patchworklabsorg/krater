@@ -136,6 +136,15 @@ def _parser() -> argparse.ArgumentParser:
         help="when outbid for a while: move to another machine, or hold this one (default: hold with --limit)",
     )
     submit.add_argument("--max-runtime", type=int, default=8 * 60, help="minutes")
+    submit.add_argument(
+        "--data-in", type=int, help="GB the job moves into its machine (image, datasets); Vast bills it per GB"
+    )
+    submit.add_argument("--data-out", type=int, help="GB the job moves out of its machine (checkpoints, outputs)")
+    submit.add_argument(
+        "--confirm-transfer-cost",
+        action="store_true",
+        help="queue it even if its data transfer could cost a large share of the budget, without asking",
+    )
 
     job_help = "its id, the first characters of it, or its name"
     show = commands.add_parser("show", help="a job's state, machine and recent events")
@@ -432,7 +441,27 @@ def run(
             body["max_wait_minutes"], body["on_max_wait"] = args.expires, "cancel"
         if args.on_outbid is not None:
             body["on_outbid"] = args.on_outbid
-        job = krater.post(f"/projects/{resolve.resolve_project(krater, args.project)}/jobs", body)
+        if args.data_in is not None:
+            body["data_in_gb"] = args.data_in
+        if args.data_out is not None:
+            body["data_out_gb"] = args.data_out
+        if args.confirm_transfer_cost:
+            body["confirm_transfer_cost"] = True
+        path = f"/projects/{resolve.resolve_project(krater, args.project)}/jobs"
+        try:
+            job = krater.post(path, body)
+        except KraterError as exc:
+            if exc.confirm != "confirm_transfer_cost":
+                raise
+            say(str(exc))
+            try:
+                answer = prompt("Queue it anyway? [y/N] ")
+            except EOFError:
+                answer = ""
+            if answer.strip().lower() not in ("y", "yes"):
+                say("Not queued. --confirm-transfer-cost queues it without asking.")
+                return 1
+            job = krater.post(path, {**body, "confirm_transfer_cost": True})
         out(job, lambda: say(f"Queued {job['kind']} {job['id']}: {job['state_reason'] or job['state']}"))
     elif args.command == "show":
         job = krater.get(f"/jobs/{resolve.resolve_job(krater, args.job)}")

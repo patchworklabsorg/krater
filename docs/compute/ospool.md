@@ -35,7 +35,7 @@ because Vast "starts now" and supports boxes. On the OSPool, Krater would run ba
 3. **Sign-off on automated submission.** The policy asks users to "contact us" rather than "running scripts (including
    `cron`) to automate job submission" ([policy](https://osg-htc.org/osg-portal-documentation/overview/references/policy/)).
    A portal submitting for its members is exactly that, so it needs a facilitator's agreement. It also holds AP
-   operators "responsible for their users' behavior". Krater already has review, budgets and the guardian gate, which
+   operators "responsible for their users' behavior". Krater already has review, budgets and verification before compute (ID verification and the guardian check), which
    is a good story to tell here.
 
 **Ask OSG for an Access Point hosted for the gateway** (route C below). If that isn't on offer, run our own (route A).

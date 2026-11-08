@@ -27,6 +27,9 @@ APPROVED = {
     "box_sync_deadline_minutes": 10,
     "box_resume_timeout_minutes": 10,
     "storage_quota_gb": 50,
+    # 2026-11-04: $20 per TB each way, from a read-only search of verified hosts (median $3.91/TB).
+    "transfer_cap_microusd_per_gb": 20_000,
+    "transfer_warn_percent": 10,
 }
 
 
@@ -197,3 +200,21 @@ def test_parse_and_format_round_trip() -> None:
         parse_value(margin, "ten")
     with pytest.raises(ValidationFailed):
         parse_value(floor, "95")
+
+
+def test_the_transfer_cap_is_entered_in_dollars_per_tb() -> None:
+    cap = FIELDS_BY_NAME["transfer_cap_microusd_per_gb"]
+
+    assert parse_value(cap, "20") == 20_000
+    assert parse_value(cap, "3.906") == 3_906
+    assert parse_value(cap, "0") == 0
+    assert format_value(cap, 20_000) == "20"
+    assert format_value(cap, 12_500) == "12.5"
+    assert format_value(cap, 3_906) == "3.906"
+    assert format_value(cap, 0) == "0"
+    with pytest.raises(ValidationFailed):
+        parse_value(cap, "0.0001")  # finer than a micro-dollar per GB
+    with pytest.raises(ValidationFailed):
+        parse_value(cap, "1001")
+    with pytest.raises(ValidationFailed):
+        parse_value(cap, "nan")

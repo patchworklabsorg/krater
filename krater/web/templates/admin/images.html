@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+
+{% block title %}Images{% endblock %}
+
+{% macro inspect_button(reference, label) %}
+  <form method="post" action="/admin/images/inspect" class="inline-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="image" value="{{ reference }}">
+    <button type="submit" class="button button--small">{{ label }}</button>
+  </form>
+{% endmacro %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <a class="back-link" href="/admin">&larr; Admin</a>
+    <h1>Images</h1>
+    <p class="page-subtitle">
+      Every container image members have named for a job or box, newest first, with the digests Krater rented
+      machines with. Inspecting one asks its registry for its config and build history (the Dockerfile steps).
+    </p>
+  </div>
+</div>
+
+<section class="card" aria-labelledby="inspect-any">
+  <h2 id="inspect-any">Inspect an image</h2>
+  <form method="post" action="/admin/images/inspect" class="filter-bar">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="field">
+      <label for="inspect-image">Image (a tag, or name@sha256:...)</label>
+      <input id="inspect-image" name="image" type="text" autocomplete="off" placeholder="ghcr.io/me/train:v3">
+    </div>
+    <button type="submit" class="button">Inspect</button>
+  </form>
+  <p class="muted">
+    Public images only: Krater has no registry logins. A tag shows what it points to now, which may not be what a job
+    ran; inspect a digest below for that.
+  </p>
+</section>
+
+<section aria-labelledby="images-used">
+  <div class="section-head"><h2 id="images-used">Images members use</h2></div>
+  {% if images %}
+    <div class="stack">
+      {% for item in images %}
+        <section class="card">
+          <div class="card-head">
+            <h3><code>{{ item.image }}</code></h3>
+            {{ inspect_button(item.image, "Inspect the tag now") }}
+          </div>
+          <p class="muted">
+            {{ item.jobs }} job{{ "" if item.jobs == 1 else "s" }} on {{ item.projects }}
+            project{{ "" if item.projects == 1 else "s" }}, last queued {{ item.last.strftime("%Y-%m-%d %H:%M UTC") }}.
+          </p>
+          {% if item.digests %}
+            <div class="table-scroll">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th scope="col">Digest machines got</th>
+                    <th scope="col" class="num">Machines</th>
+                    <th scope="col">Last rented</th>
+                    <th scope="col">Inspected</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for each in item.digests %}
+                    <tr>
+                      <td>
+                        <code title="{{ each.digest }}">{{ each.digest[:19] }}…</code>
+                        <div class="muted">{{ "pinned: exactly this ran" if each.pinned else "looked up at rental; launched by tag" }}</div>
+                      </td>
+                      <td class="num">{{ each.machines }}</td>
+                      <td class="nowrap">{{ each.last.strftime("%Y-%m-%d %H:%M UTC") }}</td>
+                      <td>
+                        {% if each.inspection %}
+                          <a href="/admin/images/inspections/{{ each.inspection.id }}">{{ each.inspection.created_at.strftime("%Y-%m-%d") }}</a>
+                        {% elif each.reference %}
+                          {{ inspect_button(each.reference, "Inspect") }}
+                        {% endif %}
+                      </td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% else %}
+            <p class="muted">No machine has been rented with it since Krater started recording digests.</p>
+          {% endif %}
+        </section>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="empty-state"><p>No job has named an image yet.</p></div>
+  {% endif %}
+</section>
+{% endblock %}

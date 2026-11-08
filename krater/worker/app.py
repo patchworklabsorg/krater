@@ -21,9 +21,11 @@ from krater.compute.search_pacing import SearchPacer
 from krater.config import get_settings
 from krater.db import get_sessionmaker
 from krater.models import Project, ProjectRevision
+from krater.ospool.accounting import get_accounting_client
 from krater.pricing.catalog import CatalogError, get_price_catalog
 from krater.quilt import sender as quilt_sender
-from krater.services import ops_alerts, people, price_history, slack_notify, slack_reviews
+from krater.registry import get_registry
+from krater.services import grants, ops_alerts, ospool_grants, people, price_history, slack_notify, slack_reviews
 from krater.services.pricing import refresh_prices
 from krater.slack import SlackError, get_slack_client
 from krater.storage import StorageError, get_compute_store
@@ -208,7 +210,9 @@ def compute_schedule(timestamp: int) -> None:
             settings,
             now=max(datetime.now(UTC), datetime.fromtimestamp(timestamp, tz=UTC)),
             runner_sha256=compute_launch.runner_sha256(settings.compute_runner_binary_path),
+            weave_client=get_weave_client(),
             pacer=SEARCH_PACER,
+            registry=get_registry(),
         )
         if result.errors:
             _report_failure("compute_schedule", f"{result.errors} provider errors in one pass; see the worker's log.")
@@ -282,6 +286,59 @@ def compute_storage_cleanup(timestamp: int) -> None:
     except StorageError as exc:
         logger.exception("krater.compute_storage_cleanup failed")
         _report_failure("compute_storage_cleanup", _failure(exc))
+    finally:
+        session.close()
+
+
+# --------------------------------------------------------------------------------------------------
+# Budget grants held for the team's verification in Weave (`krater.services.grants`): written to the
+# ledger, and so sent to Quilt, once Weave clears every team member. Runs whether or not compute is on.
+# --------------------------------------------------------------------------------------------------
+
+GRANT_RELEASE_LOCK = "grant_release"
+
+
+@app.periodic(cron="*/5 * * * *")
+@app.task(name="grant_release", lock=GRANT_RELEASE_LOCK, queueing_lock=GRANT_RELEASE_LOCK)
+def grant_release(timestamp: int) -> None:
+    """Every five minutes: release the held budget grants whose teams Weave now clears."""
+    now = max(datetime.now(UTC), datetime.fromtimestamp(timestamp, tz=UTC))
+    session = get_sessionmaker()()
+    try:
+        released = grants.release_ready(session, get_weave_client(), now=now)
+        if released:
+            logger.info("krater grant_release: released %d held grants", released)
+            kick_quilt_delivery()
+    except Exception as exc:
+        logger.exception("krater.grant_release failed")
+        session.rollback()
+        _report_failure("grant_release", _failure(exc))
+    finally:
+        session.close()
+
+
+# --------------------------------------------------------------------------------------------------
+# OSPool grants (`krater.services.ospool_grants`): each grant's usage per day, from OSG's public accounting.
+# --------------------------------------------------------------------------------------------------
+
+OSPOOL_USAGE_LOCK = "ospool_usage_import"
+
+
+@app.periodic(cron=get_settings().ospool_usage_import_cron)
+@app.task(name="ospool_usage_import", lock=OSPOOL_USAGE_LOCK, queueing_lock=OSPOOL_USAGE_LOCK)
+def ospool_usage_import(timestamp: int) -> None:
+    """Daily: read every OSPool grant's usage from OSG's accounting. A grant OSG can't answer for keeps its last
+    import (and its page says when that was)."""
+    now = max(datetime.now(UTC), datetime.fromtimestamp(timestamp, tz=UTC))
+    session = get_sessionmaker()()
+    try:
+        failed = ospool_grants.import_all(session, get_accounting_client(), now=now)
+        if failed:
+            _report_failure("ospool_accounting", f"OSG's accounting couldn't be read for {', '.join(failed)}.")
+    except Exception as exc:
+        logger.exception("krater.ospool_usage_import failed")
+        session.rollback()
+        _report_failure("ospool_accounting", _failure(exc))
     finally:
         session.close()
 
@@ -509,12 +566,25 @@ def slack_reconcile(timestamp: int) -> None:
 QUILT_KICK_LOCK = "quilt_deliver_now"
 
 
+#: Why a delivery run stopped (`DeliveryResult.stopped`), for the admin alert.
+_QUILT_STOPPED = {
+    "no_token": "Weave gave Krater no `quilt` token: check that Krater's app in Weave allows the `quilt` scope.",
+}
+_QUILT_STOPPED_HTTP = (
+    "Quilt answered {}: check KRATER_QUILT_URL, the `quilt` scope on Krater's app in Weave, and the Weave client id "
+    "on the Ganymede patch in Quilt."
+)
+
+
 def _quilt_deliver() -> None:
     session = get_sessionmaker()()
     try:
         result = quilt_sender.run(session, get_weave_client(), get_settings())
         if result is not None and result.failed:
             _report_failure("quilt", f"Quilt refused {result.failed} events for good; see the outbox on /admin.")
+        if result is not None and result.stopped:
+            # Nothing gets through until someone fixes the setup, so count it towards the alert like a crash.
+            _report_failure("quilt", _QUILT_STOPPED.get(result.stopped, _QUILT_STOPPED_HTTP).format(result.stopped))
         if result is not None and (result.sent or result.retried or result.failed):
             logger.info(
                 "krater quilt_deliver: sent %d, retry %d, failed %d",

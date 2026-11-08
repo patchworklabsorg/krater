@@ -132,8 +132,7 @@ def _process_decision(
         return
 
     try:
-        # The guardian gate runs inside `record_review`, the same rule as the web path. Its refusal is an
-        # `InvalidState`, so the clicker sees which members need a verification.
+        # `record_review` is the same rule as the web path. Its refusals are `InvalidState`, so the clicker sees why.
         project_service.record_review(
             session,
             actor,

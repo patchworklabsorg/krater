@@ -45,6 +45,9 @@ class QuiltOutbox(CreatedAtMixin, Base):
     # `None` means "send it on the next run". Set after a failed attempt, for the backoff.
     next_attempt_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
     sent_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    # When Krater first tried to send it, whatever the answer. The backlog alert measures from here, not from
+    # `occurred_at`: an event can be old long before sending was switched on.
+    first_attempted_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
     # The HTTP status of the last attempt (`None`: no attempt yet, or no answer).
     last_status: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
     last_error: Mapped[str | None] = mapped_column(sa.Text, nullable=True)

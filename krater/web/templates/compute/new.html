@@ -15,6 +15,23 @@
   </div>
 </div>
 
+{% if verification_pending %}
+  <div class="guardian-banner" role="status">
+    <p><strong>This project's compute is held until every team member is verified in Weave.</strong> Waiting on:</p>
+    <ul>
+      {% for member in verification_pending %}
+        <li>{{ member.label }}: {{ member.reason }}</li>
+      {% endfor %}
+    </ul>
+    <p>Each member does ID verification on
+      {% if weave_verification_url %}<a href="{{ weave_verification_url }}">Weave's verification page</a>{% else %}Weave's verification page{% endif %}.
+      For a member under 18, a Weave admin also records a verified guardian.</p>
+  </div>
+{% elif verification_pending is none %}
+  <p class="guardian-banner">Krater couldn't reach Weave to check that the team is verified. It checks again when you
+    queue the job.</p>
+{% endif %}
+
 <section class="card form-card">
   <form method="post" action="/projects/{{ project.id }}/compute" class="form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -79,6 +96,29 @@
     </fieldset>
 
     <fieldset class="form-fieldset">
+      <legend>Data transfer</legend>
+      <p class="field-hint">
+        Vast bills each GB into and out of the machine at the host's own price, on top of the hourly price.
+        Krater only rents hosts that charge at most ${{ transfer_cap_per_tb }} per TB each way, and with an estimate it prefers hosts where your data costs less. Data in includes
+        the image pull and checkpoint restores, again on every move to another machine.
+      </p>
+      <div class="form-grid">
+        <div class="field">
+          <label for="job-data-in">Data into the machine (GB, optional)</label>
+          <input type="text" inputmode="numeric" id="job-data-in" name="data_in_gb" value="{{ posted.data_in_gb or '' }}">
+          <p class="field-hint">The image, datasets and model weights it downloads.</p>
+          {% if errors.data_in_gb %}<p class="field-error">{{ errors.data_in_gb }}</p>{% endif %}
+        </div>
+        <div class="field">
+          <label for="job-data-out">Data out of the machine (GB, optional)</label>
+          <input type="text" inputmode="numeric" id="job-data-out" name="data_out_gb" value="{{ posted.data_out_gb or '' }}">
+          <p class="field-hint">Checkpoints, outputs and anything it uploads elsewhere.</p>
+          {% if errors.data_out_gb %}<p class="field-error">{{ errors.data_out_gb }}</p>{% endif %}
+        </div>
+      </div>
+    </fieldset>
+
+    <fieldset class="form-fieldset">
       <legend>Price</legend>
       {% set limit_order = posted.order == "limit" or not posted %}
       <div class="field">
@@ -131,6 +171,13 @@
         </div>
       </div>
     </fieldset>
+
+    {% if transfer_warning %}
+      <div class="notice notice--warn" role="alert" id="transfer-warning">
+        <p><strong>Check the data transfer cost.</strong> {{ transfer_warning }}</p>
+        <label class="choice"><input type="checkbox" name="confirm_transfer_cost"> I've checked it: queue the job anyway</label>
+      </div>
+    {% endif %}
 
     <div class="form-actions">
       <button type="submit" class="button button--primary">Queue it</button>

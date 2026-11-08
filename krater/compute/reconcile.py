@@ -10,6 +10,10 @@ A corrected total becomes a new `vast_estimate` snapshot: a higher one goes to Q
 one (finished machines charged less than estimated) as `spend.corrected`. Charges for a machine whose create Vast
 answered without confirming are counted against that create's job (found by label). Charges for any other instance
 with Krater's label prefix are logged as an alert: something rented outside the scheduler.
+
+Vast itemizes each charge (`gpu`, `disk`, `bwd` for data into the machine, `bwu` for data out). The transfer items are
+kept per instance, and a job whose transfer has cost the project's transfer warning share of its budget (again at
+each further multiple of it) gets an event on its page and a notice in the project's Slack channel.
 """
 
 from __future__ import annotations
@@ -36,13 +40,16 @@ from krater.models import (
     SpendReconciliation,
 )
 from krater.providers import ComputeProvider
-from krater.services import audit, compute_settings
+from krater.services import audit, budget, compute_settings
+from krater.services.compute_jobs import AUDIT_TRANSFER_WARNING
 from krater.vast import usd_to_microusd
 
 logger = logging.getLogger(__name__)
 
 AUDIT_RECONCILE_MISMATCH = "compute_reconcile_mismatch"
 AUDIT_UNKNOWN_CHARGES = "compute_unknown_charges"
+#: Vast's charge item types for data into (`bwd`, "download") and out of (`bwu`, "upload") the machine.
+TRANSFER_ITEM_TYPES = frozenset({"bwd", "bwu"})
 #: Instances destroyed longer ago than this are settled and no longer checked.
 SETTLED_AFTER = timedelta(days=3)
 #: Differences under a cent are Vast's $0.001 rounding, never worth an alert.
@@ -75,12 +82,16 @@ def run(session: Session, client: ComputeProvider, settings: Settings, *, now: d
     charges = client.charges(day_start, now)
 
     actual_by_instance: dict[int, int] = {}
+    transfer_by_instance: dict[int, int] = {}
     labels: dict[int, str | None] = {}
     for charge in charges:
         if charge.instance_id is None:
             continue
         actual_by_instance[charge.instance_id] = actual_by_instance.get(charge.instance_id, 0) + usd_to_microusd(
             charge.amount
+        )
+        transfer_by_instance[charge.instance_id] = transfer_by_instance.get(charge.instance_id, 0) + sum(
+            usd_to_microusd(item.amount) for item in charge.items if item.type in TRANSFER_ITEM_TYPES
         )
         labels[charge.instance_id] = charge.label
     rows.extend(_adopt_unconfirmed(session, labels, ours, provider=_title(settings), now=now))
@@ -113,6 +124,7 @@ def run(session: Session, client: ComputeProvider, settings: Settings, *, now: d
             continue  # nothing charged yet (just created): keep the estimate
         estimate = row.accrued_microusd
         row.charged_microusd = actual
+        row.transfer_charged_microusd = transfer_by_instance.get(row.provider_instance_id, 0)
         row.charged_at = now
         if row.destroyed_at is None:
             # Live: Vast's charges may lag what is running now, so never correct downwards here (a lower
@@ -127,6 +139,10 @@ def run(session: Session, client: ComputeProvider, settings: Settings, *, now: d
             row.accrued_microusd = actual
         by_project.setdefault(row.job.project_id, []).append((row, estimate, actual))
 
+    # Krater's sessions don't autoflush (krater.db), and the per-job sums below (spend, transfer) must see what this
+    # pass just set. Without it they lagged a pass, an hour, unless a mismatch audit happened to flush first: found
+    # on the 2026-11-06 paid round, where a transfer warning came an hour late.
+    session.flush()
     for project_id, items in by_project.items():
         project = session.get(Project, project_id)
         estimate_total = sum(estimate for _, estimate, _ in items)
@@ -168,6 +184,7 @@ def run(session: Session, client: ComputeProvider, settings: Settings, *, now: d
                 },
             )
         _resum_jobs(session, {row.job_id for row, _, _ in items})
+        _warn_transfer(session, project, {row.job_id for row, _, _ in items}, policy, now=now)
         result.projects += 1
 
     session.flush()
@@ -224,6 +241,59 @@ def _adopt_unconfirmed(
         )
     session.flush()
     return rows
+
+
+def _warn_transfer(
+    session: Session,
+    project: Project,
+    job_ids: set[uuid.UUID],
+    policy: compute_settings.ComputePolicy,
+    *,
+    now: datetime,
+) -> None:
+    """Warn about each job whose data transfer has now cost the policy's share of the budget, or a further multiple
+    of it since its last warning (10%, then 20%, ...): an event on the job and a Slack notice for its team."""
+    ceiling = budget.ceiling_cents(session, project)
+    if ceiling <= 0:
+        return
+    totals = session.execute(
+        sa.select(ComputeInstance.job_id, sa.func.sum(ComputeInstance.transfer_charged_microusd))
+        .where(ComputeInstance.job_id.in_(job_ids))
+        .group_by(ComputeInstance.job_id)
+    )
+    for job_id, total in totals:
+        transfer_cents = math.ceil(int(total or 0) / spend.MICROUSD_PER_CENT)
+        percent = transfer_cents * 100 / ceiling
+        level = int(percent // policy.transfer_warn_percent)
+        if level < 1:
+            continue
+        job = session.get(ComputeJob, job_id)
+        warned = session.scalars(
+            sa.select(ComputeEvent.payload).where(
+                ComputeEvent.job_id == job_id, ComputeEvent.kind == "transfer_warning"
+            )
+        )
+        if any((payload or {}).get("level", 0) >= level for payload in warned):
+            continue
+        shown = math.floor(percent)
+        message = (
+            f"Data transfer has cost ${transfer_cents / 100:,.2f} so far, {shown}% of the project's "
+            f"${ceiling / 100:,.2f} budget. Vast bills it per GB on top of the hourly price."
+        )
+        payload = {
+            "level": level,
+            "transfer_cents": transfer_cents,
+            "budget_cents": ceiling,
+            "percent": shown,
+        }
+        session.add(ComputeEvent(job_id=job_id, kind="transfer_warning", message=message, payload=payload, at=now))
+        audit.record(
+            session,
+            None,
+            AUDIT_TRANSFER_WARNING,
+            project=project,
+            payload={**payload, "job_id": str(job_id), "job_name": job.name, "owner_id": str(job.submitter_id)},
+        )
 
 
 def _resum_jobs(session: Session, job_ids: set[uuid.UUID]) -> None:

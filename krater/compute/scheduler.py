@@ -15,7 +15,10 @@ Each pass, in order:
 5. **Start** queued jobs, oldest first: search offers for the job's shape, choose the cheapest at or under its
    target (or its max, after `max_wait_minutes`, as the member chose), hold its budget under the project's row
    lock, then rent. Searches are paced (`krater.compute.search_pacing`): Vast's daily quota of search rows is small,
-   and a job that keeps finding nothing is searched for less and less often.
+   and a job that keeps finding nothing is searched for less and less often. A job whose team Weave hasn't cleared
+   (`krater.services.clearance`: ID verification, and a verified guardian for a member under 18) waits in the
+   queue without searching. A machine that is already running isn't stopped for that, and a self-stopped one is
+   started again: both were rented while the team was cleared.
 
 Every destroy is confirmed with `show_instance(...) is None`; until then the row keeps `destroy_requested_at` and
 the next pass tries again. The pass commits as it goes (a rental's row must be durable before Vast is called), so
@@ -57,10 +60,12 @@ from krater.providers import (
     ProviderSearchQuotaError,
     ProviderUnavailableError,
 )
-from krater.services import audit, budget, budget_alerts, compute_jobs, compute_settings
+from krater.registry import Registry, RegistryError, parse_reference
+from krater.services import audit, budget, budget_alerts, clearance, compute_jobs, compute_settings, funding_holds
 from krater.services.compute_settings import ComputePolicy
 from krater.services.launch_rules import LAUNCHABLE_STATUSES, hourly_cap_cents
 from krater.vast import Instance, Offer, OfferQuery, RentalType, microusd_to_usd, usd_to_microusd
+from krater.weave import WeaveClient, WeaveUnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +121,15 @@ def _dollars(microusd: int) -> str:
     return f"${microusd_to_usd(microusd).quantize(Decimal('0.0001'))}/h"
 
 
+def _transfer(job: ComputeJob) -> offers.Transfer:
+    """The data the member expects `job` to move, spread over its max runtime, for ranking hosts."""
+    return offers.Transfer(
+        in_gb=job.data_in_gb or 0,
+        out_gb=job.data_out_gb or 0,
+        runtime_hours=Decimal(job.max_runtime_minutes) / 60,
+    )
+
+
 def _span(minutes: int) -> str:
     """`minutes` as members read it: "30 minutes", "1.5 hours", "3 hours"."""
     if minutes < 90:
@@ -152,10 +166,18 @@ class Scheduler:
         *,
         now: datetime,
         runner_sha256: str | None,
+        weave_client: WeaveClient,
         pacer: SearchPacer | None = None,
+        registry: Registry | None = None,
     ) -> None:
         self.session = session
+        # Asked for each image's digest when renting (`_image_for`); None asks nothing and launches by tag.
+        self.registry = registry
+        self._digests: dict[str, str | None] = {}
         self.client = client
+        self.weave_client = weave_client
+        # Each project's clearance, asked of Weave once per pass: a reason string while it is held, else `None`.
+        self._held: dict = {}
         self.settings = settings
         provider = providers.active(settings)
         if provider is None:
@@ -950,6 +972,8 @@ class Scheduler:
             limit_microusd=limit,
             max_microusd=limit,
             several_models=len(job.gpu_names) != 1,
+            transfer_cap_microusd_per_gb=policy.transfer_cap_microusd_per_gb,
+            transfer=_transfer(job),
         )
         paused_minutes = int((self.now - row.paused_since).total_seconds() // 60)
         if choice is None:
@@ -1017,6 +1041,25 @@ class Scheduler:
                 self.pacer.searched(key, now=self.now, rented=key in self._rented_from)
             self.pacer.forget_old(self.now)
 
+    def _held_for_verification(self, project: Project) -> str | None:
+        """Why `project`'s queued jobs can't rent yet, or `None` once Weave has cleared every team member
+        (`krater.services.clearance`). Asked fresh once per project per pass, before any search: a held job spends
+        none of the provider's search quota. Weave down holds it too; Krater never guesses."""
+        if project.id not in self._held:
+            try:
+                pending = clearance.members_not_cleared(self.session, self.weave_client, project, fresh=True)
+            except WeaveUnavailableError:
+                self._held[project.id] = "Waiting: Krater couldn't reach Weave to check the team is verified."
+            else:
+                self._held[project.id] = (
+                    "Waiting until every team member is verified in Weave: "
+                    + "; ".join(f"{member.label}: {member.reason}" for member in pending)
+                    + "."
+                    if pending
+                    else None
+                )
+        return self._held[project.id]
+
     def _plan(self, job: ComputeJob) -> tuple[RentalType, int] | None:
         """(rental type, price limit) for this pass, after any escalation. `None` cancels the job."""
         rental_type: RentalType = "bid" if job.interruptible else "ondemand"
@@ -1049,6 +1092,14 @@ class Scheduler:
             _finish(job, ComputeJobState.CANCELLED, f"The project is {project.status.value}.", now=self.now)
             _event(self.session, job, "cancelled", "Cancelled: the project can't launch any more.", now=self.now)
             return False
+        if project.funding_hold is not None:
+            # Queued before an admin set the hold (`krater.services.funding_holds`): it starts once the hold is cleared.
+            job.state_reason = f"Waiting: the project is {funding_holds.LABELS[project.funding_hold].lower()}."
+            return False
+        held = self._held_for_verification(project)
+        if held is not None:
+            job.state_reason = held
+            return False  # it stays queued and starts once Weave clears the team
         plan = self._plan(job)
         if plan is None:
             _finish(
@@ -1080,6 +1131,8 @@ class Scheduler:
             max_microusd=min(job.max_microusd, cap_microusd),
             several_models=len(job.gpu_names) != 1,
             exclude=taken,
+            transfer_cap_microusd_per_gb=policy.transfer_cap_microusd_per_gb,
+            transfer=_transfer(job),
         )
         if choice is None:
             low = offers.cheapest(
@@ -1087,6 +1140,7 @@ class Scheduler:
                 rental_type=rental_type,
                 disk_gb=job.disk_gb,
                 margin_percent=policy.bid_margin_percent,
+                transfer_cap_microusd_per_gb=policy.transfer_cap_microusd_per_gb,
             )
             kind = "bid" if rental_type == "bid" else "on-demand"
             job.state_reason = f"Waiting for a {kind} offer at or under {_dollars(limit)}" + (
@@ -1124,6 +1178,7 @@ class Scheduler:
             min_direct_ports=1 if job.kind is ComputeJobKind.BOX else 0,
             limit=SEARCH_LIMIT,
             max_price_microusd=limit,
+            max_transfer_microusd_per_gb=policy.transfer_cap_microusd_per_gb,
         )
         key = json.dumps(query.to_body(), sort_keys=True)
         # The price is part of what's paced: an escalated job (a higher limit) searches at once.
@@ -1150,6 +1205,22 @@ class Scheduler:
         )
         return sum(max(0, hold - spent) for hold, spent in rows)
 
+    def _image_for(self, job: ComputeJob) -> tuple[str | None, str]:
+        """(the digest `job.image` points to now, the image to launch). The digest is looked up once per pass per
+        image and is None when the registry can't say; then, or with pinning off, the machine gets the tag."""
+        if self.registry is None:
+            return None, job.image
+        if job.image not in self._digests:
+            try:
+                self._digests[job.image] = self.registry.resolve_digest(job.image)
+            except RegistryError as exc:
+                logger.warning("krater.compute: no digest for %s: %s", job.image, exc)
+                self._digests[job.image] = None
+        digest = self._digests[job.image]
+        if digest is None or not self.settings.compute_pin_image_digest:
+            return digest, job.image
+        return digest, parse_reference(job.image).pinned(digest)
+
     def _rent(self, job: ComputeJob, choice: offers.Choice, *, hold_cents: int, taken: set[str]) -> bool:
         if job.kind is ComputeJobKind.BOX and self._account_has_ssh_keys():
             job.state_reason = (
@@ -1159,6 +1230,7 @@ class Scheduler:
             )
             return False
         attempt = job.attempts + 1
+        digest, image = self._image_for(job)
         token, token_hash = runner_api.new_token()
         label = f"{self.prefix}{job.id.hex[:12]}-{attempt}"
         row = ComputeInstance(
@@ -1173,7 +1245,11 @@ class Scheduler:
             interruptible=choice.rental_type == "bid",
             gpu_microusd=choice.gpu_microusd,
             disk_microusd=choice.disk_microusd,
+            transfer_in_microusd_per_gb=choice.offer.transfer_in_microusd_per_gb,
+            transfer_out_microusd_per_gb=choice.offer.transfer_out_microusd_per_gb,
             runner_token_hash=token_hash,
+            image_digest=digest,
+            image_pinned=image != job.image,
             # The pass's clock, not the database's: the settle and provision timeouts compare with it.
             created_at=self.now,
         )
@@ -1204,6 +1280,7 @@ class Scheduler:
                 bid_price=choice.bid,
                 env=launch.job_env(job, attempt, runner_url=self.runner_url, token=token),
                 runner_sha256=self.runner_sha256,
+                image=image,
             )
         )
         try:
@@ -1269,6 +1346,17 @@ def run_pass(
     *,
     now: datetime,
     runner_sha256: str | None,
+    weave_client: WeaveClient,
     pacer: SearchPacer | None = None,
+    registry: Registry | None = None,
 ) -> PassResult:
-    return Scheduler(session, client, settings, now=now, runner_sha256=runner_sha256, pacer=pacer).run()
+    return Scheduler(
+        session,
+        client,
+        settings,
+        now=now,
+        runner_sha256=runner_sha256,
+        weave_client=weave_client,
+        pacer=pacer,
+        registry=registry,
+    ).run()

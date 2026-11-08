@@ -182,12 +182,28 @@
       {{ text_field("affiliation_detail", "Which contest or professor?", values, errors, rows=2,
                     hint="The contest's name and a link, or your professor's name and school.") }}
     </div>
+    <div class="field">
+      <fieldset class="choice-list">
+        <legend class="field-label">Is there anything that would stop you from open-sourcing the project?</legend>
+        <label class="choice">
+          <input type="checkbox" name="open_source_blocked" value="yes" data-role="open-source-blocked"
+                 {% if values.open_source_blocked == "yes" %}checked{% endif %}> Yes
+        </label>
+      </fieldset>
+      <p class="field-hint">Leave it unticked if nothing would. The gallery shows open-source projects.</p>
+    </div>
+    <div data-role="open-source-obstacles"{% if values.open_source_blocked != "yes" and not errors.open_source_obstacles %} hidden{% endif %}>
+      {{ text_field("open_source_obstacles", "What would stop you?", values, errors, rows=3,
+                    hint="A contest's or school's rules, data or a model you can't share, a license...") }}
+    </div>
   </fieldset>
 
   <fieldset class="form-fieldset">
     <legend>Compute</legend>
     {{ text_field("compute_use", "How are you going to use the compute?", values, errors, rows=5,
                   hint="Training, fine-tuning, inference, rendering... What runs, on what data, and roughly how often.") }}
+    {{ text_field("training_data", "Where does your training data come from?", values, errors, rows=4,
+                  hint="Name each source: a public dataset (with a link), data you collected yourself, a partner's data... If you won't train a model, say what data you'll use, or none.") }}
 
     {% if kind == "amendment" %}
       {{ estimator("poc", "What you need now",

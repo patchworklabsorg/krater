@@ -25,6 +25,7 @@ from datetime import datetime
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
+from krater.compute.offers import within_transfer_cap
 from krater.models import GpuPriceSample
 from krater.providers import ComputeProvider, ProviderError, ProviderRateLimitedError
 from krater.services import compute_settings
@@ -89,7 +90,8 @@ def record(
     """Search and write one sample per (GPU model, rental type), `pause_seconds` apart. One model failing is logged
     and skipped; a rate limit, or Vast's search quota falling under `QUOTA_RESERVE`, stops the run (the next run
     starts over). Flushes; the caller commits."""
-    reliability = compute_settings.global_policy(session).reliability_floor
+    policy = compute_settings.global_policy(session)
+    reliability = policy.reliability_floor
     written = failed = 0
     for i, (gpu_name, rental_type) in enumerate((g, r) for g in gpu_names for r in RENTAL_TYPES):
         quota = client.search_quota
@@ -109,6 +111,8 @@ def record(
             num_gpus=1,
             disk_gb=disk_gb,
             min_reliability=reliability,
+            # Only hosts Krater would rent: the prices shown are ones a job can get.
+            max_transfer_microusd_per_gb=policy.transfer_cap_microusd_per_gb,
         )
         try:
             offers = client.search_offers(query)
@@ -120,6 +124,8 @@ def record(
             logger.exception("krater.price_history: searching %s (%s) failed; skipping", gpu_name, rental_type)
             failed += 1
             continue
+        # Vast's filter should have left these out already; a host it let through is never rented either.
+        offers = [o for o in offers if within_transfer_cap(o, policy.transfer_cap_microusd_per_gb)]
         summary = summarize(offers, rental_type, disk_gb=disk_gb)
         if summary.truncated:
             logger.info("krater.price_history: %s (%s) hit Vast's 512-offer cap", gpu_name, rental_type)

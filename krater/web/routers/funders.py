@@ -43,6 +43,7 @@ def ospool_page(
             "candidates": candidates,
             "weave_down": any(row.residency is None for row in candidates),
             "names_full": site_settings.current(db_session).gallery_minor_names is GalleryMinorNames.FULL,
+            "fields": funder_packet.FIELDS,
         },
     )
 
@@ -54,9 +55,10 @@ def ospool_export(
     actor: Annotated[Actor, Depends(require_admin)],
     weave_client: Annotated[WeaveClient, Depends(get_weave_client)],
     project_id: Annotated[list[uuid.UUID] | None, Form()] = None,
+    field: Annotated[list[str] | None, Form()] = None,
 ):
     try:
-        packet = funder_packet.build(db_session, weave_client, actor, project_ids=project_id or [])
+        packet = funder_packet.build(db_session, weave_client, actor, project_ids=project_id or [], fields=field or [])
         funder_packet.record_export(db_session, actor, packet)
     except FunderPacketUnavailable as exc:
         db_session.rollback()

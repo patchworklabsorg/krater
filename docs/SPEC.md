@@ -99,6 +99,11 @@ channel.
 - If Slack can't be reached, the submission fails with an error rather than guessing either way.
 - If the check fails, the user can still save drafts but sees "Join the Patchwork Labs Slack and accept the code of
   conduct to submit", with a link to Weave.
+- Weave decides who needs Slack at all (its directory's `slack_required` and `code_of_conduct_required`, weave#274).
+  A member of a sponsored project whose group waives the Patchwork Slack, such as HackBoston, passes the gate and
+  follows the review on the project page; channel invites skip them like any member Slack refuses. Someone Weave
+  exempts from the code of conduct alone still needs full membership, but Weave promotes guests only when they accept
+  the code, so Krater tells them to ask a Slack admin to make them a full member. A missing field means required.
 - Channel invites use the team's stored Slack ids (from Weave). Reviewers come from Weave's directory (`?role=reviewer`), with Weave's `slack_id`. Krater doesn't pre-filter
   guests: invites use Slack's `force` flag, and anyone Slack refuses (a guest, a deactivated or stale id) is skipped and
   logged, so one person's Slack account never stops the channel, the rest of the team's invites or the review message.
@@ -125,17 +130,21 @@ Rules (`krater.services.funder_packet`; how-to in [guides/share-with-ospool.md](
   with nothing ticked; each shows its status, the amounts requested and granted, and whether its whole team is
   verified US residents (the OSPool rule above). The PDF holds exactly the ticked projects. Maintainer decision
   (Oct 31, 2026): a manual selection replaced the automatic list of approved, all-resident teams.
-- **Which fields.** Title, summary (the one sentence), how the compute is used, status, the amount requested (the
-  approved revision's, not an amendment in review; for a project never approved, its newest revision's), the amount
-  granted (the ledger ceiling), the GPU estimate (card, count, hours, interruptible or on-demand), the team's names and
-  size, and whether every team member is a verified US resident. Names follow the gallery's setting for members under
-  18 (`gallery_minor_names`); a member Weave doesn't return is counted, not named. Nothing else: no emails, Patchwork
-  IDs, demographics, experience answers, affiliation details, write-up, repo, secrets or compute logs. Weave never
-  sends a member's country, so the packet gives US residency only.
+- **Which fields.** The admin ticks them on the page too (`funder_packet.FIELDS`); the title always goes. Ticked when
+  the page opens: summary (the one sentence), how the compute is used, where the training data comes from, status
+  (with the funding hold, if any), the amount requested (the approved revision's, not an amendment in review; for a
+  project never approved, its newest revision's), the amount granted (the ledger ceiling), the GPU estimate (card,
+  count, hours, interruptible or on-demand), the team's names and size, and whether every team member is a verified
+  US resident, and the OSPool usage of a project with an OSPool grant (see "OSPool grants"). Unticked until the
+  admin ticks them: the write-up, the experience answer, the contest or professor,
+  the open-source answer, the repo link and the finished-product estimate. Names follow the gallery's setting for
+  members under 18 (`gallery_minor_names`); a member Weave doesn't return is counted, not named. Nothing else, whatever
+  is ticked: no emails, Patchwork IDs, demographics, secrets or compute logs. Weave never sends a member's country, so
+  the packet gives US residency only. Maintainer decision (Nov 7, 2026): the admin picks the fields.
 - **Fresh.** The page may use the directory cache, and still lists every project when Weave is down. The export reads
   names and residency fresh, and makes no file when Weave can't be reached.
 - **Audit.** Each export writes a `funder_packet_export` `AuditEvent`: the admin, the funder, the format (`pdf`), and
-  the projects in the file. Admins may export packets that include their own projects: sharing grants nothing.
+  the projects and the fields in the file. Admins may export packets that include their own projects: sharing grants nothing.
 
 **Demographics gate.** Funders need demographic answers from the members they fund. Weave keeps the answers sealed
 and never sends them to Krater. Weave's directory record says `demographics_answered: true` once the member saved an
@@ -145,7 +154,7 @@ answer.
   submission goes through only when `demographics_answered` is true.
 - If not, the project page says why and links to Weave's form with `return_to` set to the project page. Weave sends
   the member back after they save. The draft stays as it was, and they submit again.
-- A 404 from the directory blocks, the same as the guardian gate. If Weave can't be reached, the submission fails
+- A 404 from the directory blocks, the same as the verification check. If Weave can't be reached, the submission fails
   with "try again".
 - A record without the field does not block. Krater logs a warning, the same choice as a record without `minor`.
 - Saving a draft and submitting a completion are not gated. Details: [weave-integration.md](weave-integration.md#demographics-gate).
@@ -212,8 +221,11 @@ The proposal form (`projects/_application.html`) asks, in three parts:
 - **The project.** A name; *What is your project, in a sentence normal people would understand?* (one sentence, 300
   characters); *What is it, what does it build on or depart from, and why does it matter?* (the write-up, 500 words at
   most); an optional repo link; *Are you doing this as part of a contest or with the help of a professor?* (neither, a
-  contest, a professor or both, and which).
-- **Compute.** *How are you going to use the compute?*, then two estimates priced at Vast's current rates: the **proof
+  contest, a professor or both, and which); *Is there anything that would stop you from open-sourcing the project?*
+  (a checkbox that starts at no; ticking it asks what would, which submitting then needs. The gallery shows
+  open-source work only, so reviewers see this early).
+- **Compute.** *How are you going to use the compute?*, *Where does your training data come from?* (the
+  Submission Criteria ask applicants to name their data sources), then two estimates priced at Vast's current rates: the **proof
   of concept** and the **finished product**. Each is a card and about how many hours (plus rental type and safety
   margin), and each can be overridden twice over: the team can give its own price per card-hour (also how a card
   Krater has no price for is estimated), and can request a different amount than the estimate. Reviewers see the
@@ -226,6 +238,10 @@ product's estimate), and the amount is the project's new total: the budget appro
 which the team can change, lower included. Drafts can be saved incomplete or over the
 word limits; submitting needs every answer and both estimates (`krater.services.projects.application_errors`). An
 amendment or a reopened draft starts with every answer of the revision it follows.
+
+Submitting a proposal or amendment also needs the box *I've read the Ganymede Submission Criteria, and my project
+meets them* ticked, next to the Submit button; it links the criteria document (`KRATER_SUBMISSION_CRITERIA_URL`). It
+is asked again on every submission, and when it was ticked is kept on the revision (`criteria_read_at`).
 
 ## Proposal & review workflow
 
@@ -241,10 +257,10 @@ amendment or a reopened draft starts with every answer of the revision it follow
    - rejects self-review (anyone on the team, or invited to it);
    - records the Review against the current revision;
    - asks `ApprovalPolicyService` whether the policy is now satisfied.
-4. **Approve.** When the policy is satisfied, Krater runs the guardian gate (see "Guardian verification"). If the gate
-   passes, the revision is approved, a `BudgetEntry(initial_approval)` is written, the project moves to `approved`, and
-   its team can run compute. If it fails, nothing is recorded and the reviewer sees which members need a verified
-   guardian.
+4. **Approve.** When the policy is satisfied, the revision is approved and the project moves to `approved`, whether
+   or not the team is verified yet. Its `BudgetEntry(initial_approval)` is written then if Weave clears every team
+   member, and is held until it does otherwise (see "Verification before funding"). A reviewer approving on the web
+   can instead approve it as *awaiting funding* or *awaiting 3rd party review* (see "Funding holds").
 5. **Reject.** A reason is required. The project moves to `changes_requested`, and the submitter edits and resubmits
    (step 2, same project, new revision).
 6. **Amend.** An `approved` project can have its scope or budget amended. This creates an `amendment` revision reviewed
@@ -372,53 +388,127 @@ Uploads use presigned URLs, and only objects from approved completion revisions 
   spend, through Quilt's patch API. The events go through an outbox table in the same transaction as the change.
   See [quilt-integration.md](quilt-integration.md).
 
-## Guardian verification
+## Verification before funding
 
-Added Oct 12, 2026, as a safeguard for Project Ganymede. Weave asks a parent or guardian to consent by email for a
-member under 18. An email link proves control of an inbox, not parenthood. So a Weave admin also records a
-stronger check in Weave: a signed guardian form plus a short call or video check with the guardian. The check
-lives in Weave, so every Patchwork Labs app can use it. Krater stores none of it.
+Changed Nov 6, 2026. A project can be submitted, reviewed and approved before anyone on the team is verified. What
+waits is everything that funds it: the budget its approval grants, and its compute. Krater adds no budget and starts
+nothing for it until Weave has cleared every team member. Weave owns both checks, so every Patchwork Labs app can use
+them, and Krater stores none of them (`krater.services.clearance`, `krater.services.grants`).
 
-**The rule.** Krater grants no budget to a project while a team member is a minor without a verified guardian,
-or while Weave's directory doesn't return a team member.
-
-- **The team** is the project's lead plus its accepted members, as the team stands when the grant is decided. Someone
-  who joins a project that already has budget is checked when they accept the invitation.
-- **The data** comes from Weave's directory record: `minor` (true when the member is under 18) and
-  `guardian_verified` (true when a Weave admin recorded the form and the call). A member blocks the grant when
-  `minor` is true and `guardian_verified` is not true.
-- **No directory record.** Weave's directory answers 404 for anyone the Krater app may not serve. That includes a
-  minor whose guardian consent is missing or was revoked. So a 404 blocks the grant, and the member is listed as
-  "not available in Weave (no access to Krater)".
-- **When.** Krater asks Weave's directory fresh at decision time, the same way it checks roles. It checks on
-  every grant: a proposal approval, an amendment approval that raises the ceiling, and an admin budget increase.
-  A rejection, a completion approval, a cut and a reclaim grant nothing, so they have no check.
-- **One rule for every path.** The gate is in `krater.services.projects` (through `krater.services.guardian`). The
-  web Approve button, the Slack Approve button and the admin overrides all reach it.
-- **No override.** This is a safety rule. An admin override can't bypass it, and Krater has no setting to turn it
-  off. A Weave admin verifies the guardian first, then a reviewer or admin approves again.
-- **Unknown age.** Older Weave versions send a record without `minor`. Weave ships the fields before Krater needs
-  them, so Krater treats that record as "not known to be a minor". It logs a warning with the member's Patchwork
-  ID, so an operator can see when Weave is behind.
-- **Weave down.** If Weave can't be reached, the grant fails with "try again". Krater never guesses.
-- **The project page** shows a notice to everyone who can see the project. The notice lists the members who need
-  to be cleared in Weave and the reason for each, and says that a Weave admin records a verified guardian on the
-  member's Weave admin page.
+- **ID verification.** Weave's identity verification (a document, reviewed by Weave's identity team). Weave's
+  directory sends `verification_status`: `needs_submission`, `pending`, `verified` or `ineligible`. Only `verified`
+  clears the member. A record without the field (an older Weave) doesn't clear them, and Krater logs a warning.
+- **A verified guardian, under 18.** Weave asks a parent or guardian to consent by email for a member under 18. An
+  email link proves control of an inbox, not parenthood, so a Weave admin also records a signed guardian form plus a
+  short call or video check, and the directory sends `guardian_verified: true`. A member with `minor: true` isn't
+  cleared until then. A record without `minor` is treated as "not known to be a minor", and Krater logs a warning.
+- **No directory record.** Weave's directory answers 404 for anyone the Krater app may not serve, a minor whose
+  guardian consent is missing or was revoked included. A 404 doesn't clear, and the member is listed as "not
+  available in Weave (no access to Krater)".
+- **The team** is the project's lead plus its accepted members, as it stands when the budget is released or compute
+  is asked for.
+- **The budget is held.** A proposal approval, an amendment approval that raises the ceiling, and an admin increase
+  write their `BudgetEntry` at once only if Weave clears the team right then. Otherwise the grant is held (a
+  `HeldGrant`): the approval goes through, but the ledger, and so Quilt's `budget.committed`, has nothing yet, and
+  the project's ceiling stays where it was ($0 for a new project). A worker task asks Weave every five minutes and
+  writes the held entry, with the approver as its actor, once every member is cleared. The project page shows the
+  held amount, and the project's Slack channel hears when it's held and when it's released. Each team member it waits
+  on also gets a Slack DM from the app with a link to Weave's verification page (the same words for everyone: Krater
+  doesn't keep why someone isn't cleared). Admins see every held grant at the top of `/admin`.
+  - **"Awaiting verification."** While its budget is held for verification, or Weave hasn't cleared its team, an
+    approved project's status reads *Approved · awaiting verification* on its page, the home page, `/admin`, Slack's
+    decision message and the funder packet. Nobody sets it: it goes once Weave clears the team. A funding hold
+    (see "Funding holds") shows instead while one is set. Nothing about verification stops a member submitting or a
+    reviewer approving; under-18s without guardian consent, and members not yet ID-verified, can do both.
+  - **One at a time.** While a grant is held, nothing else may change the project's budget: amendments can't be
+    started or approved, and admins can't adjust or reclaim it. The amount decided at approval stays right.
+  - **Cancelled** when the project is withdrawn or completed first. Nothing was granted, so there's nothing to give
+    back.
+  - A cut (an amendment that lowers the ceiling, an admin cut, a reclaim) grants nothing, so it never waits.
+- **What else waits.**
+  - Queueing a job or a box: web, API and CLI all go through `compute_jobs.submit_job`.
+  - Resuming a stopped box.
+  - The scheduler renting a machine for a queued job. A job queued before a member's verification lapsed waits in
+    the queue, with the reason on its page, and spends none of the provider's search quota.
+  - Someone joining a team whose project already has budget, since they could reach a machine that's running.
+- **What doesn't.** Submitting, reviewing and approving. A machine that's already running isn't stopped when a member's verification lapses, and the
+  scheduler still starts a machine that stopped itself after losing contact with Krater: both were rented while the
+  team was cleared.
+- **When.** Krater asks Weave's directory fresh at each of those points, the same way it checks roles. The scheduler
+  asks once per project per pass, and the release task once per held grant per run.
+- **No override.** This is a safety rule. An admin can't clear a member or release a held grant in Krater, and
+  Krater has no setting to turn it off.
+- **Weave down.** A grant decided then is held, and nothing starts, with "try again". Krater never guesses.
+- **The project page and the new-job page** list the members Weave hasn't cleared and the reason for each, and link
+  to Weave's verification page.
 
 ```mermaid
 flowchart TD
-    A[Approval, amendment increase or admin budget increase] --> B[Ask Weave's directory, fresh, for each team member]
-    B -->|Weave can't be reached| X[Refuse: try again]
-    B -->|404, no record| N[Refuse the grant and list the member: not available in Weave]
-    B --> C{minor: true?}
+    A[Grant budget, queue a job, resume a box, rent for a queued job, or join a funded team] --> B[Ask Weave's directory, fresh, for each team member]
+    B -->|Weave can't be reached| X[Hold: try again]
+    B -->|404, no record| N[Hold, and list the member: not available in Weave]
+    B --> V{verification_status: verified?}
+    V -->|no or missing| H[Hold, and list the member with the status]
+    V -->|yes| C{minor: true?}
     C -->|missing| L[Log a warning, not known to be a minor] --> OK
     C -->|false| OK[Member is clear]
     C -->|true| D{guardian_verified: true?}
     D -->|yes| OK
-    D -->|no or missing| R[Refuse the grant and list the member]
+    D -->|no or missing| R[Hold, and list the member]
     OK --> E{Every member clear?}
-    E -->|yes| G[Grant: write the BudgetEntry]
+    E -->|yes| G[Write the budget entry, or start]
 ```
+
+Until Nov 6, 2026 the guardian check blocked the approval itself (Oct 12, 2026), and ID verification wasn't checked.
+
+## Funding holds
+
+Some projects are worth approving before Patchwork can pay for them: the money isn't there yet, or a third party
+(a funder such as OSPool) has to review the project first. A reviewer approving on the web, or an admin deciding, picks
+*Fund it now?*: yes, or approve it as **awaiting funding** or **awaiting 3rd party review** (`Project.funding_hold`,
+`krater.services.funding_holds`). Approvals from Slack can't pick one. With more than one approval needed, a hold
+any approving reviewer asked for applies once the approval counts.
+
+While the hold is set:
+- the approval counts and the project is `approved`; the team, reviewers and `/admin` see *Approved · awaiting
+  funding* (or *· awaiting 3rd party review*);
+- every grant (the approval's, an amendment's, an admin increase) is held as a `HeldGrant` whatever the team's
+  verification, so nothing reaches the ledger and Quilt hears of the budget only once it's granted;
+- no compute starts: new jobs and box resumes are refused, and jobs already queued wait. Machines already running
+  are left alone, and budget already granted isn't taken back.
+
+An admin sets, changes or clears the hold on any approved project from its page, with a reason: an `AuditEvent`
+(`admin_set_funding_hold`, `admin_clear_funding_hold`) and a post in the project's channel. Clearing it releases the
+held budget at once if Weave clears the team, and otherwise leaves it on the usual verification hold. An admin can't
+clear the hold on their own project, since that would fund it; another admin has to.
+
+## OSPool grants
+
+Once OSPool approves Patchwork's projects, a few small grants can run on the OSPool instead of on Krater's dollars
+(`krater.services.ospool_grants`; how-to in [guides/ospool-grants.md](guides/ospool-grants.md)). Maintainer decisions
+(Nov 7, 2026): one registered OSPool project name per grant (`PatchworkLabs_Ganymede01`, say), with an adult Patchwork
+staff member as its PI; the team runs with its own OSG accounts; Krater only reports, with no cap and no alerts, and
+values the usage at what renting the GPU would have cost.
+
+- **Recording.** An admin records the grant on an approved project, from its page: the OSPool project name, the day
+  usage counts from (UTC), the GPU to value it as, and optionally a price per GPU-hour with where it comes from (a
+  neocloud's posted price). It writes an `AuditEvent` (`admin_record_ospool_grant`) and a post in the project's channel.
+  Refused unless every team member is a verified US resident (asked fresh; Weave down refuses), the project holds no
+  Krater budget (reclaim it first), and the name isn't another grant's. The project's pending budget hold is cancelled
+  and its funding hold cleared, so no dollars reach the ledger or Quilt: OSPool capacity is free, and every ledger
+  entry would become cash through Quilt. An admin can't record one on their own project. A project has one grant.
+- **Usage.** A daily worker task (`ospool_usage_import`, `KRATER_OSPOOL_USAGE_IMPORT_CRON`) reads each grant's usage
+  per UTC day from OSG's public accounting (GRACC, `krater.ospool.accounting`): GPU-hours, core-hours and jobs of the
+  user's jobs (`ResourceType: Payload`, never the pilots that ran them), from the summary index only, which names no
+  person. OSG corrects recent days, so each import reads the last 35 again and replaces their hours. Two failed days
+  in a row open an admin alert. Krater sends OSG nothing.
+- **Value.** Each day is valued at the grant's price, else Krater's own on-demand price for the GPU (its Vast samples,
+  else the catalog). A day keeps the price it was first valued at; a day without a price gets one when Krater has
+  one. An admin changes the GPU or price from the project page (`admin_change_ospool_valuation`), for later days only.
+  OSG doesn't record which GPU a job used, so the value is an estimate, shown as one.
+- **Display.** The project shows *Approved · OSPool*. Its page has an OSPool card (totals, worth, the last 30 days
+  with usage, when it was last read), seen by anyone who can see the project. `/admin` lists every grant. The funder
+  packet's *OSPool usage* field (ticked at first) adds the totals and worth for a project with a grant.
 
 ## Admin overrides
 
@@ -426,6 +516,8 @@ At any point an admin can:
 - approve or reject at either review stage, bypassing `ApprovalPolicy`;
 - adjust an approved project's budget up or down, or reclaim unspent funds;
 - set a project's own hourly cap per rented machine, or put it back to the default;
+- set, change or clear a project's funding hold (see "Funding holds");
+- record an OSPool grant, or change what its usage is valued at (see "OSPool grants");
 - change Krater Compute's policy numbers, globally or for one project (`/admin/compute`);
 - withdraw a project.
 
@@ -434,11 +526,26 @@ can't decide it, add to its budget or raise its hourly cap, so an admin can neve
 else signing off. Another
 admin, or the normal review, has to do it. Cutting or reclaiming its budget and withdrawing it are still allowed.
 
-An override also can't bypass the guardian gate (see "Guardian verification"). An admin approval or budget increase
-fails the same way a reviewer approval does while a team member needs a verified guardian.
+No override clears a team member (see "Verification before funding"): the budget an admin approval or increase
+grants is held, and the compute waits, until Weave clears the team.
 
 Every override writes an `AuditEvent` with who, what, when and a required reason. Budget changes also write a
 `BudgetEntry`. Overrides are posted in the project's channel so reviewers can see them.
+
+**Admin console.** The navigation bar shows an Admin link to anyone whose cached roles include `ganymede:admin`.
+That check is for display only: every `/admin` page still checks Weave fresh. Read-only views:
+- `/admin` has search (by title or the lead's Patchwork ID) and a status filter on the project table, and the latest
+  audit events.
+- `/admin/activity` lists every `AuditEvent`, newest first and paged. With `?project=`, it shows that project's
+  events and its `BudgetEntry` ledger, linked from the project page's Admin card.
+- `/admin/live` lists the jobs and boxes queued or holding a machine on every project, each linked to its job page.
+
+**Container images.** `/admin/images` lists every image members have named, with the digest each machine got, and
+inspects one from its registry: its config and build history (`docs/compute/images.md`).
+
+**Admin SSH access to a box.** From a running box's job page an admin can get SSH access for 2 hours, with a reason
+(`docs/compute/runner.md` "Admin access"). It's an override like the others: an `AuditEvent`, a post in the project's
+channel, and a banner on the job page for the team. Any admin can end it early.
 
 ## Deployment architecture
 

@@ -2,6 +2,10 @@
 
 Full hourly cost is the GPU price (the bid for an interruptible rental, `dph_base` on demand) plus the job's disk at
 the host's storage price. It is what the target, the max price and the project's hourly cap are all compared with.
+
+Data transfer is billed per GB on top of it, at the host's own prices. No host above the transfer price cap is ever
+chosen, and when the member estimated the data their job moves, the ranking adds what that would cost at each host,
+spread over the job's max runtime.
 """
 
 from __future__ import annotations
@@ -28,6 +32,36 @@ class Choice:
         return self.gpu_microusd + self.disk_microusd
 
 
+@dataclass(frozen=True)
+class Transfer:
+    """The data a job is expected to move, for ranking hosts by what it would cost there. Zero GB both ways
+    (no estimate) ranks by the hourly cost alone, with transfer prices only breaking ties."""
+
+    in_gb: int = 0
+    out_gb: int = 0
+    runtime_hours: Decimal = Decimal(1)
+
+    def cost_microusd(self, offer: Offer) -> int:
+        return self.in_gb * offer.transfer_in_microusd_per_gb + self.out_gb * offer.transfer_out_microusd_per_gb
+
+    def hourly_microusd(self, offer: Offer) -> int:
+        """The estimated transfer cost at `offer`, spread over the runtime."""
+        return int(Decimal(self.cost_microusd(offer)) / max(self.runtime_hours, Decimal("0.01")))
+
+
+NO_TRANSFER = Transfer()
+
+
+def within_transfer_cap(offer: Offer, cap_microusd_per_gb: int | None) -> bool:
+    """Whether `offer`'s prices for data in and out are both at or under the cap (`None`: no cap)."""
+    if cap_microusd_per_gb is None:
+        return True
+    return (
+        offer.transfer_in_microusd_per_gb <= cap_microusd_per_gb
+        and offer.transfer_out_microusd_per_gb <= cap_microusd_per_gb
+    )
+
+
 def bid_for(offer: Offer, *, margin_percent: int, max_gpu: Decimal) -> Decimal | None:
     """The offer's minimum bid plus the margin, rounded up to `BID_QUANTUM`, and never above `max_gpu`. `None` when
     even the minimum bid is over `max_gpu`."""
@@ -42,9 +76,19 @@ def bid_for(offer: Offer, *, margin_percent: int, max_gpu: Decimal) -> Decimal |
 
 
 def price(
-    offer: Offer, *, rental_type: RentalType, disk_gb: int, margin_percent: int, max_microusd: int
+    offer: Offer,
+    *,
+    rental_type: RentalType,
+    disk_gb: int,
+    margin_percent: int,
+    max_microusd: int,
+    transfer_cap_microusd_per_gb: int | None = None,
 ) -> Choice | None:
-    """What renting `offer` would cost per hour, or `None` if it can't be rented within `max_microusd`."""
+    """What renting `offer` would cost per hour, or `None` if it can't be rented within `max_microusd`, or its
+    data transfer prices are over the cap. The cap is checked here as well as in the search: an offer Vast's filter
+    let through is never rented."""
+    if not within_transfer_cap(offer, transfer_cap_microusd_per_gb):
+        return None
     disk_microusd = usd_to_microusd(offer.disk_hourly(disk_gb))
     if rental_type == "bid":
         max_gpu = microusd_to_usd(max_microusd - disk_microusd)
@@ -59,14 +103,19 @@ def price(
     return choice if choice.full_microusd <= max_microusd else None
 
 
-def _perf_per_dollar(choice: Choice) -> float:
+def _perf_per_dollar(choice: Choice, transfer: Transfer) -> float:
     # Vast reports deep-learning performance per dollar of its own dph_total; turn it back into performance and
-    # divide by what Krater would actually pay.
+    # divide by what Krater would actually pay, the expected transfer included.
     offer = choice.offer
-    if not offer.dlperf_per_dphtotal or choice.full_microusd <= 0:
+    paid = choice.full_microusd + transfer.hourly_microusd(offer)
+    if not offer.dlperf_per_dphtotal or paid <= 0:
         return 0.0
     dlperf = offer.dlperf_per_dphtotal * float(offer.dph_total)
-    return dlperf / choice.full_microusd
+    return dlperf / paid
+
+
+def _transfer_tiebreak(offer: Offer) -> int:
+    return offer.transfer_in_microusd_per_gb + offer.transfer_out_microusd_per_gb
 
 
 def choose(
@@ -79,9 +128,12 @@ def choose(
     max_microusd: int,
     several_models: bool,
     exclude: set[str] = frozenset(),  # type: ignore[assignment]
+    transfer_cap_microusd_per_gb: int | None = None,
+    transfer: Transfer = NO_TRANSFER,
 ) -> Choice | None:
-    """The offer to rent: every offer whose full hourly cost is at or under `limit_microusd` (and so under the max),
-    then the cheapest, or, when the job allows several GPU models, the best performance per dollar."""
+    """The offer to rent: every offer whose full hourly cost is at or under `limit_microusd` (and so under the max)
+    and whose transfer prices are under the cap, then the cheapest with the expected transfer counted, or, when the
+    job allows several GPU models, the best performance per dollar."""
     candidates = []
     for offer in offers:
         if offer.id in exclude:
@@ -92,22 +144,45 @@ def choose(
             disk_gb=disk_gb,
             margin_percent=margin_percent,
             max_microusd=min(max_microusd, limit_microusd),
+            transfer_cap_microusd_per_gb=transfer_cap_microusd_per_gb,
         )
         if choice is not None:
             candidates.append(choice)
     if not candidates:
         return None
     if several_models:
-        return max(candidates, key=lambda c: (_perf_per_dollar(c), -c.full_microusd))
-    return min(candidates, key=lambda c: (c.full_microusd, c.offer.id))
+        return max(
+            candidates,
+            key=lambda c: (_perf_per_dollar(c, transfer), -c.full_microusd, -_transfer_tiebreak(c.offer)),
+        )
+    return min(
+        candidates,
+        key=lambda c: (c.full_microusd + transfer.hourly_microusd(c.offer), _transfer_tiebreak(c.offer), c.offer.id),
+    )
 
 
-def cheapest(offers: list[Offer], *, rental_type: RentalType, disk_gb: int, margin_percent: int) -> int | None:
-    """The lowest full hourly cost Krater would pay among `offers` (bid margin included), for telling a waiting
-    member where prices are."""
+def cheapest(
+    offers: list[Offer],
+    *,
+    rental_type: RentalType,
+    disk_gb: int,
+    margin_percent: int,
+    transfer_cap_microusd_per_gb: int | None = None,
+) -> int | None:
+    """The lowest full hourly cost Krater would pay among `offers` (bid margin included, hosts over the transfer
+    cap left out), for telling a waiting member where prices are."""
     costs = [
         c.full_microusd
         for o in offers
-        if (c := price(o, rental_type=rental_type, disk_gb=disk_gb, margin_percent=margin_percent, max_microusd=10**12))
+        if (
+            c := price(
+                o,
+                rental_type=rental_type,
+                disk_gb=disk_gb,
+                margin_percent=margin_percent,
+                max_microusd=10**12,
+                transfer_cap_microusd_per_gb=transfer_cap_microusd_per_gb,
+            )
+        )
     ]
     return min(costs) if costs else None

@@ -10,22 +10,29 @@ whole team is verified US residents in Weave. The rules are in [SPEC.md](../SPEC
 2. The page lists every project and proposal, newest first, with its status, the amounts requested and granted, and
    its team's US residency. Nothing is ticked.
 3. Tick the projects to send. **Open** shows a project's full page.
-4. Choose **Download PDF**.
-5. Send the file to OSPool yourself. Krater doesn't send it, and OSPool needs no Krater account.
+4. Under **What to include about each project**, tick the fields to send (see below).
+5. Choose **Download PDF**.
+6. Send the file to OSPool yourself. Krater doesn't send it, and OSPool needs no Krater account.
 
-Each download asks Weave again for the teams' names and residency. If Weave can't be reached, Krater makes no file
-and says so; try again in a minute. Each download is recorded in the audit log with your Patchwork ID and the
-projects in it.
+Each download asks Weave again for the teams' names and residency (when those fields are ticked). If Weave can't be
+reached, Krater makes no file and says so; try again in a minute. Each download is recorded in the audit log with your
+Patchwork ID, the projects and the fields in it.
 
 ## What is in it
 
-For each ticked project: its title, its one-sentence summary, how the team will use the compute, its status, the
-amount requested and granted, the GPU estimate from the application, the team's names and size, and whether every
-team member is a verified US resident. Team members under 18 are named as the gallery setting on the admin page says
-(full name, first name, or not named).
+For each ticked project, its title and the fields you tick. Ticked when the page opens: the one-sentence summary,
+how the team will use the compute, where its training data comes from, its status (with *awaiting funding* or
+*awaiting 3rd party review* when it's held), the amount requested and granted, the GPU estimate from the application,
+the team's names and size, whether every team member is a verified US resident, and, for a project with an OSPool
+grant, its OSPool usage to date (see [ospool-grants.md](ospool-grants.md)).
 
-Never in it: emails, Patchwork IDs, demographics answers (Weave keeps those sealed), the experience and affiliation
-answers, the write-up, project secrets or compute logs. Weave doesn't give Krater a member's country, so the PDF says
+Unticked until you tick them, since they're the team's own answers: the write-up, the experience answer, the contest
+or professor, whether anything would stop them open-sourcing it, the repo link, and the finished-product estimate.
+
+Team members under 18 are named as the gallery setting on the admin page says (full name, first name, or not named).
+
+Never in it, whatever you tick: emails, Patchwork IDs, demographics answers (Weave keeps those sealed), project secrets
+or compute logs. Weave doesn't give Krater a member's country, so the PDF says
 only whether every member is a verified US resident.
 
 ## A team isn't OSPool-ready

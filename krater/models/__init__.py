@@ -1,5 +1,6 @@
 """Every Krater ORM model and enum, re-exported for convenient importing (and for Alembic)."""
 
+from krater.models.admin_box_access import AdminBoxAccess
 from krater.models.approval_policy import ApprovalPolicy
 from krater.models.audit_event import AuditEvent
 from krater.models.budget_entry import BudgetEntry
@@ -13,6 +14,7 @@ from krater.models.enums import (
     ComputeJobKind,
     ComputeJobState,
     ComputeOutbid,
+    FundingHold,
     GalleryMinorNames,
     ProjectStatus,
     QuiltOutboxState,
@@ -24,7 +26,10 @@ from krater.models.enums import (
 )
 from krater.models.gpu_price import GpuPrice
 from krater.models.gpu_price_sample import GpuPriceSample
+from krater.models.held_grant import HeldGrant
+from krater.models.image_inspection import ImageInspection
 from krater.models.ops_alert import OpsAlert, WorkerHeartbeat
+from krater.models.ospool_grant import OspoolGrant, OspoolUsageDay
 from krater.models.project import Project
 from krater.models.project_member import ProjectMember
 from krater.models.project_revision import ProjectRevision
@@ -40,6 +45,7 @@ from krater.models.user import User
 from krater.models.vast_search_quota import VastSearchQuota
 
 __all__ = [
+    "AdminBoxAccess",
     "ApprovalPolicy",
     "ApprovalStage",
     "AuditEvent",
@@ -57,7 +63,11 @@ __all__ = [
     "GalleryMinorNames",
     "GpuPrice",
     "GpuPriceSample",
+    "HeldGrant",
+    "ImageInspection",
     "OpsAlert",
+    "OspoolGrant",
+    "OspoolUsageDay",
     "Project",
     "ProjectComputeSettings",
     "ProjectMember",
@@ -67,6 +77,7 @@ __all__ = [
     "QuiltOutbox",
     "QuiltOutboxState",
     "Review",
+    "FundingHold",
     "ReviewDecision",
     "ReviewSource",
     "RevisionKind",

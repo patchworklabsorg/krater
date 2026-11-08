@@ -20,7 +20,8 @@ name, the bot scopes and interactivity (steps 1, 2 and 5 below). Then do steps 3
    - `groups:read` -- find a project's channel by name (`conversations.list`) when creating it answers
      `name_taken`, e.g. after a half-finished earlier attempt
    - `groups:write.invites` -- invite the submitter, credited builders and reviewers
-   - `chat:write` -- post/update the review message and admin-override notices
+   - `chat:write` -- post/update the review message and admin-override notices, and DM a team member whose
+     verification a held budget waits on (posted to their Slack user id, so no `im:write`)
    - `users:read` -- look up a user's guest/restricted/deleted status (`users.info`) for the Slack membership
      gate, when Weave doesn't send `slack_member`
 3. **Install App** (or **Install to Workspace**) at the top of that same page. Copy the **Bot User OAuth
@@ -35,7 +36,8 @@ name, the bot scopes and interactivity (steps 1, 2 and 5 below). Then do steps 3
 6. Invite the bot to a channel you'll use as the master feed (`docs/SPEC.md`: "one top-level post per new
    submission"), then get that channel's id (right-click it in Slack -> **View channel details** -> the
    id is at the bottom, `C0123456789`) -> `KRATER_SLACK_FEED_CHANNEL_ID`.
-7. Make a channel for admin alerts (private is best: alerts quote error messages), invite the bot to it, and copy
+7. **App Home** -> **Show Tabs** -> turn the **Messages Tab** on, so members can read the app's DMs.
+8. Make a channel for admin alerts (private is best: alerts quote error messages), invite the bot to it, and copy
    its id the same way -> `KRATER_SLACK_ALERTS_CHANNEL_ID`. Left blank, the worker logs its alerts instead.
 
 The bot does **not** need to be manually invited to project channels -- it creates them itself
