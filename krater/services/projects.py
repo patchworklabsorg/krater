@@ -239,6 +239,9 @@ def update_draft(
     draft = project.current_revision
     if draft is None or draft.submitted_at is not None:
         raise InvalidState("This project has no draft to edit right now.")
+    # A project withdrawn (or completed) with a draft still open keeps it as history, not as something to edit.
+    if project.status in _TERMINAL_STATUSES:
+        raise InvalidState(f"This project is {project.status.value}, so its draft can't be edited.")
 
     if title is not None:
         project.title = title

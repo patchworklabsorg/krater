@@ -845,3 +845,22 @@ def test_the_gallery_preview_needs_the_csrf_token(
     response = client.post(f"/projects/{project.id}/gallery-preview", data={"title": "x"})
 
     assert response.status_code == 403
+
+
+def test_a_project_withdrawn_as_a_draft_offers_no_editing(
+    client: TestClient, login_as, create_project, db_session: Session
+) -> None:
+    member = login_as(MEMBER_SUB)
+    project = create_project(member)
+    detail = client.get(f"/projects/{project.id}")
+    csrf = get_csrf_token(detail.text)
+    client.post(f"/projects/{project.id}/withdraw", data={"csrf_token": csrf}, follow_redirects=False)
+    db_session.refresh(project)
+    assert project.status is ProjectStatus.WITHDRAWN
+
+    page = client.get(f"/projects/{project.id}").text
+    assert "Edit draft" not in page
+    assert "Submit for review" not in page
+    edit = client.get(f"/projects/{project.id}/edit", follow_redirects=False)
+    assert edit.status_code == 303
+    assert edit.headers["location"].endswith(f"/projects/{project.id}")

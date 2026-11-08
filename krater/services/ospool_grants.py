@@ -106,16 +106,18 @@ def record_grant(
     *,
     project: Project,
     ospool_project_name: str,
-    counted_from: date,
+    counted_from: date | None,
     gpu_name: str,
     rate_override_microusd: int | None,
     rate_note: str,
     reason: str,
     weave_client: WeaveClient,
     now: datetime,
+    form_errors: dict[str, str] | None = None,
 ) -> OspoolGrant:
     """Admin: record that the OSPool funds `project` under `ospool_project_name`. The caller commits, then posts the
-    change in the project's channel."""
+    change in the project's channel. `form_errors` are the form's own (a price or day it couldn't read), raised with
+    the rest so the admin sees every problem at once; `counted_from` is `None` when the form's day couldn't be read."""
     if not actor.is_admin:
         raise NotAllowed("Only an admin may record an OSPool grant.")
     if teams.has_conflict(project, actor.user.id):
@@ -137,8 +139,11 @@ def record_grant(
         )
     elif session.scalar(sa.select(OspoolGrant.id).where(OspoolGrant.ospool_project_name == name)) is not None:
         errors["ospool_project_name"] = "Another project's grant already uses that OSPool project name."
-    if counted_from > now.date():
+    if counted_from is None:
+        errors["counted_from"] = "Enter the day usage counts from."
+    elif counted_from > now.date():
         errors["counted_from"] = "Usage can't count from a day that hasn't come yet."
+    errors.update(form_errors or {})
     if errors:
         raise ValidationFailed(errors)
 
@@ -199,8 +204,10 @@ def update_valuation(
     rate_note: str,
     reason: str,
     now: datetime,
+    form_errors: dict[str, str] | None = None,
 ) -> None:
-    """Admin: change the GPU and price a grant's usage is valued at. Days already valued keep their price."""
+    """Admin: change the GPU and price a grant's usage is valued at. Days already valued keep their price.
+    `form_errors` are the form's own, raised with the rest."""
     if not actor.is_admin:
         raise NotAllowed("Only an admin may change an OSPool grant's valuation.")
     if teams.has_conflict(grant.project, actor.user.id):
@@ -215,6 +222,7 @@ def update_valuation(
         reason=reason,
         now=now,
     )
+    errors.update(form_errors or {})
     if errors:
         raise ValidationFailed(errors)
     unchanged = (

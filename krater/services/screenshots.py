@@ -43,7 +43,7 @@ from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
-from krater.models import Project, ProjectRevision, RevisionKind
+from krater.models import Project, ProjectRevision, ProjectStatus, RevisionKind
 from krater.services import teams
 from krater.services.actor import Actor
 from krater.services.errors import InvalidState, NotAllowed, ValidationFailed
@@ -114,6 +114,8 @@ def _require_completion_draft(actor: Actor, project: Project) -> ProjectRevision
     draft = project.current_revision
     if draft is None or draft.submitted_at is not None or draft.kind is not RevisionKind.COMPLETION:
         raise InvalidState("Images can only be added to a completion draft.")
+    if project.status in (ProjectStatus.COMPLETED, ProjectStatus.WITHDRAWN):
+        raise InvalidState(f"This project is {project.status.value}, so its images can't change.")
     return draft
 
 
