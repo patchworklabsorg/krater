@@ -29,6 +29,8 @@ from krater.weave.types import WeaveIdentity, WeaveUser
 
 #: The fake client_credentials token `quilt_token` returns. A real Quilt refuses it (Weave never issued it).
 STUB_QUILT_TOKEN = "stub-quilt-token"
+#: The fake client_credentials token `stash_token` returns. A real Stash refuses it too.
+STUB_STASH_TOKEN = "stub-stash-token"
 #: The stub accepts `<prefix>:<sub>` as a Krater CLI token for that fixture user.
 STUB_CLI_TOKEN_PREFIX = "stub-cli-token"
 
@@ -71,6 +73,8 @@ class StubWeaveClient:
         # How often `quilt_token` / `invalidate_quilt_token` were called, for tests.
         self.quilt_token_requests = 0
         self.quilt_token_invalidations = 0
+        self.stash_token_requests = 0
+        self.stash_token_invalidations = 0
         for entry in raw_users:
             raw_roles = entry.get("roles")
             user = StubUser(
@@ -130,6 +134,13 @@ class StubWeaveClient:
 
     def invalidate_quilt_token(self) -> None:
         self.quilt_token_invalidations += 1
+
+    def stash_token(self) -> str:
+        self.stash_token_requests += 1
+        return STUB_STASH_TOKEN
+
+    def invalidate_stash_token(self) -> None:
+        self.stash_token_invalidations += 1
 
     def cli_token_sub(self, token: str) -> str | None:
         prefix = f"{STUB_CLI_TOKEN_PREFIX}:"

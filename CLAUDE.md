@@ -6,8 +6,9 @@ Guidance for Claude Code (and humans) working in this repo.
 
 Krater is the Project Ganymede portal (Patchwork Labs): proposal review, compute budget allocation/enforcement, running
 members' compute on Vast.ai (Krater Compute), and a public gallery. **Read `docs/SPEC.md` before changing behavior.** Integration contracts live in
-`docs/weave-integration.md` (sign-in and roles), `docs/compute/` (renting machines and enforcing budgets) and
-`docs/quilt-integration.md` (submission and budget events to Quilt).
+`docs/weave-integration.md` (sign-in and roles), `docs/compute/` (renting machines and enforcing budgets),
+`docs/quilt-integration.md` (submission and budget events to Quilt) and `docs/stash-integration.md` (archiving each
+submitted link in Stash).
 
 ## Stack
 
@@ -42,6 +43,7 @@ krater/
   services/        domain logic (framework-free): approval_policy, projects, budget, audit, users
   weave/           WeaveClient protocol: OIDC sign-in, directory API, role mapping, dev stub
   quilt/           Quilt patch API client and the outbox sender (the only code that knows Quilt's URLs)
+  stash/           Stash archive API client and its sender (the only code that knows Stash's URLs)
   providers/       the compute-provider seam: capabilities, protocol, errors, registry (docs/compute/providers.md)
   vast/            Vast.ai client and its in-memory fake (the only code that knows Vast's URLs; worker only)
   compute/         Krater Compute: scheduler, spend, reconciliation, runner API, launch (docs/compute/)
@@ -77,12 +79,16 @@ tests/             mirrors krater/ layout
   Patchwork ID (`docs/weave-integration.md` "Member data").
 - **All Weave access goes through `krater.weave`.** Nothing else imports httpx for Weave or knows Weave's URLs.
   Krater asks for `openid profile email groups roles slack`, and calls the directory with a client_credentials token
-  of its own app (scope `directory`). Its token for Quilt (scope `quilt`) comes from `WeaveClient.quilt_token`.
+  of its own app (scope `directory`). Its token for Quilt (scope `quilt`) comes from `WeaveClient.quilt_token`, and
+  its token for Stash (scope `stash`) from `WeaveClient.stash_token`.
 - **All Vast access goes through `krater.vast`**, and only from the worker: the organization's Vast key never
   reaches the portal or a member's machine. Every Vast path ends with a slash (without it Vast answers 308 and does
   nothing); see `docs/compute/vast-api.md`.
 - **Events for Quilt go through the outbox.** A service that changes a project's status, title, ledger or spend
   calls `krater.services.quilt_events.sync_project` in the same transaction. Never post to Quilt from a request.
+- **Archives go through `stash_archives`.** A service that submits a revision calls
+  `krater.services.stash_archives.sync_project` in the same transaction, and the worker asks Stash later. Never call
+  Stash from a request, and never fail a submission because Stash is down (`docs/stash-integration.md`).
 - **Funding waits for verification** (`krater.services.clearance`): a team member is cleared only with Weave's ID
   verification (`verification_status: "verified"`), a `guardian_verified` if `minor`, and a directory record.
   Approval doesn't wait, but the budget it grants does: grant budget only through `krater.services.grants.grant`,

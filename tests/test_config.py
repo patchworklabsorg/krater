@@ -172,6 +172,22 @@ def test_production_rejects_a_plain_http_quilt_url() -> None:
         Settings(**_PRODUCTION_READY, quilt_url="http://quilt.patchworklabs.example")
 
 
+def test_production_accepts_a_blank_or_https_stash_url() -> None:
+    Settings(**_PRODUCTION_READY, stash_url="")
+    Settings(**_PRODUCTION_READY, stash_url="https://stash.patchworklabs.example")
+
+
+def test_production_rejects_a_plain_http_stash_url() -> None:
+    with pytest.raises(ValueError, match="KRATER_STASH_URL"):
+        Settings(**_PRODUCTION_READY, stash_url="http://stash.patchworklabs.example")
+
+
+def test_stash_is_off_by_default() -> None:
+    settings = Settings()
+    assert settings.stash_url == ""
+    assert (settings.stash_timeout_seconds, settings.stash_batch_size) == (10.0, 30)
+
+
 def test_a_final_warning_at_or_below_the_first_turns_the_final_warning_off() -> None:
     assert Settings().budget_warn_percents == (80, 95)
     assert Settings(budget_warn_percent=95).budget_warn_percents == (95,)

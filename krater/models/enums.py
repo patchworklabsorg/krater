@@ -96,6 +96,15 @@ class QuiltOutboxState(enum.StrEnum):
     SKIPPED = "skipped"  # never sent: nothing to tell Quilt, or an admin dismissed it
 
 
+class StashArchiveState(enum.StrEnum):
+    """Where a `StashArchive` row is in its request to Stash. See `docs/stash-integration.md`."""
+
+    PENDING = "pending"  # not asked yet, or waiting for a retry
+    ARCHIVED = "archived"  # Stash accepted the request: `archive_id` and `page_url` are set
+    FAILED = "failed"  # Stash refused the URL for good (422); no retry
+    SKIPPED = "skipped"  # never asked: the project was withdrawn before Stash was asked
+
+
 class ApprovalStage(enum.StrEnum):
     PROPOSAL = "proposal"
     COMPLETION = "completion"

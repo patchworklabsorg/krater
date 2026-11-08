@@ -9,7 +9,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from krater.config import Settings
-from krater.models import GpuPrice, OpsAlert, QuiltOutbox, QuiltOutboxState
+from krater.models import GpuPrice, OpsAlert, QuiltOutbox, QuiltOutboxState, StashArchive, StashArchiveState
 from krater.services import ops_alerts
 from krater.slack.errors import SlackRequestFailedError
 from krater.slack.fake import FakeSlackClient
@@ -105,6 +105,31 @@ def test_quilts_backlog_and_refused_events_open_an_alert(db_session: Session) ->
     assert "trying to send an event since" in _texts(slack)[-1]
     db_session.execute(sa.update(QuiltOutbox).values(state=QuiltOutboxState.SENT))
     assert _watch(db_session, slack, NOW + timedelta(minutes=5), settings) == ["quilt_backlog"]
+    assert "cleared" in _texts(slack)[-1]
+
+
+def test_stashs_backlog_opens_an_alert(db_session: Session, member) -> None:
+    from tests.factories import new_project
+
+    _fresh_prices(db_session)
+    slack = FakeSlackClient()
+    settings = Settings(stash_url="https://stash.example")
+    project = new_project(db_session, member, title="Rover", write_up="A rover.", budget_requested_cents=1_000)
+    row = StashArchive(project_id=project.id, url="https://example.com/repo", source="repo_url")
+    db_session.add(row)
+    db_session.flush()
+
+    # Without a Stash URL nothing is sent yet, so waiting rows are expected.
+    assert _watch(db_session, slack, NOW) == []
+    # Never tried: archiving was just switched on, and it goes out within minutes.
+    assert _watch(db_session, slack, NOW, settings) == []
+    row.first_attempted_at = NOW - ops_alerts.QUILT_BACKLOG_AGE + timedelta(minutes=1)
+    assert _watch(db_session, slack, NOW, settings) == []
+    row.first_attempted_at = NOW - ops_alerts.QUILT_BACKLOG_AGE - timedelta(minutes=1)
+    assert _watch(db_session, slack, NOW, settings) == ["stash_backlog"]
+    assert "trying to archive a submitted link" in _texts(slack)[-1]
+    row.state = StashArchiveState.ARCHIVED
+    assert _watch(db_session, slack, NOW + timedelta(minutes=5), settings) == ["stash_backlog"]
     assert "cleared" in _texts(slack)[-1]
 
 

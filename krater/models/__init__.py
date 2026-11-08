@@ -24,6 +24,7 @@ from krater.models.enums import (
     RevisionKind,
     RevisionOutcome,
     SpendSource,
+    StashArchiveState,
 )
 from krater.models.gpu_price import GpuPrice
 from krater.models.gpu_price_sample import GpuPriceSample
@@ -41,6 +42,7 @@ from krater.models.site_settings import SiteSettings
 from krater.models.slack_notification import SlackNotification
 from krater.models.spend_snapshot import SpendSnapshot
 from krater.models.ssh_key import UserSshKey
+from krater.models.stash_archive import StashArchive
 from krater.models.storage_reservation import StorageReservation
 from krater.models.user import User
 from krater.models.vast_search_quota import VastSearchQuota
@@ -89,6 +91,8 @@ __all__ = [
     "SpendReconciliation",
     "SpendSnapshot",
     "SpendSource",
+    "StashArchive",
+    "StashArchiveState",
     "StorageReservation",
     "User",
     "VastSearchQuota",

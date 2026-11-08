@@ -215,8 +215,9 @@ itself starts at boot. `migrate` runs once per `up` and is safe to re-run.
 
 ### Alerts
 
-The worker posts to `KRATER_SLACK_ALERTS_CHANNEL_ID` when something keeps failing: Quilt delivery, Slack tasks, the
-compute scheduler, spend reconciliation, background jobs ending in errors, or prices not refreshed for two days
+The worker posts to `KRATER_SLACK_ALERTS_CHANNEL_ID` when something keeps failing: Quilt delivery, Stash archiving,
+Slack tasks, the compute scheduler, spend reconciliation, background jobs ending in errors, or prices not refreshed
+for two days
 (`krater/services/ops_alerts.py`). It posts again every 6 hours while a problem lasts, and once when it clears.
 
 It can't report its own death, so set up one check outside Krater (an uptime service, or the lab's monitoring) on

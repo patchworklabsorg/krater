@@ -34,6 +34,7 @@ everyone Weave lets use the Krater app is a Ganymede member. An admin must add `
 | Claim `groups` (scope `groups`) | Group slugs linked to the Krater app; the fallback when `roles` is absent |
 | Claims `slack_id`, `slack_member` (scope `slack`) | Mapping Slack clicks to users, and the Slack membership gate |
 | The client_credentials grant, scope `directory` | Krater's own token for the directory API |
+| The client_credentials grant, scopes `quilt` and `stash` | Krater's own tokens for Quilt's patch API and Stash's archive API |
 | `GET /api/v1/directory/users/{sub}` | The fresh role check before every action, the verification check before a project's compute starts, the demographics gate before every grant application, and names and emails when a page needs them |
 | The page `/profile/demographics?return_to=<url>` | Where a member answers the demographics form. Weave sends them back to `return_to` after they save |
 | The page `/verification` | Where a member does ID verification. The project and new-job pages link to it |
@@ -66,7 +67,9 @@ content they wrote (proposals, reviews), which belongs to their projects.
 2. Set the redirect URI to `https://<krater-host>/auth/callback`. Add `http://localhost:<port>/auth/callback` for
    development.
 3. Give the app the scopes `openid profile email groups roles slack directory`. An admin must add `directory` to the
-   Krater app's scopes, or the directory API answers 403.
+   Krater app's scopes, or the directory API answers 403. Add `quilt` to send events to Quilt
+   ([quilt-integration.md](quilt-integration.md)) and `stash` to archive submitted links in Stash
+   ([stash-integration.md](stash-integration.md)); each is a client_credentials scope of the same app.
 4. On the Krater app page, a Weave superadmin creates the roles `reviewer` and `admin`.
 5. Give those roles to the reviewer and admin groups (or people) in Weave. Members need no role: the app's access
    policy decides who can use Krater (on staging, everyone who can sign in to Weave).

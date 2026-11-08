@@ -629,6 +629,50 @@ def test_a_refused_quilt_token_raises_weave_unavailable_and_logs_the_config_erro
     assert "scope 'quilt'" in caplog.text
 
 
+# --------------------------------------------------------------------------------------------------
+# The Stash token (scope `stash`)
+# --------------------------------------------------------------------------------------------------
+
+
+def test_the_stash_token_asks_for_the_stash_scope_and_is_cached_apart_from_quilts(
+    fake_weave: FakeWeave, live_client: LiveWeaveClient
+) -> None:
+    stash = live_client.stash_token()
+    quilt = live_client.quilt_token()
+
+    assert stash == "cc-1" and quilt == "cc-2"
+    scopes = [parse_qs(r.content.decode())["scope"] for r in _token_requests(fake_weave)]
+    assert scopes == [["stash"], ["quilt"]]
+    expected_basic = base64.b64encode(f"{CLIENT_ID}:{CLIENT_SECRET}".encode()).decode()
+    assert _token_requests(fake_weave)[0].headers["authorization"] == f"Basic {expected_basic}"
+    assert live_client.stash_token() == stash
+    assert len(_token_requests(fake_weave)) == 2
+
+
+def test_invalidating_the_stash_token_fetches_a_new_one_and_keeps_quilts(
+    fake_weave: FakeWeave, live_client: LiveWeaveClient
+) -> None:
+    live_client.stash_token()
+    quilt = live_client.quilt_token()
+    live_client.invalidate_stash_token()
+
+    assert live_client.stash_token() == "cc-3"
+    assert live_client.quilt_token() == quilt
+
+
+def test_a_refused_stash_token_raises_weave_unavailable_and_logs_the_config_error(caplog, monkeypatch) -> None:
+    monkeypatch.setattr(live_module.logger, "disabled", False)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"error": "invalid_scope"})
+
+    client = LiveWeaveClient(_settings(), http_client=httpx.Client(transport=httpx.MockTransport(handler)))
+
+    with pytest.raises(WeaveUnavailableError):
+        client.stash_token()
+    assert "scope 'stash'" in caplog.text
+
+
 # -- The CLI's tokens ----------------------------------------------------------------------------------------------
 
 

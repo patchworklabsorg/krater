@@ -37,6 +37,7 @@ from krater.services import (
 )
 from krater.services.pricing import refresh_prices
 from krater.slack import SlackError, get_slack_client
+from krater.stash import sender as stash_sender
 from krater.storage import StorageError, get_compute_store
 from krater.vast import get_vast_client
 from krater.weave import get_weave_client
@@ -660,3 +661,71 @@ def kick_quilt_delivery() -> None:
         pass
     except Exception:
         logger.warning("krater: could not defer quilt_deliver_now; the periodic run sends the events", exc_info=True)
+
+
+# --------------------------------------------------------------------------------------------------
+# Stash: ask the Patchwork archive to keep a copy of each submitted URL (`stash_archives` rows the services
+# wrote). A periodic run every minute, plus a kick deferred right after a web action commits. See
+# `krater.stash.sender` and docs/stash-integration.md.
+# --------------------------------------------------------------------------------------------------
+
+#: Only one kick waits in the queue at a time; more kicks while one waits add nothing.
+STASH_KICK_LOCK = "stash_archive_now"
+
+
+#: Why an archive run stopped (`DeliveryResult.stopped`), for the admin alert. A rate limit is not a fault.
+_STASH_STOPPED = {
+    "no_token": "Weave gave Krater no `stash` token: check that Krater's app in Weave allows the `stash` scope.",
+}
+_STASH_STOPPED_HTTP = "Stash answered {}: check KRATER_STASH_URL and the `stash` scope on Krater's app in Weave."
+
+
+def _stash_archive() -> None:
+    session = get_sessionmaker()()
+    try:
+        result = stash_sender.run(session, get_weave_client(), get_settings())
+        if result is not None and result.stopped and result.stopped != "rate_limited":
+            # Nothing gets through until someone fixes the setup, so count it towards the alert like a crash.
+            _report_failure("stash", _STASH_STOPPED.get(result.stopped, _STASH_STOPPED_HTTP).format(result.stopped))
+        if result is not None and (result.archived or result.retried or result.failed or result.refreshed):
+            logger.info(
+                "krater stash_archive: archived %d, retry %d, failed %d, refreshed %d",
+                result.archived,
+                result.retried,
+                result.failed,
+                result.refreshed,
+            )
+    except Exception as exc:
+        logger.exception("krater.stash_archive failed")
+        session.rollback()
+        _report_failure("stash", _failure(exc))
+    finally:
+        session.close()
+
+
+@app.periodic(cron="* * * * *")
+@app.task(name="stash_archive")
+def stash_archive(timestamp: int) -> None:
+    """Ask Stash to archive the pending submission URLs, and refresh the unfinished archives. A no-op while
+    `KRATER_STASH_URL` is blank."""
+    del timestamp
+    _stash_archive()
+
+
+@app.task(name="stash_archive_now", queueing_lock=STASH_KICK_LOCK)
+def stash_archive_now() -> None:
+    """The same as `stash_archive`, deferred after a web action commits."""
+    _stash_archive()
+
+
+def kick_stash_archiving() -> None:
+    """Defer `stash_archive_now`, if Stash is configured. Never fails the caller: the periodic run is the
+    safety net."""
+    if not get_settings().stash_url:
+        return
+    try:
+        stash_archive_now.defer()
+    except procrastinate.exceptions.AlreadyEnqueued:
+        pass
+    except Exception:
+        logger.warning("krater: could not defer stash_archive_now; the periodic run archives the links", exc_info=True)

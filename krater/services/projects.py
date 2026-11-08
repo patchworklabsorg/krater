@@ -44,7 +44,7 @@ from krater.models import (
     RevisionKind,
     RevisionOutcome,
 )
-from krater.services import approval_policy, audit, budget, grants, quilt_events, teams
+from krater.services import approval_policy, audit, budget, grants, quilt_events, stash_archives, teams
 from krater.services.actor import Actor
 from krater.services.errors import InvalidState, NotAllowed, NotFound, ValidationFailed
 from krater.weave import WeaveClient
@@ -340,6 +340,7 @@ def submit(session: Session, actor: Actor, *, project: Project, criteria_read: b
 
     session.flush()
     quilt_events.sync_project(session, project)
+    stash_archives.sync_project(session, project)
     return project
 
 
@@ -537,6 +538,7 @@ def submit_completion(session: Session, actor: Actor, *, project: Project) -> Pr
 
     session.flush()
     quilt_events.sync_project(session, project)
+    stash_archives.sync_project(session, project)
     return project
 
 
@@ -1123,6 +1125,7 @@ def withdraw(session: Session, actor: Actor, *, project: Project, reason: str | 
 
     session.flush()
     quilt_events.sync_project(session, project)
+    stash_archives.cancel_pending(session, project)
     return project
 
 

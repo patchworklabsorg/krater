@@ -25,7 +25,15 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from krater.config import Settings
-from krater.models import GpuPrice, OpsAlert, QuiltOutbox, QuiltOutboxState, WorkerHeartbeat
+from krater.models import (
+    GpuPrice,
+    OpsAlert,
+    QuiltOutbox,
+    QuiltOutboxState,
+    StashArchive,
+    StashArchiveState,
+    WorkerHeartbeat,
+)
 from krater.slack import SlackClient, SlackError
 
 logger = logging.getLogger(__name__)
@@ -61,11 +69,13 @@ FAILURE_RULES = {
     # Daily, so two failures in a row.
     "ospool_accounting": FailureRule("Importing OSPool usage from OSG keeps failing", 2, timedelta(hours=49)),
     "quilt": FailureRule("Sending events to Quilt keeps failing", 5, timedelta(minutes=15)),
+    "stash": FailureRule("Archiving submission links in Stash keeps failing", 5, timedelta(minutes=15)),
     "slack": FailureRule("Slack tasks keep failing", 3, timedelta(minutes=30)),
 }
 #: The conditions `check` watches, by key.
 CONDITION_TITLES = {
     "quilt_backlog": "Quilt's outbox is backing up",
+    "stash_backlog": "Archive requests to Stash are backing up",
     "prices_stale": "GPU prices aren't being refreshed",
     "failed_jobs": "Background jobs are ending in errors",
 }
@@ -105,6 +115,18 @@ def _set_condition(session: Session, key: str, message: str | None, *, now: date
     row.last_failed_at = now
     if row.opened_at is None:
         row.opened_at, row.first_failed_at = now, now
+
+
+def _stash_backlog(session: Session, settings: Settings, now: datetime) -> str | None:
+    if not settings.stash_url:
+        return None  # not archiving yet: the rows keep every link until it's set
+    # As `_quilt_backlog`: measured from the first attempt. A run that never gets to try opens the "stash" task alert.
+    oldest = session.scalar(
+        sa.select(sa.func.min(StashArchive.first_attempted_at)).where(StashArchive.state == StashArchiveState.PENDING)
+    )
+    if oldest is None or now - oldest < QUILT_BACKLOG_AGE:
+        return None
+    return f"Krater has been trying to archive a submitted link in Stash since {oldest:%Y-%m-%d %H:%M} UTC."
 
 
 def _quilt_backlog(session: Session, settings: Settings, now: datetime) -> str | None:
@@ -156,6 +178,7 @@ def check(session: Session, settings: Settings, *, now: datetime) -> None:
     """Open or clear every condition, and clear task alerts that have gone a whole window without a failure. The
     caller commits."""
     _set_condition(session, "quilt_backlog", _quilt_backlog(session, settings, now), now=now)
+    _set_condition(session, "stash_backlog", _stash_backlog(session, settings, now), now=now)
     _set_condition(session, "prices_stale", _prices_stale(session, now), now=now)
     _set_condition(session, "failed_jobs", _failed_jobs(session, now), now=now)
     for key, rule in FAILURE_RULES.items():
