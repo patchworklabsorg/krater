@@ -5,12 +5,13 @@ See `docs/weave-integration.md` for the OIDC contract this implements against.
 
 from __future__ import annotations
 
+import logging
 import secrets
 from typing import Annotated
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
 from krater.config import get_settings
@@ -23,6 +24,7 @@ from krater.web.deps import SESSION_USER_ID_KEY
 from krater.web.templates import templates
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 # Session keys used only for the duration of a single OIDC round trip; cleared (along with everything
 # else) once sign-in succeeds, to guard against session fixation.
@@ -74,29 +76,44 @@ def login(
     return RedirectResponse(url, status_code=status.HTTP_302_FOUND)
 
 
+def _sign_in_failed(request: Request, next_path: str, *, reason: str) -> HTMLResponse:
+    """A page with a "Sign in again" button, for a sign-in that can't finish (an old or reused link, a sign-in
+    started in another tab, the member saying no at Weave, or Weave rejecting the code), instead of bare JSON."""
+    logger.warning("sign-in did not finish: %s", reason)
+    again = "/login" if next_path == "/" else f"/login?{urlencode({'next': next_path})}"
+    return templates.TemplateResponse(
+        request, "auth/sign_in_failed.html", {"sign_in_again": again}, status_code=status.HTTP_400_BAD_REQUEST
+    )
+
+
 @router.get("/auth/callback")
 def auth_callback(
     request: Request,
-    code: str,
-    state: str,
     db_session: Annotated[Session, Depends(get_session)],
     weave_client: Annotated[WeaveClient, Depends(get_weave_client)],
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
 ):
+    next_path = _safe_next_path(request.session.get(SESSION_NEXT_KEY))
     expected_state = request.session.get(SESSION_STATE_KEY)
-    if not expected_state or not secrets.compare_digest(state, expected_state):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid or expired state")
+    if not state or not expected_state or not secrets.compare_digest(state, expected_state):
+        return _sign_in_failed(request, next_path, reason="invalid or expired state")
+    if error or not code:
+        # OAuth's error redirect (e.g. `access_denied`); `error` is Weave's short code, never a secret.
+        return _sign_in_failed(request, next_path, reason=f"Weave sent no code (error={(error or 'none')[:64]!r})")
 
     nonce = request.session.get(SESSION_NONCE_KEY, "")
     code_verifier = request.session.get(SESSION_VERIFIER_KEY, "")
-    next_path = _safe_next_path(request.session.get(SESSION_NEXT_KEY))
 
     try:
         identity = weave_client.exchange_code(
             code=code, code_verifier=code_verifier, redirect_uri=_redirect_uri(), nonce=nonce
         )
     except WeaveAuthError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="sign-in with Weave failed") from exc
+        return _sign_in_failed(request, next_path, reason=f"Weave rejected the code: {str(exc)[:200]}")
     except WeaveUnavailableError as exc:
+        logger.warning("sign-in could not reach Weave: %s", exc)
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Weave is unavailable") from exc
 
     user = sign_in(db_session, identity)

@@ -272,8 +272,11 @@ def test_exchange_code_raises_weave_auth_error_when_the_code_is_rejected(
         live_client.exchange_code(code="bad-code", code_verifier="v", redirect_uri=REDIRECT_URI, nonce="n")
 
 
-def test_exchange_code_raises_weave_unavailable_on_a_5xx(fake_weave: FakeWeave, live_client: LiveWeaveClient) -> None:
-    fake_weave.token_status = 500
+@pytest.mark.parametrize("token_status", [500, 429])
+def test_exchange_code_raises_weave_unavailable_on_a_5xx_or_a_throttle(
+    fake_weave: FakeWeave, live_client: LiveWeaveClient, token_status: int
+) -> None:
+    fake_weave.token_status = token_status
 
     with pytest.raises(WeaveUnavailableError):
         live_client.exchange_code(code="c1", code_verifier="v", redirect_uri=REDIRECT_URI, nonce="n")
