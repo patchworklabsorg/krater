@@ -286,6 +286,7 @@ def test_the_usual_fields_are_ticked_and_the_teams_other_answers_are_not() -> No
         "gpu",
         "team",
         "residency",
+        "ospool_usage",
     )
     unticked = set(funder_packet.FIELD_KEYS) - set(funder_packet.DEFAULT_FIELDS)
     assert unticked == {"write_up", "experience", "affiliation", "open_source", "repo_url", "full_estimate"}

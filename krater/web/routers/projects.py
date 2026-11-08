@@ -1295,6 +1295,7 @@ def admin_ospool_valuation(
             rate_override_microusd=rate_microusd,
             rate_note=rate_note,
             reason=reason,
+            now=datetime.now(UTC),
         )
     except ValidationFailed as exc:
         return _ospool_form_errors(

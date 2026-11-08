@@ -77,6 +77,7 @@ def _validate(
     rate_override_microusd: int | None,
     rate_note: str,
     reason: str,
+    now: datetime,
 ) -> dict[str, str]:
     errors: dict[str, str] = {}
     if not (reason and reason.strip()):
@@ -85,8 +86,11 @@ def _validate(
         errors["gpu_name"] = "Choose the GPU to value the usage as."
     elif len(gpu_name) > 64:
         errors["gpu_name"] = "That GPU name is too long."
-    elif rate_override_microusd is None and gpu_name not in pricing.list_accelerator_names(session):
-        errors["gpu_name"] = "Krater has no price for that GPU. Choose one it prices, or give a price per GPU-hour."
+    elif rate_override_microusd is None and pricing.on_demand_rate(session, accelerator_name=gpu_name, now=now) is None:
+        # The usage is valued per single GPU: a GPU Krater prices only as a 4- or 8-card machine has no price here.
+        errors["gpu_name"] = (
+            "Krater has no on-demand price for one of that GPU. Choose one it prices, or give a price per GPU-hour."
+        )
     if rate_override_microusd is not None and rate_override_microusd <= 0:
         errors["rate"] = "Enter a price above zero, or leave it blank."
     if len(rate_note) > 200:
@@ -120,7 +124,12 @@ def record_grant(
     gpu_name = gpu_name.strip()
     rate_note = rate_note.strip()
     errors = _validate(
-        session, gpu_name=gpu_name, rate_override_microusd=rate_override_microusd, rate_note=rate_note, reason=reason
+        session,
+        gpu_name=gpu_name,
+        rate_override_microusd=rate_override_microusd,
+        rate_note=rate_note,
+        reason=reason,
+        now=now,
     )
     if not NAME_PATTERN.fullmatch(name):
         errors["ospool_project_name"] = (
@@ -189,6 +198,7 @@ def update_valuation(
     rate_override_microusd: int | None,
     rate_note: str,
     reason: str,
+    now: datetime,
 ) -> None:
     """Admin: change the GPU and price a grant's usage is valued at. Days already valued keep their price."""
     if not actor.is_admin:
@@ -198,7 +208,12 @@ def update_valuation(
     gpu_name = gpu_name.strip()
     rate_note = rate_note.strip()
     errors = _validate(
-        session, gpu_name=gpu_name, rate_override_microusd=rate_override_microusd, rate_note=rate_note, reason=reason
+        session,
+        gpu_name=gpu_name,
+        rate_override_microusd=rate_override_microusd,
+        rate_note=rate_note,
+        reason=reason,
+        now=now,
     )
     if errors:
         raise ValidationFailed(errors)

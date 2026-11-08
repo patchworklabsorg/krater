@@ -200,6 +200,29 @@ def test_bad_input_is_refused(db_session, held_project, admin, weave, overrides,
     assert field in excinfo.value.errors
 
 
+def test_a_gpu_priced_only_as_a_multi_card_machine_has_no_price(db_session, held_project, admin, weave) -> None:
+    db_session.add(
+        GpuPrice(
+            accelerator_name="H200",
+            accelerator_count=8,
+            vram_gib=141.0,
+            vcpus_typical=128.0,
+            memory_gib_typical=1024.0,
+            on_demand_min_cents=2_000,
+            on_demand_median_cents=2_400,
+            spot_min_cents=None,
+            offer_count=2,
+            refreshed_at=NOW - timedelta(hours=2),
+        )
+    )
+    db_session.flush()
+    assert "H200" in pricing.list_accelerator_names(db_session)
+
+    with pytest.raises(ValidationFailed) as excinfo:
+        _record(db_session, admin, held_project, weave, gpu_name="H200")
+    assert "gpu_name" in excinfo.value.errors
+
+
 def test_a_gpu_krater_doesnt_price_is_fine_with_a_price_given(db_session, held_project, admin, weave) -> None:
     grant = _record(
         db_session, admin, held_project, weave, gpu_name="TPUv9", rate_override_microusd=2_490_000, rate_note="Cloud X"
@@ -349,6 +372,7 @@ def test_changing_the_valuation_moves_only_later_days(db_session, held_project, 
         rate_override_microusd=2_000_000,
         rate_note="Neocloud",
         reason="Use a neocloud's price.",
+        now=NOW,
     )
     client.set_day(NAME, date(2026, 11, 20), gpu_hours="1")
     ospool_grants.import_usage(db_session, grant, client, now=NOW + timedelta(hours=1))
@@ -362,7 +386,7 @@ def test_changing_the_valuation_moves_only_later_days(db_session, held_project, 
 
 def test_the_valuation_is_admin_only_and_must_change(db_session, held_project, admin, reviewer, weave) -> None:
     grant = _record(db_session, admin, held_project, weave)
-    same = {"gpu_name": "RTX4090", "rate_override_microusd": None, "rate_note": "", "reason": "Again."}
+    same = {"gpu_name": "RTX4090", "rate_override_microusd": None, "rate_note": "", "reason": "Again.", "now": NOW}
 
     with pytest.raises(NotAllowed):
         ospool_grants.update_valuation(db_session, reviewer, grant=grant, **same)
