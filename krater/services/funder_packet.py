@@ -8,11 +8,12 @@ here decide what a funder sees.
   project's status and whether its whole team is verified US residents (OSPool takes only US residents), and the
   admin chooses.
 - **Which fields.** The admin ticks them too, from `FIELDS`; the title always goes. Ticked at first: summary, compute
-  use, training data, status, the amount requested and granted, the GPU estimate, the team's names, and whether every
-  member is a verified US resident. The application's other answers (write-up, experience, contest or professor, open
-  source, repo, finished-product estimate) go only when ticked. Names follow the public gallery's rule for members
-  under 18 (`krater.services.people.public_names`). Never emails, Patchwork IDs, demographics, secrets, logs or
-  anything else: a field is shared only when it is added to `FIELDS`.
+  use, training data, status, the amount requested and granted, the GPU estimate, the team's names, whether every
+  member is a verified US resident, and a project's OSPool usage when an OSPool grant funds it (as OSG's public
+  accounting reports it, valued by Krater). The application's other answers (write-up, experience, contest or
+  professor, open source, repo, finished-product estimate) go only when ticked. Names follow the public gallery's
+  rule for members under 18 (`krater.services.people.public_names`). Never emails, Patchwork IDs, demographics,
+  secrets, logs or anything else: a field is shared only when it is added to `FIELDS`.
 - **Fresh or not.** The export reads names and residency fresh from Weave and fails closed when Weave can't be
   reached (`FunderPacketUnavailable`). The admin's page view may use the directory cache, and still lists every
   project when Weave is down.
@@ -30,7 +31,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from krater.models import Project, ProjectRevision, ProjectStatus
-from krater.services import audit, budget, funding_holds, grants, people, residency, site_settings
+from krater.services import audit, budget, funding_holds, grants, ospool_grants, people, residency, site_settings
 from krater.services.actor import Actor
 from krater.services.errors import FunderPacketUnavailable, NotAllowed, ValidationFailed
 from krater.services.guardian import team_users
@@ -81,6 +82,8 @@ FIELDS = (
     Field("full_estimate", "Finished-product estimate", False),
     Field("team", "Team", True),
     Field("residency", "US residency", True),
+    # Only on a project with an OSPool grant (`krater.services.ospool_grants`); left out of the others' entries.
+    Field("ospool_usage", "OSPool usage", True),
 )
 FIELD_KEYS = tuple(field.key for field in FIELDS)
 DEFAULT_FIELDS = tuple(field.key for field in FIELDS if field.default)
@@ -159,12 +162,17 @@ class PacketRow:
     repo_url: str = ""
     full_gpu: GpuEstimate | None = None
     full_budget_cents: int | None = None
-    #: What an approved project waits on: funding, a 3rd party review or verification (`funding_holds.approval_label`).
+    #: What an approved project waits on: funding, a 3rd party review or verification, or "OSPool" when an OSPool
+    #: grant funds it (`funding_holds.approval_label`).
     hold_label: str = ""
+    #: Its OSPool grant's usage to date (`ospool_grants.usage_text`); empty without one.
+    ospool_usage: str = ""
 
     @property
     def status_label(self) -> str:
         label = STATUS_LABELS[self.status]
+        if self.hold_label == funding_holds.OSPOOL:
+            return f"{label}, funded by an OSPool grant"
         return f"{label}, {self.hold_label.lower()}" if self.hold_label else label
 
 
@@ -251,6 +259,7 @@ def _row(
     session: Session, project: Project, *, team_names: list[str], unnamed: int, team_size: int, residents: bool
 ) -> PacketRow:
     revision = _revision(project)
+    ospool_grant = ospool_grants.for_project(session, project)
     return PacketRow(
         project_id=project.id,
         title=project.title,
@@ -272,8 +281,13 @@ def _row(
         repo_url=project.repo_url or "",
         full_gpu=_gpu(revision.full_budget_estimate if revision else None),
         full_budget_cents=revision.full_budget_cents if revision else None,
-        hold_label=funding_holds.approval_label(project, verification_held=grants.pending(session, project) is not None)
+        hold_label=funding_holds.approval_label(
+            project,
+            verification_held=grants.pending(session, project) is not None,
+            ospool=ospool_grant is not None,
+        )
         or "",
+        ospool_usage=ospool_grants.usage_text(ospool_grant) if ospool_grant is not None else "",
     )
 
 

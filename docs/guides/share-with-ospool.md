@@ -23,7 +23,8 @@ Patchwork ID, the projects and the fields in it.
 For each ticked project, its title and the fields you tick. Ticked when the page opens: the one-sentence summary,
 how the team will use the compute, where its training data comes from, its status (with *awaiting funding* or
 *awaiting 3rd party review* when it's held), the amount requested and granted, the GPU estimate from the application,
-the team's names and size, and whether every team member is a verified US resident.
+the team's names and size, whether every team member is a verified US resident, and, for a project with an OSPool
+grant, its OSPool usage to date (see [ospool-grants.md](ospool-grants.md)).
 
 Unticked until you tick them, since they're the team's own answers: the write-up, the experience answer, the contest
 or professor, whether anything would stop them open-sourcing it, the repo link, and the finished-product estimate.

@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from krater.db import get_session
 from krater.models import ApprovalPolicy, Project, ProjectStatus
-from krater.services import clearance, funding_holds, grants, people, quilt_events, site_settings
+from krater.services import clearance, funding_holds, grants, ospool_grants, people, quilt_events, site_settings
 from krater.services import projects as project_service
 from krater.services.actor import Actor
 from krater.services.errors import InvalidState, ValidationFailed
@@ -42,10 +42,15 @@ def admin_overview(
     all_projects = list(db_session.scalars(sa.select(Project).order_by(Project.created_at.desc())))
     summaries = [project_service.project_summary(db_session, project=project) for project in all_projects]
     held_ids = grants.held_project_ids(db_session, [project.id for project in all_projects])
+    ospool_ids = ospool_grants.project_ids_with_grants(db_session, [project.id for project in all_projects])
     holds = {
         project.id: label
         for project in all_projects
-        if (label := funding_holds.approval_label(project, verification_held=project.id in held_ids))
+        if (
+            label := funding_holds.approval_label(
+                project, verification_held=project.id in held_ids, ospool=project.id in ospool_ids
+            )
+        )
     }
 
     # The counts are of every project; the table shows the ones the search and status filter keep.
@@ -69,6 +74,7 @@ def admin_overview(
         {
             "held": held,
             "holds": holds,
+            "ospool": [(grant, ospool_grants.summary(grant)) for grant in ospool_grants.all_grants(db_session)],
             "recent": admin_activity.recent_activity(db_session, weave_client),
             "by_status": by_status,
             "counts": counts,

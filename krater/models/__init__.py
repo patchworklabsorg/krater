@@ -29,6 +29,7 @@ from krater.models.gpu_price_sample import GpuPriceSample
 from krater.models.held_grant import HeldGrant
 from krater.models.image_inspection import ImageInspection
 from krater.models.ops_alert import OpsAlert, WorkerHeartbeat
+from krater.models.ospool_grant import OspoolGrant, OspoolUsageDay
 from krater.models.project import Project
 from krater.models.project_member import ProjectMember
 from krater.models.project_revision import ProjectRevision
@@ -65,6 +66,8 @@ __all__ = [
     "HeldGrant",
     "ImageInspection",
     "OpsAlert",
+    "OspoolGrant",
+    "OspoolUsageDay",
     "Project",
     "ProjectComputeSettings",
     "ProjectMember",

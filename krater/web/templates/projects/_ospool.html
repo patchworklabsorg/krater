@@ -1,0 +1,55 @@
+{# The project's OSPool grant (`krater.services.ospool_grants`): usage from OSG's accounting, valued at rent prices. #}
+{% set totals = ospool_summary %}
+<section class="card" id="ospool">
+  <h2>OSPool grant</h2>
+  <p>
+    The OSPool funds this project outside Krater. The team runs on the OSPool with its own OSG accounts, under the
+    OSPool project <code>{{ ospool_grant.ospool_project_name }}</code>. Krater only reports the usage.
+  </p>
+  <dl class="stats">
+    <div class="stat stat--accent"><dt>GPU-hours</dt><dd>{{ "{:,.1f}".format(totals.gpu_hours) }}</dd></div>
+    <div class="stat"><dt>Core-hours</dt><dd>{{ "{:,.1f}".format(totals.core_hours) }}</dd></div>
+    <div class="stat"><dt>Jobs</dt><dd>{{ "{:,}".format(totals.jobs) }}</dd></div>
+    <div class="stat"><dt>Worth at rent prices</dt><dd>{{ totals.value_cents | dollars }}</dd></div>
+  </dl>
+  <p class="muted">
+    Counted from {{ ospool_grant.counted_from.isoformat() }}. Valued at {{ ospool_rate_text }}: what renting the GPU
+    on demand would have cost, not what anyone paid. Each day keeps the price it was first valued at.
+    {%- if totals.unvalued_days %} {{ totals.unvalued_days }} day{{ "s" if totals.unvalued_days != 1 }} with GPU-hours
+      {{ "have" if totals.unvalued_days != 1 else "has" }} no price yet, so {{ "they're" if totals.unvalued_days != 1 else "it's" }} left out.{% endif %}
+  </p>
+  <p class="muted">
+    From OSG's public accounting, which runs about a day behind and corrects recent days.
+    {% if ospool_grant.last_imported_at %}Last read {{ ospool_grant.last_imported_at.strftime("%Y-%m-%d %H:%M") }} UTC.{% else %}Not read yet: the first daily import fills this in.{% endif %}
+  </p>
+  {% if ospool_grant.last_import_error and is_admin %}
+    <p class="field-error">The last import failed: {{ ospool_grant.last_import_error }}</p>
+  {% endif %}
+  {% if totals.recent %}
+    <h3>Last {{ totals.recent | length }} days with usage</h3>
+    <div class="table-scroll">
+      <table class="table">
+        <thead>
+          <tr>
+            <th scope="col">Day (UTC)</th>
+            <th scope="col" class="num">GPU-hours</th>
+            <th scope="col" class="num">Core-hours</th>
+            <th scope="col" class="num">Jobs</th>
+            <th scope="col" class="num">Worth</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for day in totals.recent %}
+            <tr>
+              <td>{{ day.day.isoformat() }}</td>
+              <td class="num">{{ "{:,.1f}".format(day.gpu_hours) }}</td>
+              <td class="num">{{ "{:,.1f}".format(day.core_hours) }}</td>
+              <td class="num">{{ "{:,}".format(day.jobs) }}</td>
+              <td class="num">{{ day.value_cents | dollars if day.value_cents is not none else "No price" }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+</section>

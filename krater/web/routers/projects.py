@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from decimal import Decimal
 from typing import Annotated
 
 import sqlalchemy as sa
@@ -32,7 +33,18 @@ from krater.models import (
     User,
 )
 from krater.services import budget as budget_service
-from krater.services import clearance, demographics, funding_holds, grants, people, residency, slack_membership, teams
+from krater.services import (
+    clearance,
+    demographics,
+    funding_holds,
+    grants,
+    ospool_grants,
+    people,
+    pricing,
+    residency,
+    slack_membership,
+    teams,
+)
 from krater.services import projects as project_service
 from krater.services import screenshots as screenshot_service
 from krater.services import users as user_service
@@ -550,6 +562,16 @@ def _build_detail_context(
         else None
     )
 
+    # An OSPool grant funds the project outside Krater, and its usage comes from OSG's accounting
+    # (`krater.services.ospool_grants`). Admins record one, and set what its usage is valued at.
+    ospool_grant = ospool_grants.for_project(session, project)
+    can_record_ospool = (
+        actor.is_admin and not conflicted and ospool_grant is None and project.status in funding_holds.HOLDABLE_STATUSES
+    )
+    can_value_ospool = actor.is_admin and not conflicted and ospool_grant is not None
+    estimated = project.approved_revision or current
+    ospool_estimate = (estimated.budget_estimate if estimated is not None else None) or {}
+
     # For each revision with an estimate, whether the amount it asks for has drifted far enough from that estimate to
     # flag for reviewers -- e.g. the team estimated one thing, then typed a requested amount well past it. An
     # amendment's estimate is the extra compute, so it's compared with what the amendment adds to the ceiling; that's
@@ -606,9 +628,12 @@ def _build_detail_context(
         # A proposal or amendment approval may be held for funding (`krater.services.funding_holds`).
         "can_hold_funding": current_is_pending and current.kind is not RevisionKind.COMPLETION,
         "funding_hold_choices": [(hold.value, label) for hold, label in funding_holds.LABELS.items()],
-        # Its funding hold, else "Awaiting verification" while its budget is held or Weave hasn't cleared the team.
+        # "OSPool" when an OSPool grant funds it, else its funding hold, else "Awaiting verification" while its budget
+        # is held or Weave hasn't cleared the team.
         "approval_hold": funding_holds.approval_label(
-            project, verification_held=held_grant is not None or bool(verification_pending)
+            project,
+            verification_held=held_grant is not None or bool(verification_pending),
+            ospool=ospool_grant is not None,
         ),
         "funding_hold_explanation": funding_holds.EXPLANATIONS[project.funding_hold]
         if project.funding_hold is not None and project.status not in _TERMINAL_STATUSES
@@ -629,6 +654,18 @@ def _build_detail_context(
         else cents_to_input(project.max_hourly_cost_cents),
         "default_hourly_cap_cents": get_settings().compute_max_hourly_cost_cents,
         "can_admin_set_hourly_cap": actor.is_admin and project.status not in _TERMINAL_STATUSES,
+        "ospool_grant": ospool_grant,
+        "ospool_summary": ospool_grants.summary(ospool_grant) if ospool_grant is not None else None,
+        "ospool_rate_text": ospool_grants.rate_text(ospool_grant) if ospool_grant is not None else "",
+        "ospool_rate_input": f"{Decimal(ospool_grant.rate_override_microusd) / 1_000_000:f}".rstrip("0").rstrip(".")
+        if ospool_grant is not None and ospool_grant.rate_override_microusd is not None
+        else "",
+        "can_admin_record_ospool": can_record_ospool,
+        "can_admin_value_ospool": can_value_ospool,
+        "ospool_gpu_choices": pricing.list_accelerator_names(session) if can_record_ospool or can_value_ospool else [],
+        # The GPU the team estimated with, to value the usage as unless the admin picks another.
+        "ospool_gpu_default": ospool_estimate.get("accelerator_name", ""),
+        "ospool_today": datetime.now(UTC).date().isoformat(),
         "errors": errors or {},
         "error_form": error_form,
         "posted": posted or {},
@@ -1117,6 +1154,171 @@ def admin_funding_hold(
         message = "Hold cleared. The held budget is added once every team member is verified in Weave."
     else:
         message = "Hold cleared."
+    return _success_redirect(db_session, request, project_id, message, after_commit=_notify)
+
+
+def _parse_ospool_rate(raw: str, errors: dict[str, str]) -> int | None:
+    if not raw.strip():
+        return None
+    try:
+        return estimator_form.parse_hourly_rate(raw)
+    except ValueError as exc:
+        errors["rate"] = str(exc).replace("card-hour", "GPU-hour")
+        return None
+
+
+def _ospool_form_errors(
+    request: Request,
+    db_session: Session,
+    weave_client: WeaveClient,
+    project: Project,
+    actor: Actor,
+    *,
+    errors: dict[str, str],
+    form: str,
+    posted: dict[str, str],
+):
+    db_session.rollback()
+    context = _build_detail_context(
+        db_session, weave_client, project, actor, errors=errors, error_form=form, posted=posted
+    )
+    return templates.TemplateResponse(request, "projects/detail.html", context, status_code=422)
+
+
+@router.post("/projects/{project_id}/admin-ospool-grant", dependencies=[Depends(verify_csrf_token)])
+def admin_record_ospool_grant(
+    request: Request,
+    project_id: uuid.UUID,
+    db_session: Annotated[Session, Depends(get_session)],
+    actor: Annotated[Actor, Depends(fresh_actor)],
+    weave_client: Weave,
+    ospool_project_name: Annotated[str, Form()] = "",
+    counted_from: Annotated[str, Form()] = "",
+    gpu_name: Annotated[str, Form()] = "",
+    rate: Annotated[str, Form()] = "",
+    rate_note: Annotated[str, Form()] = "",
+    reason: Annotated[str, Form()] = "",
+):
+    project = _get_visible_project(db_session, actor, project_id)
+    if not actor.is_admin:
+        raise NotAllowed("Only an admin may record an OSPool grant.")
+    posted = {
+        "ospool_project_name": ospool_project_name,
+        "counted_from": counted_from,
+        "gpu_name": gpu_name,
+        "rate": rate,
+        "rate_note": rate_note,
+        "reason": reason,
+    }
+    errors: dict[str, str] = {}
+    rate_microusd = _parse_ospool_rate(rate, errors)
+    counted_from_day = None
+    try:
+        counted_from_day = date.fromisoformat(counted_from.strip())
+    except ValueError:
+        errors["counted_from"] = "Enter the day usage counts from."
+    if errors or counted_from_day is None:
+        return _ospool_form_errors(
+            request, db_session, weave_client, project, actor, errors=errors, form="ospool_grant", posted=posted
+        )
+    try:
+        grant = ospool_grants.record_grant(
+            db_session,
+            actor,
+            project=project,
+            ospool_project_name=ospool_project_name,
+            counted_from=counted_from_day,
+            gpu_name=gpu_name,
+            rate_override_microusd=rate_microusd,
+            rate_note=rate_note,
+            reason=reason,
+            weave_client=weave_client,
+            now=datetime.now(UTC),
+        )
+    except ValidationFailed as exc:
+        return _ospool_form_errors(
+            request, db_session, weave_client, project, actor, errors=exc.errors, form="ospool_grant", posted=posted
+        )
+    except NotAllowed as exc:
+        db_session.rollback()  # the own-project rule: say so on the page
+        flash(request, str(exc), "error")
+        return _redirect_to_project(project_id)
+    except InvalidState as exc:
+        return _invalid_state_redirect(db_session, request, project_id, exc)
+
+    name, since, rate_line = grant.ospool_project_name, grant.counted_from.isoformat(), ospool_grants.rate_text(grant)
+
+    def _notify() -> None:
+        slack_post_admin_override.defer(
+            project_id=str(project.id),
+            action=ospool_grants.AUDIT_RECORD,
+            actor_sub=actor.user.weave_sub,
+            reason=reason,
+            extra=f"OSPool project {name}, usage from {since}, valued at {rate_line}.",
+        )
+
+    message = f"OSPool grant recorded. Usage under {name} shows here after the next daily import."
+    return _success_redirect(db_session, request, project_id, message, after_commit=_notify)
+
+
+@router.post("/projects/{project_id}/admin-ospool-valuation", dependencies=[Depends(verify_csrf_token)])
+def admin_ospool_valuation(
+    request: Request,
+    project_id: uuid.UUID,
+    db_session: Annotated[Session, Depends(get_session)],
+    actor: Annotated[Actor, Depends(fresh_actor)],
+    weave_client: Weave,
+    gpu_name: Annotated[str, Form()] = "",
+    rate: Annotated[str, Form()] = "",
+    rate_note: Annotated[str, Form()] = "",
+    reason: Annotated[str, Form()] = "",
+):
+    project = _get_visible_project(db_session, actor, project_id)
+    if not actor.is_admin:
+        raise NotAllowed("Only an admin may change an OSPool grant's valuation.")
+    grant = ospool_grants.for_project(db_session, project)
+    if grant is None:
+        raise NotFound("This project has no OSPool grant.")
+    posted = {"gpu_name": gpu_name, "rate": rate, "rate_note": rate_note, "reason": reason}
+    errors: dict[str, str] = {}
+    rate_microusd = _parse_ospool_rate(rate, errors)
+    if errors:
+        return _ospool_form_errors(
+            request, db_session, weave_client, project, actor, errors=errors, form="ospool_valuation", posted=posted
+        )
+    try:
+        ospool_grants.update_valuation(
+            db_session,
+            actor,
+            grant=grant,
+            gpu_name=gpu_name,
+            rate_override_microusd=rate_microusd,
+            rate_note=rate_note,
+            reason=reason,
+        )
+    except ValidationFailed as exc:
+        return _ospool_form_errors(
+            request, db_session, weave_client, project, actor, errors=exc.errors, form="ospool_valuation", posted=posted
+        )
+    except NotAllowed as exc:
+        db_session.rollback()  # the own-project rule: say so on the page
+        flash(request, str(exc), "error")
+        return _redirect_to_project(project_id)
+    except InvalidState as exc:
+        return _invalid_state_redirect(db_session, request, project_id, exc)
+
+    rate_line = ospool_grants.rate_text(grant)
+
+    def _notify() -> None:
+        slack_post_admin_override.defer(
+            project_id=str(project.id),
+            action=ospool_grants.AUDIT_VALUATION,
+            actor_sub=actor.user.weave_sub,
+            reason=reason,
+            extra=f"Usage from now on valued at {rate_line}.",
+        )
+
+    message = "Valuation saved. Days already valued keep their price."
     return _success_redirect(db_session, request, project_id, message, after_commit=_notify)
 
 

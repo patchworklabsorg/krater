@@ -9,6 +9,8 @@ from __future__ import annotations
 import os
 
 os.environ["KRATER_ENV"] = "test"
+# Never read OSG's live accounting from a test.
+os.environ["KRATER_OSPOOL_ACCOUNTING_MODE"] = "fake"
 os.environ["KRATER_DATABASE_URL"] = os.environ.get(
     "KRATER_TEST_DATABASE_URL", "postgresql+psycopg://root:root@localhost:5432/krater_test"
 )

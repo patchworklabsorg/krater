@@ -135,7 +135,8 @@ Rules (`krater.services.funder_packet`; how-to in [guides/share-with-ospool.md](
   (with the funding hold, if any), the amount requested (the approved revision's, not an amendment in review; for a
   project never approved, its newest revision's), the amount granted (the ledger ceiling), the GPU estimate (card,
   count, hours, interruptible or on-demand), the team's names and size, and whether every team member is a verified
-  US resident. Unticked until the admin ticks them: the write-up, the experience answer, the contest or professor,
+  US resident, and the OSPool usage of a project with an OSPool grant (see "OSPool grants"). Unticked until the
+  admin ticks them: the write-up, the experience answer, the contest or professor,
   the open-source answer, the repo link and the finished-product estimate. Names follow the gallery's setting for
   members under 18 (`gallery_minor_names`); a member Weave doesn't return is counted, not named. Nothing else, whatever
   is ticked: no emails, Patchwork IDs, demographics, secrets or compute logs. Weave never sends a member's country, so
@@ -480,6 +481,34 @@ An admin sets, changes or clears the hold on any approved project from its page,
 held budget at once if Weave clears the team, and otherwise leaves it on the usual verification hold. An admin can't
 clear the hold on their own project, since that would fund it; another admin has to.
 
+## OSPool grants
+
+Once OSPool approves Patchwork's projects, a few small grants can run on the OSPool instead of on Krater's dollars
+(`krater.services.ospool_grants`; how-to in [guides/ospool-grants.md](guides/ospool-grants.md)). Maintainer decisions
+(Nov 7, 2026): one registered OSPool project name per grant (`PatchworkLabs_Ganymede01`, say), with an adult Patchwork
+staff member as its PI; the team runs with its own OSG accounts; Krater only reports, with no cap and no alerts, and
+values the usage at what renting the GPU would have cost.
+
+- **Recording.** An admin records the grant on an approved project, from its page: the OSPool project name, the day
+  usage counts from (UTC), the GPU to value it as, and optionally a price per GPU-hour with where it comes from (a
+  neocloud's posted price). It writes an `AuditEvent` (`admin_record_ospool_grant`) and a post in the project's channel.
+  Refused unless every team member is a verified US resident (asked fresh; Weave down refuses), the project holds no
+  Krater budget (reclaim it first), and the name isn't another grant's. The project's pending budget hold is cancelled
+  and its funding hold cleared, so no dollars reach the ledger or Quilt: OSPool capacity is free, and every ledger
+  entry would become cash through Quilt. An admin can't record one on their own project. A project has one grant.
+- **Usage.** A daily worker task (`ospool_usage_import`, `KRATER_OSPOOL_USAGE_IMPORT_CRON`) reads each grant's usage
+  per UTC day from OSG's public accounting (GRACC, `krater.ospool.accounting`): GPU-hours, core-hours and jobs of the
+  user's jobs (`ResourceType: Payload`, never the pilots that ran them), from the summary index only, which names no
+  person. OSG corrects recent days, so each import reads the last 35 again and replaces their hours. Two failed days
+  in a row open an admin alert. Krater sends OSG nothing.
+- **Value.** Each day is valued at the grant's price, else Krater's own on-demand price for the GPU (its Vast samples,
+  else the catalog). A day keeps the price it was first valued at; a day without a price gets one when Krater has
+  one. An admin changes the GPU or price from the project page (`admin_change_ospool_valuation`), for later days only.
+  OSG doesn't record which GPU a job used, so the value is an estimate, shown as one.
+- **Display.** The project shows *Approved · OSPool*. Its page has an OSPool card (totals, worth, the last 30 days
+  with usage, when it was last read), seen by anyone who can see the project. `/admin` lists every grant. The funder
+  packet's *OSPool usage* field (ticked at first) adds the totals and worth for a project with a grant.
+
 ## Admin overrides
 
 At any point an admin can:
@@ -487,6 +516,7 @@ At any point an admin can:
 - adjust an approved project's budget up or down, or reclaim unspent funds;
 - set a project's own hourly cap per rented machine, or put it back to the default;
 - set, change or clear a project's funding hold (see "Funding holds");
+- record an OSPool grant, or change what its usage is valued at (see "OSPool grants");
 - change Krater Compute's policy numbers, globally or for one project (`/admin/compute`);
 - withdraw a project.
 

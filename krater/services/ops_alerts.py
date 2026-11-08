@@ -56,6 +56,8 @@ FAILURE_RULES = {
     "compute_storage_cleanup": FailureRule("Cleaning up unfinished uploads keeps failing", 2, timedelta(hours=3)),
     "price_history": FailureRule("Recording Vast's prices keeps failing", 3, timedelta(hours=4)),
     "grant_release": FailureRule("Releasing held budget grants keeps failing", 3, timedelta(hours=1)),
+    # Daily, so two failures in a row.
+    "ospool_accounting": FailureRule("Importing OSPool usage from OSG keeps failing", 2, timedelta(hours=49)),
     "quilt": FailureRule("Sending events to Quilt keeps failing", 5, timedelta(minutes=15)),
     "slack": FailureRule("Slack tasks keep failing", 3, timedelta(minutes=30)),
 }

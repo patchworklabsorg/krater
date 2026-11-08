@@ -1,0 +1,80 @@
+{# Admin forms for OSPool grants (`krater.services.ospool_grants`), inside the project page's Admin card. #}
+{% macro gpu_and_rate(form, prefix, gpu_value, rate_value, note_value) %}
+  <div class="field">
+    <label for="{{ prefix }}-gpu">GPU to value the usage as</label>
+    <input type="text" id="{{ prefix }}-gpu" name="gpu_name" value="{{ gpu_value }}" list="{{ prefix }}-gpus"
+           autocomplete="off"{% if error_form == form and errors.gpu_name %} aria-invalid="true"{% endif %}>
+    <datalist id="{{ prefix }}-gpus">
+      {% for name in ospool_gpu_choices %}<option value="{{ name }}">{% endfor %}
+    </datalist>
+    <p class="field-hint">OSG's accounting doesn't say which GPU a job used. Pick the one the team asked for.</p>
+    {% if error_form == form and errors.gpu_name %}<p class="field-error">{{ errors.gpu_name }}</p>{% endif %}
+  </div>
+  <div class="field">
+    <label for="{{ prefix }}-rate">Price per GPU-hour (USD, optional)</label>
+    <input type="text" id="{{ prefix }}-rate" name="rate" inputmode="decimal" placeholder="Blank for Krater's on-demand price"
+           value="{{ rate_value }}"{% if error_form == form and errors.rate %} aria-invalid="true"{% endif %}>
+    <p class="field-hint">A neocloud's posted on-demand price, say. Blank uses Krater's own price for the GPU.</p>
+    {% if error_form == form and errors.rate %}<p class="field-error">{{ errors.rate }}</p>{% endif %}
+  </div>
+  <div class="field">
+    <label for="{{ prefix }}-rate-note">Where the price comes from</label>
+    <input type="text" id="{{ prefix }}-rate-note" name="rate_note" maxlength="200" value="{{ note_value }}"
+           placeholder="Lambda's posted price, 2026-11"{% if error_form == form and errors.rate_note %} aria-invalid="true"{% endif %}>
+    {% if error_form == form and errors.rate_note %}<p class="field-error">{{ errors.rate_note }}</p>{% endif %}
+  </div>
+{% endmacro %}
+
+{% if can_admin_record_ospool %}
+  {% set mine = error_form == "ospool_grant" %}
+  <div class="admin-action">
+  <h3>Record an OSPool grant</h3>
+  <p class="muted">For a project the OSPool funds instead of Krater's budget. Every team member must be a verified US
+    resident, and the project must hold no Krater budget. Its pending budget hold and funding hold are dropped.</p>
+  <form method="post" action="/projects/{{ project.id }}/admin-ospool-grant" class="form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="field">
+      <label for="ospool-name">OSPool project name</label>
+      <input type="text" id="ospool-name" name="ospool_project_name" autocomplete="off" placeholder="PatchworkLabs_Ganymede01"
+             value="{{ posted.ospool_project_name if mine else '' }}"{% if mine and errors.ospool_project_name %} aria-invalid="true"{% endif %}>
+      <p class="field-hint">As OSG registered it. The team's jobs carry it.</p>
+      {% if mine and errors.ospool_project_name %}<p class="field-error">{{ errors.ospool_project_name }}</p>{% endif %}
+    </div>
+    <div class="field">
+      <label for="ospool-from">Count usage from (UTC)</label>
+      <input type="date" id="ospool-from" name="counted_from" max="{{ ospool_today }}"
+             value="{{ posted.counted_from if mine else ospool_today }}"{% if mine and errors.counted_from %} aria-invalid="true"{% endif %}>
+      {% if mine and errors.counted_from %}<p class="field-error">{{ errors.counted_from }}</p>{% endif %}
+    </div>
+    {{ gpu_and_rate("ospool_grant", "ospool", posted.gpu_name if mine else ospool_gpu_default,
+                    posted.rate if mine else "", posted.rate_note if mine else "") }}
+    <div class="field">
+      <label for="ospool-reason">Reason (required)</label>
+      <textarea id="ospool-reason" name="reason" rows="2">{{ posted.reason if mine else "" }}</textarea>
+      {% if mine and errors.reason %}<p class="field-error">{{ errors.reason }}</p>{% endif %}
+    </div>
+    <button type="submit" class="button">Record OSPool grant</button>
+  </form>
+  </div>
+{% endif %}
+
+{% if can_admin_value_ospool %}
+  {% set mine = error_form == "ospool_valuation" %}
+  <div class="admin-action">
+  <h3>OSPool valuation</h3>
+  <p class="muted">Now {{ ospool_rate_text }}. A change values later days only: days already valued keep their price.</p>
+  <form method="post" action="/projects/{{ project.id }}/admin-ospool-valuation" class="form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {{ gpu_and_rate("ospool_valuation", "ospool-value",
+                    posted.gpu_name if mine else ospool_grant.gpu_name,
+                    posted.rate if mine else (ospool_rate_input or ""),
+                    posted.rate_note if mine else ospool_grant.rate_note) }}
+    <div class="field">
+      <label for="ospool-value-reason">Reason (required)</label>
+      <textarea id="ospool-value-reason" name="reason" rows="2">{{ posted.reason if mine else "" }}</textarea>
+      {% if mine and errors.reason %}<p class="field-error">{{ errors.reason }}</p>{% endif %}
+    </div>
+    <button type="submit" class="button">Save valuation</button>
+  </form>
+  </div>
+{% endif %}
