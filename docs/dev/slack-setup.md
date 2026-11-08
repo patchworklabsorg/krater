@@ -17,6 +17,8 @@ name, the bot scopes and interactivity (steps 1, 2 and 5 below). Then do steps 3
    code-of-conduct acceptance, so Krater needs its own app entirely).
 2. **OAuth & Permissions** -> **Scopes** -> **Bot Token Scopes**, add exactly what `docs/SPEC.md` lists:
    - `groups:write` -- create/archive private channels
+   - `groups:read` -- find a project's channel by name (`conversations.list`) when creating it answers
+     `name_taken`, e.g. after a half-finished earlier attempt
    - `groups:write.invites` -- invite the submitter, credited builders and reviewers
    - `chat:write` -- post/update the review message and admin-override notices, and DM a team member whose
      verification a held budget waits on (posted to their Slack user id, so no `im:write`)

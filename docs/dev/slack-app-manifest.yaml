@@ -12,6 +12,7 @@ oauth_config:
   scopes:
     bot:
       - chat:write
+      - groups:read
       - groups:write
       - groups:write.invites
       - users:read
