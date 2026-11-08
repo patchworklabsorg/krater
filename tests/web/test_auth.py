@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from krater.models import User
-from krater.weave import StubWeaveClient
+from krater.weave import StubWeaveClient, WeaveUnavailableError
 
 # Fixture subs from krater/weave/stub_users.json.
 MEMBER_SUB = "PWLMEMBERONE"
@@ -86,6 +86,50 @@ def test_callback_rejects_when_no_login_was_started(client: TestClient) -> None:
     response = client.get("/auth/callback", params={"code": MEMBER_SUB, "state": "anything"})
 
     assert response.status_code == 400
+
+
+def test_a_failed_sign_in_shows_a_page_with_sign_in_again(client: TestClient) -> None:
+    state = _start_login(client, next="/projects")
+
+    # The stub rejects a code that isn't a fixture sub, the way Weave rejects an old or reused code.
+    response = client.get("/auth/callback", params={"code": "NOT-A-STUB-USER", "state": state})
+
+    assert response.status_code == 400
+    assert response.headers["content-type"].startswith("text/html")
+    assert "Sign in again" in response.text
+    assert 'href="/login?next=%2Fprojects"' in response.text
+
+
+def test_a_stale_state_shows_the_sign_in_again_page(client: TestClient) -> None:
+    response = client.get("/auth/callback", params={"code": MEMBER_SUB, "state": "anything"})
+
+    assert response.status_code == 400
+    assert 'href="/login"' in response.text
+
+
+@pytest.mark.parametrize("params", [{"error": "access_denied"}, {}])
+def test_a_callback_without_a_code_shows_the_sign_in_again_page(client: TestClient, params: dict) -> None:
+    state = _start_login(client)
+
+    response = client.get("/auth/callback", params={"state": state, **params})
+
+    assert response.status_code == 400
+    assert "Sign in again" in response.text
+
+
+def test_weave_being_unavailable_at_the_callback_shows_try_again(client: TestClient, monkeypatch) -> None:
+    def _unavailable(self, **kwargs):
+        raise WeaveUnavailableError("Weave's token endpoint returned 429")
+
+    monkeypatch.setattr(StubWeaveClient, "exchange_code", _unavailable)
+    state = _start_login(client)
+
+    response = client.get(
+        "/auth/callback", params={"code": MEMBER_SUB, "state": state}, headers={"accept": "text/html"}
+    )
+
+    assert response.status_code == 503
+    assert "Try again in a minute" in response.text
 
 
 def test_anyone_weave_signs_in_is_a_member_with_no_role(client: TestClient, db_session: Session) -> None:

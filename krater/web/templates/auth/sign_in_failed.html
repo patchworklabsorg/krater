@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+
+{% block title %}Sign in again{% endblock %}
+
+{% block content %}
+<section class="card narrow message-card">
+  <p class="eyebrow">Sign-in</p>
+  <h1>Sign-in didn't finish</h1>
+  <p>
+    Krater couldn't finish signing you in with Weave, Patchwork's sign-in service. This happens when a sign-in link
+    is old or was already used, when you started signing in from another tab, or when you said no at Weave. Nothing
+    was changed. Start again and it should go through.
+  </p>
+  <div class="action-row">
+    <a class="button button--primary" href="{{ sign_in_again }}">Sign in again</a>
+    <a class="button" href="/">Back to Krater</a>
+  </div>
+</section>
+{% endblock %}

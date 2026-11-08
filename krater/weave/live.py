@@ -108,7 +108,9 @@ class LiveWeaveClient:
         except httpx.HTTPError as exc:
             raise WeaveUnavailableError("could not reach Weave's token endpoint") from exc
 
-        if response.status_code >= 500:
+        # 429: Weave's per-IP throttle on /oauth (every member's code exchange comes from Krater's one address),
+        # so it means "try again shortly", not "this sign-in is bad".
+        if response.status_code >= 500 or response.status_code == 429:
             raise WeaveUnavailableError(f"Weave's token endpoint returned {response.status_code}")
         if response.status_code != 200:
             raise WeaveAuthError(f"token exchange failed: {response.status_code} {response.text}")
