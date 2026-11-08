@@ -1,8 +1,8 @@
-"""AdminBoxAccess: an admin's time-limited SSH access to one running box, granted with a reason.
+"""AdminBoxAccess: an admin's time-limited SSH access to one running box, granted with a reason (until 2026-11-08).
 
-While a grant is active (not revoked, not expired), Krater adds that admin's SSH keys to the box's authorized_keys
-through the runner's heartbeat (`krater.services.box_access`). Rows are kept after they end, as the record of who
-had access and why; the grant and its revocation also write `AuditEvent`s.
+History only: since then every admin's keys are on every box (`BoxAdmin`, `krater.services.box_access`), and nothing
+writes these rows. They're kept as the record of who had access and why; the grants and revocations also wrote
+`AuditEvent`s (`admin_box_access`, `admin_box_access_revoked`).
 """
 
 from __future__ import annotations

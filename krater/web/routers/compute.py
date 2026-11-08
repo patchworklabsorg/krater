@@ -339,8 +339,9 @@ def job_page(
     project = _project(db_session, actor, project_id)
     job = _job(db_session, project, job_id)
     now = datetime.now(UTC)
-    grants = box_access.active(db_session, job, now=now) if job.kind is ComputeJobKind.BOX else []
-    grant_names = people.names(weave_client, {grant.admin for grant in grants})
+    is_box = job.kind is ComputeJobKind.BOX
+    box_admins = box_access.admins(db_session, now=now) if is_box else []
+    box_admin_names = sorted(people.names(weave_client, box_admins).values(), key=str.casefold)
     events = list(
         db_session.scalars(
             sa.select(ComputeEvent).where(ComputeEvent.job_id == job.id).order_by(ComputeEvent.at.desc()).limit(100)
@@ -375,14 +376,10 @@ def job_page(
             "files": files,
             "log": log,
             "files_error": files_error,
-            "admin_access": [{"grant": grant, "name": grant_names[grant.admin_id]} for grant in grants],
-            "can_grant_access": actor.is_admin
-            and job.kind is ComputeJobKind.BOX
-            and job.state is ComputeJobState.RUNNING,
+            "box_admin_names": box_admin_names,
+            "admin_on_box": actor.is_admin and any(user.id == actor.user.id for user in box_admins),
             "access_runner_ok": box_access.runner_takes_key_updates(live[-1] if live else None),
             "admin_has_keys": actor.is_admin and bool(ssh_keys.authorized_keys_for(db_session, actor.user.id)),
-            "my_access": next((grant for grant in grants if grant.admin_id == actor.user.id), None),
-            "access_hours": box_access.ACCESS_HOURS,
             "is_admin": actor.is_admin,
             "image_reference": _pinned_reference(job.image, live[-1].image_digest if live else None),
         },

@@ -1,8 +1,9 @@
 """UserSshKey: a member's SSH public key, for their Krater Compute boxes.
 
 Only the key itself is stored (`key_type` and `key_base64`), never options or a comment that could smuggle a second
-line or `command=` into a machine's authorized_keys. Krater writes a member's keys only into their own boxes, through
-the runner; it never adds them to the organization's Vast account.
+line or `command=` into a machine's authorized_keys. Krater writes a member's keys only into their own boxes (an
+admin's go into every box, `krater.services.box_access`), through the runner; it never adds them to the organization's
+Vast account.
 """
 
 from __future__ import annotations

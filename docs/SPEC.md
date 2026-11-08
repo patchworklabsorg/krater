@@ -543,9 +543,11 @@ That check is for display only: every `/admin` page still checks Weave fresh. Re
 **Container images.** `/admin/images` lists every image members have named, with the digest each machine got, and
 inspects one from its registry: its config and build history (`docs/compute/images.md`).
 
-**Admin SSH access to a box.** From a running box's job page an admin can get SSH access for 2 hours, with a reason
-(`docs/compute/runner.md` "Admin access"). It's an override like the others: an `AuditEvent`, a post in the project's
-channel, and a banner on the job page for the team. Any admin can end it early.
+**Admin SSH access to boxes.** Every Krater admin's SSH keys are on every box, next to the owner's, with nothing to
+request (Adam, 2026-11-08). Who is an admin comes from Weave: the worker copies Weave's admin list every five minutes,
+and a box picks up a change within a heartbeat. If Weave can't be reached for an hour, no admin's keys are sent.
+Changes to the list write an `AuditEvent`. The new-box form and the job page tell the team, and the job page names
+the admins (`docs/compute/runner.md` "Admin access").
 
 ## Deployment architecture
 

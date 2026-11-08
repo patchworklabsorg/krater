@@ -3,6 +3,7 @@
 from krater.models.admin_box_access import AdminBoxAccess
 from krater.models.approval_policy import ApprovalPolicy
 from krater.models.audit_event import AuditEvent
+from krater.models.box_admin import BoxAdmin
 from krater.models.budget_entry import BudgetEntry
 from krater.models.compute_job import ComputeEvent, ComputeInstance, ComputeJob, SpendReconciliation
 from krater.models.compute_settings import ComputeSettings, ProjectComputeSettings
@@ -46,6 +47,7 @@ from krater.models.vast_search_quota import VastSearchQuota
 
 __all__ = [
     "AdminBoxAccess",
+    "BoxAdmin",
     "ApprovalPolicy",
     "ApprovalStage",
     "AuditEvent",

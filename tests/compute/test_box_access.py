@@ -1,4 +1,4 @@
-"""An admin's SSH access to a running box (`krater.services.box_access`): the rules for granting it, and the key list
+"""Admins' SSH access to every box (`krater.services.box_access`): the admin list synced from Weave, and the key list
 the runner gets on start and in every heartbeat."""
 
 from __future__ import annotations
@@ -11,11 +11,13 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 
 from krater.compute import runner_api
 from krater.config import get_settings
-from krater.models import AuditEvent, ComputeJobState
+from krater.models import AuditEvent, BoxAdmin
 from krater.services import box_access, ssh_keys
-from krater.services.errors import InvalidState, NotAllowed, NotFound, ValidationFailed
+from krater.services.actor import GROUP_MEMBER, GROUP_REVIEWER
+from krater.weave import WeaveUnavailableError
 from tests.compute.test_boxes import _beat, _running_box
 from tests.compute.test_scheduler import NOW, _submit
+from tests.services.conftest import add_to_team
 
 
 def _key(db_session, actor) -> str:
@@ -37,44 +39,86 @@ def box(db_session, member, project, client, fake):  # noqa: F811
 AT = NOW + timedelta(minutes=4)
 
 
-def test_an_admins_keys_join_the_owners_while_access_lasts(db_session, admin, box) -> None:
+def _changes(db_session) -> list[dict]:
+    return [event.payload for event in db_session.query(AuditEvent).filter_by(action=box_access.AUDIT_ADMINS_CHANGED)]
+
+
+def test_every_admins_keys_go_on_every_box(db_session, admin, weave, box) -> None:
     job, row, owner_key = box
     admin_key = _key(db_session, admin)
+    assert _beat(db_session, row, 4).ssh_keys == (owner_key,)  # not synced yet
 
-    access = box_access.grant(db_session, admin, job=job, reason="Checking the training code.", now=AT)
+    added, removed = box_access.sync_admins(db_session, weave, now=AT)
 
-    assert access.expires_at == AT + timedelta(hours=box_access.ACCESS_HOURS)
+    assert (added, removed) == ([admin.user.weave_sub], [])
     assert _beat(db_session, row, 5).ssh_keys == (owner_key, admin_key)
     assert runner_api.start(db_session, row, now=AT, settings=get_settings()).ssh_keys == (owner_key, admin_key)
-    # Two hours on, the heartbeat drops the admin's key.
-    later = runner_api.heartbeat(db_session, row, {"key_updates": True}, now=access.expires_at)
-    assert later.ssh_keys == (owner_key,)
-
-    event = db_session.query(AuditEvent).filter_by(action=box_access.AUDIT_GRANTED).one()
-    assert event.reason == "Checking the training code."
-    assert event.payload["job_id"] == str(job.id)
-    assert event.project_id == job.project_id
+    assert _changes(db_session) == [{"added": [admin.user.weave_sub], "removed": []}]
 
 
-def test_revoking_drops_the_key_at_the_next_heartbeat(db_session, admin, box, make_actor) -> None:
-    job, row, owner_key = box
+def test_an_admin_removed_in_weave_leaves_the_boxes(db_session, admin, weave, box) -> None:
+    _, row, owner_key = box
     _key(db_session, admin)
-    access = box_access.grant(db_session, admin, job=job, reason="Review.", now=AT)
-    other_admin = make_actor(groups=admin.groups)
+    box_access.sync_admins(db_session, weave, now=AT)
 
-    box_access.revoke(db_session, other_admin, access_id=access.id, job=job, now=AT + timedelta(minutes=10))
+    weave.set_roles(admin.user.weave_sub, [])
+    box_access.sync_admins(db_session, weave, now=AT + timedelta(minutes=5))
 
-    assert _beat(db_session, row, 15).ssh_keys == (owner_key,)
-    assert access.revoked_by_id == other_admin.user.id
-    assert db_session.query(AuditEvent).filter_by(action=box_access.AUDIT_REVOKED).count() == 1
-    with pytest.raises(InvalidState):
-        box_access.revoke(db_session, admin, access_id=access.id, job=job, now=AT + timedelta(minutes=11))
+    assert _beat(db_session, row, 10).ssh_keys == (owner_key,)
+    assert db_session.query(BoxAdmin).count() == 0
+    assert {"added": [], "removed": [admin.user.weave_sub]} in _changes(db_session)
 
 
-def test_a_key_the_admin_removes_leaves_the_box(db_session, admin, box) -> None:
-    job, row, owner_key = box
+def test_a_locked_admin_account_isnt_listed(db_session, admin, weave, box) -> None:
     _key(db_session, admin)
-    box_access.grant(db_session, admin, job=job, reason="Review.", now=AT)
+    weave.set_active(admin.user.weave_sub, False)
+
+    assert box_access.sync_admins(db_session, weave, now=AT) == ([], [])
+    assert box_access.admin_ids(db_session, now=AT) == []
+
+
+def test_members_and_reviewers_arent_listed(db_session, member, make_actor, weave) -> None:
+    make_actor(groups=frozenset({GROUP_MEMBER, GROUP_REVIEWER}))
+
+    assert box_access.sync_admins(db_session, weave, now=AT) == ([], [])
+
+
+def test_an_unchanged_list_writes_no_audit_event(db_session, admin, weave) -> None:
+    box_access.sync_admins(db_session, weave, now=AT)
+    box_access.sync_admins(db_session, weave, now=AT + timedelta(minutes=5))
+
+    assert len(_changes(db_session)) == 1
+    assert db_session.get(BoxAdmin, admin.user.id).synced_at == AT + timedelta(minutes=5)
+
+
+def test_with_weave_down_the_last_list_counts_for_an_hour(db_session, admin, weave, box, monkeypatch) -> None:
+    _, row, owner_key = box
+    admin_key = _key(db_session, admin)
+    box_access.sync_admins(db_session, weave, now=AT)
+
+    def unavailable(role):
+        raise WeaveUnavailableError("down")
+
+    monkeypatch.setattr(weave, "list_users_with_role", unavailable)
+    with pytest.raises(WeaveUnavailableError):
+        box_access.sync_admins(db_session, weave, now=AT + timedelta(minutes=30))
+
+    almost = AT + box_access.ROSTER_STALE - timedelta(minutes=1)
+    assert runner_api.heartbeat(db_session, row, {"key_updates": True}, now=almost).ssh_keys == (owner_key, admin_key)
+    stale = AT + box_access.ROSTER_STALE
+    assert runner_api.heartbeat(db_session, row, {"key_updates": True}, now=stale).ssh_keys == (owner_key,)
+
+    # Weave answers again: the admin is back, and the audit log says so.
+    monkeypatch.undo()
+    later = stale + timedelta(minutes=5)
+    assert box_access.sync_admins(db_session, weave, now=later) == ([admin.user.weave_sub], [])
+    assert runner_api.heartbeat(db_session, row, {"key_updates": True}, now=later).ssh_keys == (owner_key, admin_key)
+
+
+def test_a_key_the_admin_removes_leaves_the_box(db_session, admin, weave, box) -> None:
+    _, row, owner_key = box
+    _key(db_session, admin)
+    box_access.sync_admins(db_session, weave, now=AT)
 
     for key in ssh_keys.list_keys(db_session, admin.user):
         ssh_keys.remove_key(db_session, admin, key_id=key.id)
@@ -82,62 +126,20 @@ def test_a_key_the_admin_removes_leaves_the_box(db_session, admin, box) -> None:
     assert _beat(db_session, row, 5).ssh_keys == (owner_key,)
 
 
-def test_only_admins_get_access(db_session, member, box) -> None:
-    job, _, _ = box
+def test_an_admin_who_owns_the_box_appears_once(db_session, admin, weave, project, client, fake) -> None:  # noqa: F811
+    add_to_team(db_session, project, admin)
+    own_key = _key(db_session, admin)
+    job, row = _running_box(db_session, admin, project, client, fake)
+    box_access.sync_admins(db_session, weave, now=AT)
 
-    with pytest.raises(NotAllowed):
-        box_access.grant(db_session, member, job=job, reason="Mine.", now=AT)
-
-
-def test_access_needs_a_reason_and_a_key(db_session, admin, box) -> None:
-    job, _, _ = box
-
-    with pytest.raises(ValidationFailed) as no_reason:
-        box_access.grant(db_session, admin, job=job, reason="  ", now=AT)
-    assert "reason" in no_reason.value.errors
-    with pytest.raises(ValidationFailed) as no_key:
-        box_access.grant(db_session, admin, job=job, reason="Review.", now=AT)
-    assert "SSH key" in no_key.value.errors["reason"]
+    assert _beat(db_session, row, 5, key_updates=True).ssh_keys == (own_key,)
 
 
-def test_one_grant_at_a_time_per_admin(db_session, admin, box) -> None:
-    job, _, _ = box
-    _key(db_session, admin)
-    box_access.grant(db_session, admin, job=job, reason="Review.", now=AT)
-
-    with pytest.raises(InvalidState, match="already have access"):
-        box_access.grant(db_session, admin, job=job, reason="Again.", now=AT + timedelta(minutes=1))
-
-
-def test_only_a_running_box_with_a_new_runner(db_session, admin, member, project, client, fake) -> None:  # noqa: F811
-    _key(db_session, admin)
-    batch = _submit(db_session, member, project)
-    with pytest.raises(InvalidState, match="running"):
-        box_access.grant(db_session, admin, job=batch, reason="Review.", now=AT)
-
-    job, row = _running_box(db_session, member, project, client, fake)
-    _beat(db_session, row, 3)  # an older runner doesn't say key_updates
-    with pytest.raises(InvalidState, match="older than live key updates"):
-        box_access.grant(db_session, admin, job=job, reason="Review.", now=AT)
-
-    _beat(db_session, row, 4, key_updates=True)
-    job.state = ComputeJobState.STOPPED
-    with pytest.raises(InvalidState, match="running"):
-        box_access.grant(db_session, admin, job=job, reason="Review.", now=AT)
-
-
-def test_revoking_needs_the_grant_on_this_box(db_session, admin, box) -> None:
-    import uuid
-
-    job, _, _ = box
-
-    with pytest.raises(NotFound):
-        box_access.revoke(db_session, admin, access_id=uuid.uuid4(), job=job, now=AT)
-
-
-def test_a_batch_job_heartbeat_carries_no_keys(db_session, member, project, client, fake) -> None:  # noqa: F811
+def test_a_batch_job_heartbeat_carries_no_keys(db_session, member, admin, weave, project, client, fake) -> None:  # noqa: F811
     from tests.compute.test_scheduler import _instance, _pass, _token
 
+    _key(db_session, admin)
+    box_access.sync_admins(db_session, weave, now=AT)
     job = _submit(db_session, member, project)
     _pass(db_session, client)
     row = _instance(db_session, job)

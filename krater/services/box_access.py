@@ -1,37 +1,47 @@
-"""Admin SSH access to a running box (`AdminBoxAccess`).
+"""Admins' SSH access to every box.
 
-An admin asks for access with a reason. Krater then adds that admin's SSH keys to the box's authorized_keys, next to
-the owner's, for `ACCESS_HOURS` or until an admin revokes it. The runner gets the whole key list in every heartbeat
-reply (`krater.compute.runner_api.heartbeat`) and rewrites authorized_keys when it changes, so a grant, its expiry and
-its revocation take effect within a heartbeat (a minute). What this doesn't do, and the job page says so:
+Every Krater admin's SSH keys go on every box, next to the owner's, with nothing to request. Who is an admin comes
+from Weave: the worker's `box_admins_sync` task (`sync_admins`) copies Weave's admin list into `BoxAdmin` every five
+minutes, and the runner gets the whole key list when it starts and in every heartbeat reply
+(`krater.compute.runner_api`), which reads only that table. A runner that reports `key_updates` (runners from Nov 7,
+2026 on) rewrites authorized_keys when the list changes, so an admin added or removed in Weave, or a key an admin
+adds or removes, reaches a running box within a sync and a heartbeat (about six minutes). An older runner reads its
+keys only when it starts.
+
+If Weave can't be reached the last list stays, but only for `ROSTER_STALE`: after that no admin's keys are sent, so
+authorization still fails closed. What this doesn't do, and the job page and the new-box form say so:
 
 - it doesn't end an SSH session that is already open: sshd checks keys only at login;
 - an open session counts as a session, so the box doesn't stop for being idle while an admin is logged in, and keeps
   spending the project's budget;
 - a shell on the box can read the project's secrets, as the owner's can;
-- the admin's role is checked in Weave when access is granted, not again on each heartbeat.
+- Krater doesn't know when an admin logs in: the runner reports only how many sessions are open.
 
-Only boxes whose runner reports `key_updates` (runners from Nov 7, 2026 on) apply a key list from a heartbeat; an
-older box learns keys only when it starts, so access to it is refused.
+Changes to the admin list write an `AuditEvent` (`AUDIT_ADMINS_CHANGED`), the record of who could reach boxes when.
+Batch jobs have no sshd, so this is boxes only. `AdminBoxAccess` rows are the earlier request-with-a-reason grants,
+kept as history; nothing writes them any more.
 """
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timedelta
 
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
-from krater.models import AdminBoxAccess, ComputeInstance, ComputeJob, ComputeJobKind, ComputeJobState, UserSshKey
+from krater.models import BoxAdmin, ComputeInstance, ComputeJob, User, UserSshKey
 from krater.services import audit, ssh_keys
-from krater.services.actor import Actor
-from krater.services.errors import InvalidState, NotAllowed, NotFound, ValidationFailed
+from krater.services.actor import GROUP_ADMIN
+from krater.weave import WeaveClient
 
-ACCESS_HOURS = 2
+logger = logging.getLogger(__name__)
 
-AUDIT_GRANTED = "admin_box_access"
-AUDIT_REVOKED = "admin_box_access_revoked"
+#: How long Weave's last admin list counts when the sync can't reach Weave.
+ROSTER_STALE = timedelta(hours=1)
+
+AUDIT_ADMINS_CHANGED = "box_admins_changed"
 
 
 def live_instance(job: ComputeJob) -> ComputeInstance | None:
@@ -44,95 +54,63 @@ def runner_takes_key_updates(instance: ComputeInstance | None) -> bool:
     return instance is not None and bool((instance.last_heartbeat or {}).get("key_updates"))
 
 
-def active(session: Session, job: ComputeJob, *, now: datetime) -> list[AdminBoxAccess]:
-    """The grants on `job` that are in force now, soonest to end first."""
+def sync_admins(session: Session, weave_client: WeaveClient, *, now: datetime) -> tuple[list[str], list[str]]:
+    """Replace `BoxAdmin` with the active users Weave says are admins and who have signed in to Krater (anyone else
+    has no SSH keys here). Returns the Patchwork IDs (added, removed), and writes an `AuditEvent` when either is
+    non-empty. Raises `WeaveUnavailableError` when Weave can't answer; the rows are then left as they were."""
+    subs = {record.sub for record in weave_client.list_users_with_role(GROUP_ADMIN) if record.active}
+    users = list(session.scalars(sa.select(User).where(User.weave_sub.in_(subs)))) if subs else []
+    wanted = {user.id: user for user in users}
+    rows = {row.user_id: row for row in session.scalars(sa.select(BoxAdmin).with_for_update())}
+
+    removed = []
+    for user_id, row in rows.items():
+        if user_id not in wanted:
+            removed.append(row.user.weave_sub)
+            session.delete(row)
+    added = []
+    for user_id, user in wanted.items():
+        row = rows.get(user_id)
+        if row is None:
+            session.add(BoxAdmin(user_id=user_id, synced_at=now))
+            added.append(user.weave_sub)
+        else:
+            if row.synced_at <= now - ROSTER_STALE:
+                added.append(user.weave_sub)  # its keys had stopped going out
+            row.synced_at = now
+    session.flush()
+    added.sort()
+    removed.sort()
+    if added or removed:
+        audit.record(session, None, AUDIT_ADMINS_CHANGED, payload={"added": added, "removed": removed})
+        logger.info("krater box admins: added %s, removed %s", added, removed)
+    return added, removed
+
+
+def admin_ids(session: Session, *, now: datetime) -> list[uuid.UUID]:
+    """The users whose keys go on every box now: the admins Weave confirmed within `ROSTER_STALE`."""
     return list(
         session.scalars(
-            sa.select(AdminBoxAccess)
-            .where(
-                AdminBoxAccess.job_id == job.id,
-                AdminBoxAccess.revoked_at.is_(None),
-                AdminBoxAccess.expires_at > now,
-            )
-            .order_by(AdminBoxAccess.expires_at)
+            sa.select(BoxAdmin.user_id).where(BoxAdmin.synced_at > now - ROSTER_STALE).order_by(BoxAdmin.user_id)
         )
     )
 
 
+def admins(session: Session, *, now: datetime) -> list[User]:
+    """The `User`s of `admin_ids`, for the job page."""
+    ids = admin_ids(session, now=now)
+    return list(session.scalars(sa.select(User).where(User.id.in_(ids)))) if ids else []
+
+
 def authorized_keys(session: Session, job: ComputeJob, *, now: datetime) -> list[str]:
-    """Every line for a box's authorized_keys: the owner's keys, then those of each admin with access now. An admin's
-    keys are read fresh, so a key they remove leaves the box too. Duplicates (an admin who owns the box) appear
-    once."""
+    """Every line for a box's authorized_keys: the owner's keys, then every admin's (`admin_ids`). Keys are read
+    fresh, so a key someone removes leaves the box too. Duplicates (an admin who owns the box) appear once."""
     lines = ssh_keys.authorized_keys_for(session, job.submitter_id)
-    admin_ids = {grant.admin_id for grant in active(session, job, now=now)} - {job.submitter_id}
-    if admin_ids:
+    ids = set(admin_ids(session, now=now)) - {job.submitter_id}
+    if ids:
         for key in session.scalars(
-            sa.select(UserSshKey).where(UserSshKey.user_id.in_(admin_ids)).order_by(UserSshKey.created_at)
+            sa.select(UserSshKey).where(UserSshKey.user_id.in_(ids)).order_by(UserSshKey.created_at)
         ):
             if key.authorized_keys_line not in lines:
                 lines.append(key.authorized_keys_line)
     return lines
-
-
-def grant(session: Session, actor: Actor, *, job: ComputeJob, reason: str, now: datetime) -> AdminBoxAccess:
-    """Give `actor` (an admin, checked in Weave by the caller's `fresh_actor`) SSH access to the running box `job`
-    for `ACCESS_HOURS`. Needs a reason and at least one SSH key on the admin's account. Writes an `AuditEvent`.
-
-    Raises `NotAllowed` for a non-admin, `InvalidState` if `job` isn't a running box, its runner can't take key
-    updates, or the admin already has access, and `ValidationFailed` without a reason or an SSH key."""
-    if not actor.is_admin:
-        raise NotAllowed("Only an admin can get SSH access to a member's box.")
-    if not (reason and reason.strip()):
-        raise ValidationFailed({"reason": "A reason is required. The team sees it."})
-    if job.kind is not ComputeJobKind.BOX or job.state is not ComputeJobState.RUNNING:
-        raise InvalidState("SSH access is only for a box that is running.")
-    if not runner_takes_key_updates(live_instance(job)):
-        raise InvalidState(
-            "This box's runner is older than live key updates, so it would only take your key if it restarted."
-        )
-    if not ssh_keys.authorized_keys_for(session, actor.user.id):
-        raise ValidationFailed({"reason": "Add an SSH key to your account first (SSH keys, in the navigation)."})
-    mine = [each for each in active(session, job, now=now) if each.admin_id == actor.user.id]
-    if mine:
-        raise InvalidState(f"You already have access until {mine[0].expires_at.strftime('%H:%M UTC')}.")
-
-    access = AdminBoxAccess(
-        job_id=job.id,
-        admin_id=actor.user.id,
-        reason=reason.strip(),
-        expires_at=now + timedelta(hours=ACCESS_HOURS),
-    )
-    session.add(access)
-    session.flush()
-    audit.record(
-        session,
-        actor,
-        AUDIT_GRANTED,
-        project=job.project,
-        payload={"job_id": str(job.id), "until": access.expires_at.isoformat(timespec="minutes")},
-        reason=access.reason,
-    )
-    return access
-
-
-def revoke(session: Session, actor: Actor, *, access_id: uuid.UUID, job: ComputeJob, now: datetime) -> AdminBoxAccess:
-    """End a grant on `job` now. Any admin can. Writes an `AuditEvent`. Raises `NotFound` for a grant that isn't
-    on `job`, and `InvalidState` for one that has already ended."""
-    if not actor.is_admin:
-        raise NotAllowed("Only an admin can end an admin's access to a box.")
-    access = session.get(AdminBoxAccess, access_id)
-    if access is None or access.job_id != job.id:
-        raise NotFound("No such access on this box.")
-    if not access.is_active(now):
-        raise InvalidState("That access has already ended.")
-    access.revoked_at = now
-    access.revoked_by_id = actor.user.id
-    session.flush()
-    audit.record(
-        session,
-        actor,
-        AUDIT_REVOKED,
-        project=job.project,
-        payload={"job_id": str(job.id), "admin_sub": access.admin.weave_sub},
-    )
-    return access

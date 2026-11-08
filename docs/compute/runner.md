@@ -134,19 +134,24 @@ SSH-only in v1 (Adam, 2026-10-11): members run Jupyter themselves through an SSH
 
 ### Admin access
 
-An admin can get SSH access to a running box from its job page, with a reason the team sees
-(`krater.services.box_access`, `AdminBoxAccess`). Krater adds the admin's keys to the list it sends for
-`ACCESS_HOURS` (2), or until an admin ends it, so access starts and ends within a heartbeat. The grant writes an
-`AuditEvent`, is posted in the project's channel, and shows as a banner on the job page. Know what it doesn't do:
+Every Krater admin's SSH keys are on every box, next to the owner's (`krater.services.box_access`, `BoxAdmin`).
+Nothing is requested: since 2026-11-08 this replaces the 2-hour grant with a reason (`AdminBoxAccess` rows stay as
+history). The worker's `box_admins_sync` task copies Weave's admin list (active accounts with Krater's `admin` role,
+who have signed in to Krater) into `box_admins` every five minutes, and the start reply and every heartbeat reply
+carry the owner's keys plus those admins'. The heartbeat reads only that table, so it never waits on Weave. If the
+sync can't reach Weave, the last list counts for an hour (`ROSTER_STALE`), then no admin's keys are sent; three
+failed syncs in 30 minutes open an admin alert. Each change to the list writes a `box_admins_changed` `AuditEvent`.
+The new-box form says admins can log in, and the job page names them. Know what it doesn't do:
 
-- it doesn't end an open SSH session: sshd checks keys only at login, so a session already open outlives the access;
+- it doesn't end an open SSH session: sshd checks keys only at login, so a removed admin's open session stays open;
 - an open session counts as a session, so the box doesn't stop for being idle while an admin is logged in, and it
   keeps spending the project's budget;
 - a shell on the box can read the project's secrets, as the owner's can;
-- the admin's role is checked in Weave when access is granted, not again on each heartbeat.
+- Krater doesn't record when an admin logs in: the runner reports only how many sessions are open.
 
-Only boxes whose runner says `key_updates` get access (runners from Nov 7, 2026 on): an older runner reads its keys
-only at start. There's no access to batch jobs, which have no sshd: an admin reads their logs and files on the job
+A runner that says `key_updates` (runners from Nov 7, 2026 on) applies the list from each heartbeat, so a change
+reaches a running box within about six minutes. An older runner reads its keys only at start, with the admins listed
+then. There's no access to batch jobs, which have no sshd: an admin reads their logs and files on the job
 page instead.
 
 ## What a member's job sees

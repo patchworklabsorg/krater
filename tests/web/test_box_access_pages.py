@@ -1,4 +1,4 @@
-"""Admin SSH access from a box's job page: the form, the banner the team sees, revoking, and who may do it."""
+"""Admins' SSH access to every box, as the job page and the new-box form show it."""
 
 from __future__ import annotations
 
@@ -10,11 +10,11 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 from fastapi.testclient import TestClient
 
 from krater.config import get_settings
-from krater.models import AdminBoxAccess, ComputeInstance, ComputeInstanceState, ComputeJobKind, ComputeJobState
-from krater.services import compute_jobs, ssh_keys
+from krater.models import ComputeInstance, ComputeInstanceState, ComputeJobKind, ComputeJobState
+from krater.services import box_access, compute_jobs, ssh_keys
 from krater.services.compute_jobs import JobSpec
 from krater.weave import StubWeaveClient
-from tests.conftest import ADMIN_SUB, MEMBER_SUB, REVIEWER_SUB, get_csrf_token
+from tests.conftest import ADMIN_SUB, MEMBER_SUB, OTHER_MEMBER_SUB, REVIEWER_SUB, get_csrf_token
 from tests.web.conftest import actor_for
 
 
@@ -75,94 +75,94 @@ def _page(client, job):
     return client.get(f"/projects/{job.project_id}/compute/{job.id}")
 
 
-def _grant(client, job, reason="Reviewing the training code."):
-    csrf = get_csrf_token(_page(client, job).text)
-    return client.post(
-        f"/projects/{job.project_id}/compute/{job.id}/admin-access",
-        data={"csrf_token": csrf, "reason": reason},
-        follow_redirects=False,
-    )
+def _sync(db_session, weave_stub) -> None:
+    box_access.sync_admins(db_session, weave_stub, now=datetime.now(UTC))
 
 
-def test_an_admin_gets_access_and_the_team_sees_it(client: TestClient, login_as, box, db_session) -> None:
-    admin = login_as(ADMIN_SUB)
-    _add_key(db_session, admin)
-    assert "Get SSH access for 2 hours" in _page(client, box).text
-
-    response = _grant(client, box)
-
-    assert response.status_code == 303
-    assert response.headers["location"].endswith("#admin-access")
-    access = db_session.query(AdminBoxAccess).filter_by(job_id=box.id).one()
-    assert access.admin_id == admin.id
-    assert "End this access" in _page(client, box).text
-
-    login_as(MEMBER_SUB)
-    page = _page(client, box).text
-    assert "An admin has SSH access to this box" in page
-    assert "Reviewing the training code." in page
-    assert "End this access" not in page
-    assert "Get SSH access" not in page
-
-
-def test_an_admin_without_a_key_is_told_to_add_one(client: TestClient, login_as, box) -> None:
+def test_the_team_sees_which_admins_can_log_in(client: TestClient, login_as, box, db_session, weave_stub) -> None:
     login_as(ADMIN_SUB)
+    login_as(MEMBER_SUB)
+    assert "None are on this one right now" in _page(client, box).text
+
+    _sync(db_session, weave_stub)
 
     page = _page(client, box).text
+    assert "On this one: Ana Admin." in page
+    assert "can read the project's secrets" in page
+    assert "Your keys" not in page  # that line is for admins
 
-    assert "Add an SSH key to your account first" in page
-    assert "Get SSH access" not in page
+
+def test_an_admin_without_a_key_is_told_to_add_one(client: TestClient, login_as, box, db_session, weave_stub) -> None:
+    login_as(ADMIN_SUB)
+    _sync(db_session, weave_stub)
+
+    assert "Add an SSH key to your account to log in" in _page(client, box).text
 
 
-def test_an_old_runner_is_explained(client: TestClient, login_as, box, db_session) -> None:
+def test_an_admin_with_a_key_is_on_the_box(client: TestClient, login_as, box, db_session, weave_stub) -> None:
     _add_key(db_session, login_as(ADMIN_SUB))
+    assert "Your keys go on within about five minutes" in _page(client, box).text
+
+    _sync(db_session, weave_stub)
+
+    assert "Your keys are on it" in _page(client, box).text
+
+
+def test_an_old_runner_is_explained(client: TestClient, login_as, box, db_session, weave_stub) -> None:
+    _add_key(db_session, login_as(ADMIN_SUB))
+    _sync(db_session, weave_stub)
     box.instances[0].last_heartbeat = {"phase": "box"}
     db_session.flush()
 
     assert "older than live key updates" in _page(client, box).text
 
 
-def test_a_grant_without_a_reason_is_refused(client: TestClient, login_as, box, db_session) -> None:
+def test_a_batch_jobs_page_has_no_admin_ssh_card(client: TestClient, login_as, box, db_session) -> None:
+    login_as(MEMBER_SUB)
+    box.kind = ComputeJobKind.JOB
+    box.command = "python train.py"
+    db_session.flush()
+
+    assert "Admin SSH access" not in _page(client, box).text
+
+
+def test_the_old_request_form_is_gone(client: TestClient, login_as, box, db_session) -> None:
     _add_key(db_session, login_as(ADMIN_SUB))
-
-    _grant(client, box, reason="")
-
-    assert db_session.query(AdminBoxAccess).count() == 0
-    assert "A reason is required" in _page(client, box).text
-
-
-def test_an_admin_ends_the_access(client: TestClient, login_as, box, db_session) -> None:
-    _add_key(db_session, login_as(ADMIN_SUB))
-    _grant(client, box)
-    access = db_session.query(AdminBoxAccess).one()
-    csrf = get_csrf_token(_page(client, box).text)
+    page = _page(client, box)
+    assert "Get SSH access" not in page.text
 
     response = client.post(
-        f"/projects/{box.project_id}/compute/{box.id}/admin-access/{access.id}/revoke",
-        data={"csrf_token": csrf},
+        f"/projects/{box.project_id}/compute/{box.id}/admin-access",
+        data={"csrf_token": get_csrf_token(page.text), "reason": "Old form."},
         follow_redirects=False,
     )
 
-    assert response.status_code == 303
-    db_session.refresh(access)
-    assert access.revoked_at is not None
-    assert "An admin has SSH access" not in _page(client, box).text
+    assert response.status_code in (404, 405)
 
 
-@pytest.mark.parametrize("sub", [MEMBER_SUB, REVIEWER_SUB])
-def test_members_and_reviewers_cant_get_access(client: TestClient, login_as, box, db_session, sub) -> None:
-    user = login_as(sub)
-    _add_key(db_session, user)
+def test_the_new_box_form_says_admins_can_log_in(client: TestClient, login_as, box) -> None:
+    login_as(MEMBER_SUB)
 
-    response = _grant(client, box)
+    page = client.get(f"/projects/{box.project_id}/compute/new").text
 
-    assert response.status_code == 403
-    assert db_session.query(AdminBoxAccess).count() == 0
+    assert "Krater admins' SSH keys go on every box too" in page
 
 
-def test_the_heartbeat_route_sends_a_boxs_keys(client: TestClient, box, db_session) -> None:
+@pytest.mark.parametrize("sub", [OTHER_MEMBER_SUB, REVIEWER_SUB])
+def test_members_and_reviewers_keys_stay_off_other_boxes(
+    client: TestClient, login_as, box, db_session, weave_stub, sub
+) -> None:
+    _add_key(db_session, login_as(sub))
+    _sync(db_session, weave_stub)
+
+    assert box_access.authorized_keys(db_session, box, now=datetime.now(UTC)) == []
+
+
+def test_the_heartbeat_route_sends_the_admins_keys(client: TestClient, login_as, box, db_session, weave_stub) -> None:
     from krater.compute import runner_api
 
+    _add_key(db_session, login_as(ADMIN_SUB))
+    _sync(db_session, weave_stub)
     row = box.instances[0]
     token = "t" * 40
     row.runner_token_hash = runner_api.hash_token(token)
@@ -173,4 +173,4 @@ def test_the_heartbeat_route_sends_a_boxs_keys(client: TestClient, box, db_sessi
     )
 
     assert response.status_code == 200
-    assert response.json()["ssh_keys"] == []  # the owner has no keys here, and no admin has access
+    assert len(response.json()["ssh_keys"]) == 1  # the owner has no keys here; the admin has one

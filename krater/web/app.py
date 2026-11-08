@@ -30,7 +30,6 @@ from krater.web.routers import (
     admin_images,
     api,
     auth,
-    box_access,
     compute,
     compute_admin,
     funders,
@@ -132,7 +131,6 @@ def create_app() -> FastAPI:
     app.include_router(account.router)
     app.include_router(compute_admin.router)
     # Before `compute`, whose /projects/{id}/compute/{job}/{action} would take /admin-access.
-    app.include_router(box_access.router)
     app.include_router(compute.router)
     app.include_router(runner.router)
     app.include_router(gallery.router)
