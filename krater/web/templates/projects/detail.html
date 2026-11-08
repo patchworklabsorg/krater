@@ -209,6 +209,8 @@
   {% endif %}
 </section>
 
+{% if ospool_grant %}{% include "projects/_ospool.html" %}{% endif %}
+
 {% if primary_image_url %}
 <section class="card">
   <h2>Primary image</h2>
@@ -449,6 +451,8 @@
     </form>
     </div>
   {% endif %}
+
+  {% include "projects/_ospool_admin.html" %}
 
   {% if can_admin_adjust_budget %}
     <div class="admin-action">

@@ -198,6 +198,14 @@ class Settings(BaseSettings):
     # The most outbox rows one sender run sends. The periodic task runs every minute.
     quilt_batch_size: int = 200
 
+    # OSG's public accounting (GRACC), where Krater reads the usage of OSPool grants run outside Krater
+    # (krater.ospool.accounting, docs/SPEC.md "OSPool grants"). A public, read-only Elasticsearch endpoint: no
+    # credentials. `fake` answers from memory, for tests.
+    ospool_accounting_mode: Literal["fake", "live"] = "live"
+    ospool_accounting_url: str = "https://gracc.opensciencegrid.org/q/gracc.osg.summary/_search"
+    ospool_accounting_timeout_seconds: float = 30.0
+    ospool_usage_import_cron: str = "41 8 * * *"  # daily; OSG's accounting is about a day behind
+
     @property
     def compute_on(self) -> bool:
         """Whether Krater Compute runs, with any provider."""

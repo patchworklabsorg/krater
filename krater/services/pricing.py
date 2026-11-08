@@ -313,6 +313,14 @@ def _market_rate(
     return _MarketRate(rate_cents, price.refreshed_at, SOURCE_CATALOG, basis, spot_unavailable)
 
 
+def on_demand_rate(session: Session, *, accelerator_name: str, now: datetime) -> tuple[int, str] | None:
+    """What renting one `accelerator_name` costs per hour, on demand: `(rate_cents, source)` from Krater's own Vast
+    samples (`SOURCE_SAMPLES`), else the catalog (`SOURCE_CATALOG`); `None` when Krater has no price for it. What
+    an OSPool grant's usage is valued at (`krater.services.ospool_grants`)."""
+    rate = _market_rate(session, accelerator_name=accelerator_name, accelerator_count=1, basis=BASIS_ON_DEMAND, now=now)
+    return None if rate is None else (rate.rate_cents, rate.source)
+
+
 def estimate_cost(
     session: Session,
     *,

@@ -77,6 +77,45 @@
   {% endif %}
 </section>
 
+{% if ospool %}
+<section aria-labelledby="ospool-grants">
+  <div class="section-head">
+    <h2 id="ospool-grants">OSPool grants</h2>
+  </div>
+  <p class="muted">Projects the OSPool funds outside Krater. Usage is from OSG's public accounting, read daily and
+    about a day behind. Worth is what renting the GPU on demand would have cost.</p>
+  <div class="table-scroll">
+    <table class="table">
+      <thead>
+        <tr>
+          <th scope="col">Project</th>
+          <th scope="col">OSPool project</th>
+          <th scope="col" class="num">GPU-hours</th>
+          <th scope="col" class="num">Core-hours</th>
+          <th scope="col" class="num">Worth</th>
+          <th scope="col">Last read</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for grant, totals in ospool %}
+          <tr>
+            <td class="cell-title"><a href="/projects/{{ grant.project.id }}#ospool">{{ grant.project.title or "Untitled proposal" }}</a></td>
+            <td><code>{{ grant.ospool_project_name }}</code></td>
+            <td class="num">{{ "{:,.1f}".format(totals.gpu_hours) }}</td>
+            <td class="num">{{ "{:,.1f}".format(totals.core_hours) }}</td>
+            <td class="num">{{ totals.value_cents | dollars }}</td>
+            <td class="nowrap">
+              {{ grant.last_imported_at.strftime("%Y-%m-%d") if grant.last_imported_at else "Not yet" }}
+              {% if grant.last_import_error %}<div class="field-error">Last import failed</div>{% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
 <section aria-labelledby="all-projects">
   <div class="section-head">
     <h2 id="all-projects">All projects</h2>

@@ -34,7 +34,7 @@ from krater.models import (
     SlackNotification,
     User,
 )
-from krater.services import funding_holds, grants, teams
+from krater.services import funding_holds, grants, ospool_grants, teams
 from krater.services.actor import GROUP_REVIEWER
 from krater.services.budget_alerts import AUDIT_BUDGET_TEARDOWN, AUDIT_BUDGET_WARNING
 from krater.services.compute_jobs import (
@@ -314,7 +314,11 @@ def notify_decision(session: Session, slack_client: SlackClient, *, revision: Pr
 
     project = revision.project
     stage = _stage_label(revision)
-    hold = funding_holds.approval_label(project, verification_held=grants.pending(session, project) is not None)
+    hold = funding_holds.approval_label(
+        project,
+        verification_held=grants.pending(session, project) is not None,
+        ospool=ospool_grants.for_project(session, project) is not None,
+    )
     blocks = [
         {
             "type": "section",

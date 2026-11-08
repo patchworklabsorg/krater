@@ -75,13 +75,17 @@ _VALUES = {
     "full_estimate": full_estimate_text,
     "team": team_text,
     "residency": residency_text,
+    "ospool_usage": lambda row: row.ospool_usage,
 }
+#: Fields left out of a project's entry when it has nothing for them, rather than printed blank.
+_ONLY_WHEN_SET = frozenset({"ospool_usage"})
 
 
 def row_fields(packet: Packet, row: PacketRow) -> list[tuple[str, str]]:
     """What the PDF prints about `row`: (label, text) for each of the packet's fields, in order."""
     labels = {field.key: field.label for field in FIELDS}
-    return [(labels[key], _VALUES[key](row)) for key in packet.fields]
+    values = [(key, _VALUES[key](row)) for key in packet.fields]
+    return [(labels[key], text) for key, text in values if text or key not in _ONLY_WHEN_SET]
 
 
 def _register_fonts() -> None:

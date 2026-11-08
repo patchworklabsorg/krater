@@ -68,12 +68,19 @@ def parse(value: str | None) -> FundingHold | None:
         raise ValidationFailed({"funding_hold": "Choose one of the holds."}) from None
 
 
-def approval_label(project: Project, *, verification_held: bool) -> str | None:
-    """What an approved project waits on, for its status badge: its funding hold, else "Awaiting verification" when
-    `verification_held` (its budget is held for the team's verification, or Weave hasn't cleared the team), else
-    `None`. `None` too for a project that isn't approved and open."""
+#: An approved project the OSPool funds outside Krater (`krater.services.ospool_grants`): shown, never a hold.
+OSPOOL = "OSPool"
+
+
+def approval_label(project: Project, *, verification_held: bool, ospool: bool = False) -> str | None:
+    """What an approved project waits on, or how it's funded, for its status badge: "OSPool" when `ospool` (it has an
+    OSPool grant), else its funding hold, else "Awaiting verification" when `verification_held` (its budget is held
+    for the team's verification, or Weave hasn't cleared the team), else `None`. `None` too for a project that isn't
+    approved and open."""
     if project.status not in HOLDABLE_STATUSES:
         return None
+    if ospool:
+        return OSPOOL
     if project.funding_hold is not None:
         return LABELS[project.funding_hold]
     return AWAITING_VERIFICATION if verification_held else None
@@ -136,6 +143,7 @@ def describe_change(previous: FundingHold | None, hold: FundingHold | None) -> s
 __all__ = [
     "AWAITING_VERIFICATION",
     "HOLDABLE_STATUSES",
+    "OSPOOL",
     "approval_label",
     "AUDIT_CLEAR",
     "AUDIT_SET",
