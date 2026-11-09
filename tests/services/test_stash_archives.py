@@ -243,7 +243,11 @@ def test_problems_for_team_keeps_only_what_the_member_can_fix(db_session: Sessio
     row.problem_code = "not_found"
     row.problem_hint = "Nothing is at that URL."
     [shown] = stash_archives.problems_for_team(db_session, project)
-    assert (shown.url, shown.label, shown.detail) == (REPO, "Link is dead", "Nothing is at this link. Send the right URL.")
+    assert (shown.url, shown.label, shown.detail) == (
+        REPO,
+        "Link is dead",
+        "Nothing is at this link. Send the right URL.",
+    )
 
 
 def test_problems_for_team_ignores_a_link_the_project_no_longer_submits_and_an_archive_still_running(
