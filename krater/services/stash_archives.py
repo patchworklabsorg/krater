@@ -12,7 +12,7 @@ resubmission with the same link adds nothing (Stash is idempotent on the same su
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert
@@ -41,8 +41,10 @@ def submission_urls(project: Project) -> list[tuple[str, str, ProjectRevision | 
 
 
 def sync_project(session: Session, project: Project) -> int:
-    """Add a pending `stash_archives` row for each submitted URL the project hasn't got a row for. Returns how
-    many rows were added. Call it in the transaction that submits the revision."""
+    """Add a pending `stash_archives` row for each submitted URL the project hasn't got a row for, and ask again
+    for a URL whose archive failed because of the link (`StashArchive.submitter_can_fix`) when a newer revision
+    carries the same URL: the team was told to fix the link and resubmit, so the resubmission is the signal.
+    Returns how many rows were added or asked again. Call it in the transaction that submits the revision."""
     links = submission_urls(project)
     if not links:
         return 0
@@ -62,7 +64,36 @@ def sync_project(session: Session, project: Project) -> int:
         .on_conflict_do_nothing(constraint="uq_stash_archives_project_id_url")
         .returning(StashArchive.id)
     )
-    return len(session.execute(stmt).all())
+    changed = len(session.execute(stmt).all())
+    revisions = {url: revision for _, url, revision in links if revision is not None}
+    for row in for_project(session, project):
+        revision = revisions.get(row.url)
+        if revision is None or row.revision_id == revision.id or not _asks_again(row):
+            continue
+        _reset_for_new_request(row, revision)
+        changed += 1
+    return changed
+
+
+def _asks_again(row: StashArchive) -> bool:
+    return row.state is StashArchiveState.ARCHIVED and row.archive_final and row.submitter_can_fix
+
+
+def _reset_for_new_request(row: StashArchive, revision: ProjectRevision) -> None:
+    """Back to pending, as a new request for the new revision: the sender keys the request on the revision, so
+    Stash makes a new archive instead of answering with the failed one."""
+    row.revision_id = revision.id
+    row.state = StashArchiveState.PENDING
+    row.archive_id = None
+    row.page_url = None
+    row.archive_status = None
+    row.archive_completed_at = None
+    row.problem_code = row.problem_hint = row.problem_message = None
+    row.requested_at = None
+    row.attempts = 0
+    row.next_attempt_at = None
+    row.last_status = None
+    row.last_error = None
 
 
 def for_project(session: Session, project: Project) -> list[StashArchive]:
@@ -145,10 +176,27 @@ def display(row: StashArchive) -> ArchiveDisplay:
     )
 
 
+#: What the team reads for a problem it can fix. Stash's own hint speaks to a Stash user ("run the archive
+#: again"); the team has no Stash account and fixes the link by resubmitting.
+_TEAM_HINTS = {
+    "not_public": "This link needs a sign-in or a share. Make it public, or send a public URL.",
+    "not_found": "Nothing is at this link. Send the right URL.",
+}
+
+
 def problems_for_team(session: Session, project: Project) -> list[ArchiveDisplay]:
-    """The archives whose problem the team can fix (`StashArchive.submitter_can_fix`): a private link, or a
-    link that leads nowhere. The project page tells the team about these, and about nothing else from Stash."""
-    return [display(row) for row in for_project(session, project) if row.submitter_can_fix]
+    """The archives whose problem the team can fix (`StashArchive.submitter_can_fix`): a private link, or a link
+    that leads nowhere, among the links the project submits today. The project page tells the team about these,
+    in Krater's words, and about nothing else from Stash."""
+    current = {url for _, url, _ in submission_urls(project)}
+    shown = []
+    for row in for_project(session, project):
+        if row.url not in current:
+            continue
+        line = display(row)
+        if line.problem_code in _TEAM_HINTS:
+            shown.append(replace(line, detail=_TEAM_HINTS[line.problem_code]))
+    return shown
 
 
 __all__ = [

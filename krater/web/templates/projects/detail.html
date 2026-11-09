@@ -210,7 +210,11 @@
   {% if stash_problems %}
     {# The team: the links Stash could not keep a copy of because of the link itself. Fix the link, then resubmit. #}
     <div class="notice notice--warn" role="status">
-      <p><strong>A link you submitted cannot be archived.</strong> Reviewers see a copy of each link as it was when you submitted it. Fix the link below, then submit an amendment with the new one.</p>
+      <p><strong>A link you submitted cannot be archived.</strong> Reviewers see a copy of each link as it was when you submitted it.
+        {% if project.status.value == "approved" %}Fix the link, then submit an amendment with it.
+        {% elif project.status.value in ("changes_requested", "completion_changes_requested") %}Fix the link in your application, then resubmit.
+        {% else %}Fix the link now. When the reviewers ask for changes or approve the project, send it again in your application.{% endif %}
+      </p>
       <ul class="archives">
         {% for problem in stash_problems %}
           <li>

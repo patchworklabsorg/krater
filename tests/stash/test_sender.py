@@ -242,7 +242,8 @@ def test_the_request_names_the_project_and_the_submitter_by_patchwork_id(db_sess
     assert body["note"] == f"Ganymede submission 'Rover' (repo_url), by {member.user.weave_sub}."
     assert body["reference"] == {
         "patch": "ganymede",
-        "submission": str(project.id),
+        "submission": f"{project.id}/{project.current_revision_id}",
+        "project": str(project.id),
         "revision": str(project.current_revision_id),
         "source": "repo_url",
         "project_url": f"{BASE_URL}/projects/{project.id}",

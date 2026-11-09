@@ -92,8 +92,12 @@ def test_the_team_is_told_about_a_private_link_and_nothing_else(
     assert response.status_code == 200
     assert "A link you submitted cannot be archived" in response.text
     assert "Link is private" in response.text
-    assert PRIVATE_HINT in response.text
+    # Krater's own sentence for the team, not Stash's hint, which speaks to a Stash user.
+    assert "This link needs a sign-in or a share" in response.text
+    assert PRIVATE_HINT not in response.text
     assert REPO in response.text
+    # Pending review: an amendment is not possible yet, so the notice does not ask for one.
+    assert "amendment" not in response.text.split("cannot be archived")[1][:600]
     # Not the reviewers' section, not Stash's page, not the debugging detail.
     assert "Archived copies" not in response.text
     assert PAGE not in response.text
