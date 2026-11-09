@@ -246,6 +246,67 @@ def test_estimate_cost_spot_uses_the_min_spot_price(db_session: Session) -> None
     assert result.total_cents == 350
 
 
+def test_a_multi_gpu_catalog_price_is_for_the_whole_machine(db_session: Session) -> None:
+    # The catalog row for 2× RTX4090 costs $0.80/h for the machine: 200 hours of it is $160, not twice that.
+    price = _seed_gpu_price(db_session, name="RTX4090", count=2)
+    price.on_demand_median_cents = 80
+
+    result = pricing.estimate_cost(
+        db_session, accelerator_name="RTX4090", accelerator_count=2, hours=200, basis="on_demand", margin_percent=20
+    )
+
+    assert result.rate_cents == 40  # per GPU-hour
+    assert result.rate_microusd is None
+    assert result.subtotal_cents == 16_000
+    assert result.total_cents == 19_200
+    assert estimator_summary(result).startswith("2× RTX4090 × 200h at $0.40/hr (on-demand)")
+
+
+def test_a_machines_share_per_gpu_keeps_fractions_of_a_cent(db_session: Session) -> None:
+    # $5.65/h for two H200s is $2.825 each: the total is still exactly the machine's price.
+    price = _seed_gpu_price(db_session, name="H200", count=2)
+    price.on_demand_median_cents = 565
+
+    result = pricing.estimate_cost(
+        db_session, accelerator_name="H200", accelerator_count=2, hours=100, basis="on_demand", margin_percent=20
+    )
+
+    assert result.rate_microusd == 2_825_000
+    assert result.subtotal_cents == 56_500
+    assert result.total_cents == 67_800
+    assert "at $2.825/hr" in estimator_summary(result)
+
+
+def test_a_multi_gpu_interruptible_catalog_price_is_shared_out_too(db_session: Session) -> None:
+    price = _seed_gpu_price(db_session, name="A100", count=4)
+    price.spot_min_cents = 140  # the 4-GPU machine's lowest spot price
+
+    result = pricing.estimate_cost(
+        db_session, accelerator_name="A100", accelerator_count=4, hours=10, basis="spot", margin_percent=0
+    )
+
+    assert result.rate_cents == 35
+    assert result.total_cents == 1400
+
+
+def test_the_market_price_beside_a_teams_own_is_per_gpu(db_session: Session) -> None:
+    price = _seed_gpu_price(db_session, name="RTX4090", count=2)
+    price.on_demand_median_cents = 80
+
+    result = pricing.estimate_cost(
+        db_session,
+        accelerator_name="RTX4090",
+        accelerator_count=2,
+        hours=10,
+        basis="on_demand",
+        margin_percent=0,
+        rate_override_microusd=300_000,
+    )
+
+    assert result.market_rate_cents == 40
+    assert result.total_cents == 600  # the team's $0.30 per card-hour × 2 cards × 10 h
+
+
 def test_estimate_cost_unknown_gpu_key_is_a_validation_error(db_session: Session) -> None:
     with pytest.raises(ValidationFailed) as exc_info:
         pricing.estimate_cost(

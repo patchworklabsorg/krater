@@ -218,8 +218,9 @@ class BudgetEstimate:
     spot_unavailable: bool = False
     # With `SOURCE_MEMBER`: what Krater's own prices say per GPU-hour, for reviewers to compare; `None` if it has none.
     market_rate_cents: int | None = None
-    # The team's own price per GPU-hour in micro-dollars, exactly as typed: bids are often a fraction of a cent
-    # ($0.0587/h). `rate_cents` is that rounded, for display; the totals use this. `None` for Krater's rates.
+    # The price per GPU-hour in micro-dollars when cents can't hold it: the team's own, exactly as typed (bids are
+    # often a fraction of a cent, $0.0587/h), or one GPU's share of a catalog machine price ($5.65 for two H200s is
+    # $2.825). `rate_cents` is that rounded, for display; the totals use this. `None` for Krater's whole-cent rates.
     rate_microusd: int | None = None
 
     def as_dict(self) -> dict:
@@ -286,11 +287,17 @@ def sampled_rate_cents(
 
 @dataclass(frozen=True)
 class _MarketRate:
-    rate_cents: int
+    # Per GPU-hour, in micro-dollars: a catalog row for several GPUs prices the whole machine, and its share per GPU
+    # needn't be a whole number of cents ($5.65 for two H200s is $2.825 each).
+    rate_microusd: int
     refreshed_at: datetime
     source: str
     basis: str
     spot_unavailable: bool
+
+    @property
+    def rate_cents(self) -> int:
+        return round(self.rate_microusd / 10_000)
 
 
 def _market_rate(
@@ -306,11 +313,14 @@ def _market_rate(
         sampled = sampled_rate_cents(session, accelerator_name=accelerator_name, basis=BASIS_ON_DEMAND, now=now)
     if sampled is not None:
         rate_cents, refreshed_at = sampled
-        return _MarketRate(rate_cents, refreshed_at, SOURCE_SAMPLES, basis, spot_unavailable)
+        return _MarketRate(rate_cents * 10_000, refreshed_at, SOURCE_SAMPLES, basis, spot_unavailable)
     if price is None:
         return None
-    rate_cents = price.spot_min_cents if basis == BASIS_SPOT else price.on_demand_median_cents
-    return _MarketRate(rate_cents, price.refreshed_at, SOURCE_CATALOG, basis, spot_unavailable)
+    # The catalog prices the whole machine: `accelerator_count` GPUs together, as `/pricing` shows it. Per GPU-hour
+    # is that machine's price shared out.
+    machine_cents = price.spot_min_cents if basis == BASIS_SPOT else price.on_demand_median_cents
+    rate_microusd = round(machine_cents * 10_000 / accelerator_count)
+    return _MarketRate(rate_microusd, price.refreshed_at, SOURCE_CATALOG, basis, spot_unavailable)
 
 
 def on_demand_rate(session: Session, *, accelerator_name: str, now: datetime) -> tuple[int, str] | None:
@@ -383,6 +393,9 @@ def estimate_cost(
     else:
         rate_cents, refreshed_at, rate_source = market.rate_cents, market.refreshed_at, market.source
         basis, spot_unavailable, market_rate_cents = market.basis, market.spot_unavailable, None
+        # One GPU's share of a machine price needn't be whole cents: keep it exact, so the total is the machine's.
+        if market.rate_microusd % 10_000:
+            rate_microusd = market.rate_microusd
 
     if rate_microusd is not None:
         subtotal_cents = round(rate_microusd * accelerator_count * hours / 10_000)
