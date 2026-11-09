@@ -199,3 +199,48 @@ def test_display_reads_each_state(db_session: Session, member: Actor) -> None:
 
     row.state = StashArchiveState.FAILED
     assert (stash_archives.display(row).label, stash_archives.display(row).tone) == ("Not archivable", "bad")
+
+
+def test_display_names_the_problem_when_stash_says_why(db_session: Session, member: Actor) -> None:
+    project = _project(db_session, member, repo_url=REPO)
+    projects.submit(db_session, member, project=project)
+    [row] = _rows(db_session, project)
+    row.state = StashArchiveState.ARCHIVED
+    row.archive_status = "partial"
+    row.problem_hint = "The source is private. Ask the owner to share it, then run the archive again."
+
+    for code, label, tone, fixable in [
+        ("not_public", "Link is private", "bad", True),
+        ("not_found", "Link is dead", "bad", True),
+        ("blocked", "Site refused the archiver", "info", False),
+        ("too_large", "Too large to archive", "info", False),
+        ("timeout", "Archive timed out", "info", False),
+        ("tool_failed", "Partly archived", "info", False),
+    ]:
+        row.problem_code = code
+        shown = stash_archives.display(row)
+        assert (shown.label, shown.tone, shown.detail, shown.problem_code) == (label, tone, row.problem_hint, code), (
+            code
+        )
+        assert row.submitter_can_fix is fixable, code
+
+    # A problem on a done archive is stale: the status wins and the hint is not shown.
+    row.archive_status = "done"
+    shown = stash_archives.display(row)
+    assert (shown.label, shown.detail) == ("Archived", None)
+
+
+def test_problems_for_team_keeps_only_what_the_member_can_fix(db_session: Session, member: Actor) -> None:
+    project = _project(db_session, member, repo_url=REPO)
+    projects.submit(db_session, member, project=project)
+    [row] = _rows(db_session, project)
+    row.state = StashArchiveState.ARCHIVED
+    row.archive_status = "failed"
+
+    row.problem_code = "blocked"
+    assert stash_archives.problems_for_team(db_session, project) == []
+
+    row.problem_code = "not_found"
+    row.problem_hint = "Nothing is at that URL."
+    [shown] = stash_archives.problems_for_team(db_session, project)
+    assert (shown.url, shown.label, shown.detail) == (REPO, "Link is dead", "Nothing is at that URL.")

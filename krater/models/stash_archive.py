@@ -26,6 +26,9 @@ if TYPE_CHECKING:
 #: Krater's own `missing`, set when Stash answers 404 (an admin deleted the archive). See `docs/stash-integration.md`.
 FINAL_ARCHIVE_STATUSES = frozenset({"done", "partial", "failed", "missing"})
 
+#: The problem codes the member who submitted the link can act on. The others are Stash's or the site's.
+SUBMITTER_PROBLEM_CODES = frozenset({"not_public", "not_found"})
+
 
 class StashArchive(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "stash_archives"
@@ -59,6 +62,13 @@ class StashArchive(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     page_url: Mapped[str | None] = mapped_column(sa.String(2048), nullable=True)
     archive_status: Mapped[str | None] = mapped_column(sa.String(32), nullable=True)
     archive_completed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    # Stash's `problem` for a `partial` or `failed` archive: the failed capture that matters most to the
+    # submitter. `problem_code` is one of Stash's error codes (`not_public`, `not_found`, `blocked`, `too_large`,
+    # `timeout`, `tool_failed`, `unexpected`), `problem_hint` the sentence for a person, `problem_message` the
+    # detail for whoever debugs. All null while nothing has failed.
+    problem_code: Mapped[str | None] = mapped_column(sa.String(32), nullable=True)
+    problem_hint: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    problem_message: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
     requested_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
     # When the sender first asked Stash, for the backlog alert (`krater.services.ops_alerts`).
     first_attempted_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
@@ -75,6 +85,11 @@ class StashArchive(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     def archive_final(self) -> bool:
         """Whether Stash has finished with the archive (no more status changes to fetch)."""
         return self.archive_status in FINAL_ARCHIVE_STATUSES
+
+    @property
+    def submitter_can_fix(self) -> bool:
+        """Whether the problem is one the member can fix: a private source, or a link that leads nowhere."""
+        return self.problem_code in SUBMITTER_PROBLEM_CODES
 
     def __repr__(self) -> str:
         return f"<StashArchive project_id={self.project_id} url={self.url!r} state={self.state.value}>"

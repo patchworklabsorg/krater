@@ -2398,3 +2398,10 @@ fieldset.choice-list legend {
   min-width: 0;
   overflow-wrap: anywhere;
 }
+
+/* Stash's hint on a capture that failed: what went wrong, and who can fix it. */
+.archives__detail {
+  flex-basis: 100%;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}

@@ -136,6 +136,29 @@ link as it was submitted, a link to its Stash page (`page_url`) once Stash has a
 | `failed` | Not archivable |
 | `skipped` | Not archived (the project was withdrawn first) |
 
+### When a capture failed
+
+A `partial` or `failed` archive carries Stash's `problem`: the failed capture that matters most to the submitter,
+with an error code, a `hint` for a person and a `message` for whoever debugs (Stash's `docs/api.md`, "When a
+capture fails"). The refresh copies the three onto the row (`problem_code`, `problem_hint`, `problem_message`), and
+clears them when a later body has none. The label then comes from the code, with the hint under the link:
+
+| `problem.code` | Label | Who can fix it |
+| --- | --- | --- |
+| `not_public` | Link is private | the member: share the source, or send a public URL |
+| `not_found` | Link is dead | the member: send the right URL |
+| `blocked` | Site refused the archiver | nobody here; Stash can run it again later |
+| `too_large` | Too large to archive | Stash's operators |
+| `timeout` | Archive timed out | Stash's operators |
+| `tool_failed`, `unexpected`, or no code | Partly archived or Archive failed | Stash's operators |
+
+## What the team sees
+
+The team sees nothing of Stash, with one exception: a link Stash could not keep a copy of because of the link
+itself (`not_public` or `not_found`, `StashArchive.submitter_can_fix`). The project page then shows a notice with
+the link, the label and Stash's hint, and asks the team to fix the link and submit an amendment. The amendment's
+new URL gets its own row and its own archive; the old row keeps its problem, so a reviewer sees both.
+
 Stash pages need a signed-in person with Stash's `viewer` role. Krater doesn't check that: a reviewer without it sees
 Stash's sign-in page.
 

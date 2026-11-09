@@ -599,15 +599,20 @@ def _build_detail_context(
             diff_percent = abs(asked_cents - total_cents) / total_cents * 100
             estimate_mismatch_by_revision[revision.id] = diff_percent > threshold_percent
 
-    # Reviewers and admins see Stash's copy of each submitted link (`krater.services.stash_archives`).
+    # Reviewers and admins see Stash's copy of each submitted link (`krater.services.stash_archives`). The team
+    # sees only the links Stash could not archive because of the link itself: private, or leading nowhere.
     archives: list[stash_archives.ArchiveDisplay] = []
+    stash_problems: list[stash_archives.ArchiveDisplay] = []
     if actor.is_reviewer or actor.is_admin:
         archives = [stash_archives.display(row) for row in stash_archives.for_project(session, project)]
+    if is_team:
+        stash_problems = stash_archives.problems_for_team(session, project)
 
     return {
         "project": project,
         "summary": summary,
         "stash_archives": archives,
+        "stash_problems": stash_problems,
         "budget_flag": budget_flag,
         "primary_image_url": image_url,
         "verification_pending": verification_pending,

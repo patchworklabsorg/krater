@@ -85,14 +85,17 @@ def cancel_pending(session: Session, project: Project) -> int:
 
 @dataclass(frozen=True)
 class ArchiveDisplay:
-    """One line on the project page: the link that was submitted, the Stash page (once there is one), and a
-    short status with a badge tone (`good`, `info`, `bad`)."""
+    """One line on the project page: the link that was submitted, the Stash page (once there is one), a
+    short status with a badge tone (`good`, `info`, `bad`), and, when a capture failed, Stash's hint on what
+    went wrong (`detail`) with its error code."""
 
     url: str
     source: str
     page_url: str | None
     label: str
     tone: str
+    detail: str | None = None
+    problem_code: str | None = None
 
 
 #: What each Stash archive status reads as on the page.
@@ -106,18 +109,46 @@ _STATUS_LABELS = {
     "missing": ("Archive removed", "bad"),
 }
 
+#: What a `partial` or `failed` archive reads as when Stash says why (its `problem.code`). The codes the member
+#: can act on get the loud tone, the ones nobody here can act on stay informational.
+_PROBLEM_LABELS = {
+    "not_public": ("Link is private", "bad"),
+    "not_found": ("Link is dead", "bad"),
+    "blocked": ("Site refused the archiver", "info"),
+    "too_large": ("Too large to archive", "info"),
+    "timeout": ("Archive timed out", "info"),
+}
+
 
 def display(row: StashArchive) -> ArchiveDisplay:
     """How the project page shows one row."""
+    detail = problem_code = None
     if row.state is StashArchiveState.PENDING:
         label, tone = "Archive pending", "info"
     elif row.state is StashArchiveState.FAILED:
         label, tone = "Not archivable", "bad"
     elif row.state is StashArchiveState.SKIPPED:
         label, tone = "Not archived", "info"
+    elif row.archive_status in ("partial", "failed") and row.problem_code:
+        label, tone = _PROBLEM_LABELS.get(row.problem_code, _STATUS_LABELS[row.archive_status])
+        detail, problem_code = row.problem_hint, row.problem_code
     else:
         label, tone = _STATUS_LABELS.get(row.archive_status, ("Archiving", "info"))
-    return ArchiveDisplay(url=row.url, source=row.source, page_url=row.page_url, label=label, tone=tone)
+    return ArchiveDisplay(
+        url=row.url,
+        source=row.source,
+        page_url=row.page_url,
+        label=label,
+        tone=tone,
+        detail=detail,
+        problem_code=problem_code,
+    )
+
+
+def problems_for_team(session: Session, project: Project) -> list[ArchiveDisplay]:
+    """The archives whose problem the team can fix (`StashArchive.submitter_can_fix`): a private link, or a
+    link that leads nowhere. The project page tells the team about these, and about nothing else from Stash."""
+    return [display(row) for row in for_project(session, project) if row.submitter_can_fix]
 
 
 __all__ = [

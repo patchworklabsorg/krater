@@ -150,6 +150,15 @@ def _apply_archive(row: StashArchive, archive: dict) -> None:
         row.page_url = page_url[:2048]
     status = archive.get("status")
     row.archive_status = status[:32] if isinstance(status, str) else row.archive_status
+    # Stash's `problem`: set while a capture has failed, null otherwise (a rerun that works clears it).
+    problem = archive.get("problem")
+    if isinstance(problem, dict):
+        code, hint, message = problem.get("code"), problem.get("hint"), problem.get("message")
+        row.problem_code = code[:32] if isinstance(code, str) and code else None
+        row.problem_hint = hint[:1000] if isinstance(hint, str) and hint else None
+        row.problem_message = message[:2000] if isinstance(message, str) and message else None
+    elif "problem" in archive:
+        row.problem_code = row.problem_hint = row.problem_message = None
     completed_at = archive.get("completed_at")
     if isinstance(completed_at, str) and completed_at:
         with contextlib.suppress(ValueError):

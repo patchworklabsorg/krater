@@ -491,6 +491,46 @@ def test_unfinished_archives_are_refreshed_until_final(
     assert len(stash.gets()) == 2
 
 
+def test_the_refresh_copies_stashs_problem_and_clears_it_when_a_rerun_works(
+    db_session: Session, stash: FakeStash, client: StashClient, weave_stub: StubWeaveClient, add_row
+) -> None:
+    row = add_row()
+    _deliver(db_session, client, weave_stub)
+
+    stash.archives["arc_1"].update(
+        status="partial",
+        completed_at="2026-11-08T12:01:12Z",
+        problem={
+            "code": "not_public",
+            "method": "github",
+            "message": "NotPublic: GitHub answered 404 for /repos/someone/project: the repository is private or gone.",
+            "hint": "The source is private. Ask the owner to share it, then run the archive again.",
+        },
+    )
+    _deliver(db_session, client, weave_stub, at=NOW + timedelta(minutes=1))
+
+    assert (row.archive_status, row.problem_code) == ("partial", "not_public")
+    assert row.problem_hint == "The source is private. Ask the owner to share it, then run the archive again."
+    assert row.problem_message is not None and row.problem_message.startswith("NotPublic: GitHub answered 404")
+    assert row.submitter_can_fix
+    shown = stash_archives.display(row)
+    assert (shown.label, shown.tone, shown.problem_code) == ("Link is private", "bad", "not_public")
+    assert shown.detail == row.problem_hint
+
+    # Final, so Krater stops polling. An admin reruns the archive in Stash: Krater learns of it at the next
+    # submission's archive, not here. But a body without a problem clears the columns.
+    row.archive_status = "running"
+    # The refresh reads a row again only after a quiet minute. A value equal to the stored one would not be
+    # written, and the server would stamp the real time instead.
+    row.updated_at = NOW + timedelta(seconds=90)
+    db_session.flush()
+    stash.archives["arc_1"].update(status="done", problem=None)
+    _deliver(db_session, client, weave_stub, at=NOW + timedelta(minutes=3))
+
+    assert (row.archive_status, row.problem_code, row.problem_hint, row.problem_message) == ("done", None, None, None)
+    assert stash_archives.display(row).detail is None
+
+
 def test_a_deleted_archive_stops_being_polled(
     db_session: Session, stash: FakeStash, client: StashClient, weave_stub: StubWeaveClient, add_row
 ) -> None:
