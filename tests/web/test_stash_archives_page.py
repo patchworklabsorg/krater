@@ -67,6 +67,78 @@ def test_the_team_does_not_see_the_archives(
     assert PAGE not in response.text
 
 
+def _failed_with(db_session: Session, project, code: str, hint: str, status: str = "partial") -> None:
+    _archived(db_session, project)
+    [row] = stash_archives.for_project(db_session, project)
+    row.archive_status = status
+    row.problem_code = code
+    row.problem_hint = hint
+    row.problem_message = f"{code}: the detail for whoever debugs"
+    db_session.flush()
+
+
+PRIVATE_HINT = "The source is private. Ask the owner to share it with anyone with the link, then run the archive again."
+
+
+def test_the_team_is_told_about_a_private_link_and_nothing_else(
+    client: TestClient, db_session: Session, login_as, submitted_project
+) -> None:
+    member = login_as(MEMBER_SUB)
+    project = submitted_project(member, title="Rover", repo_url=REPO)
+    _failed_with(db_session, project, "not_public", PRIVATE_HINT)
+
+    response = client.get(f"/projects/{project.id}")
+
+    assert response.status_code == 200
+    assert "A link you submitted cannot be archived" in response.text
+    assert "Link is private" in response.text
+    # Krater's own sentence for the team, not Stash's hint, which speaks to a Stash user.
+    assert "This link needs a sign-in or a share" in response.text
+    assert PRIVATE_HINT not in response.text
+    assert REPO in response.text
+    # Pending review: an amendment is not possible yet, so the notice does not ask for one.
+    assert "amendment" not in response.text.split("cannot be archived")[1][:600]
+    # Not the reviewers' section, not Stash's page, not the debugging detail.
+    assert "Archived copies" not in response.text
+    assert PAGE not in response.text
+    assert "whoever debugs" not in response.text
+
+
+def test_the_team_is_not_told_about_a_problem_only_stash_can_fix(
+    client: TestClient, db_session: Session, login_as, submitted_project
+) -> None:
+    member = login_as(MEMBER_SUB)
+    project = submitted_project(member, title="Rover", repo_url=REPO)
+    _failed_with(db_session, project, "blocked", "The site refused the archiver. Run the archive again later.")
+
+    response = client.get(f"/projects/{project.id}")
+
+    assert response.status_code == 200
+    assert "cannot be archived" not in response.text
+
+
+def test_a_reviewer_sees_why_an_archive_failed(
+    client: TestClient, db_session: Session, login_as, submitted_project
+) -> None:
+    member = login_as(MEMBER_SUB)
+    project = submitted_project(member, title="Rover", repo_url=REPO)
+    _failed_with(
+        db_session,
+        project,
+        "not_found",
+        "Nothing is at that URL. Ask for the right link, then run the archive again.",
+        status="failed",
+    )
+
+    login_as(REVIEWER_SUB)
+    response = client.get(f"/projects/{project.id}")
+
+    assert response.status_code == 200
+    assert "Link is dead</span>" in response.text
+    assert "Nothing is at that URL" in response.text
+    assert f'<a href="{PAGE}">{REPO}</a>' in response.text
+
+
 def test_a_project_without_links_shows_no_archive_section(client: TestClient, login_as, submitted_project) -> None:
     member = login_as(MEMBER_SUB)
     project = submitted_project(member, title="Rover")

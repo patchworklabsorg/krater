@@ -93,15 +93,19 @@ def _utcnow() -> datetime:
 
 def archive_request(row: StashArchive, *, base_url: str) -> dict:
     """The JSON body for `POST /api/v1/archives`: the URL, a note for the archive page, and the reference
-    that makes the request idempotent (`submission` is the Krater `Project.id`, as Quilt's `external_id`).
-    The note names the submitter by Patchwork ID only (docs/weave-integration.md "Member data")."""
+    that makes the request idempotent. `submission` is the Krater `Project.id` and the revision that carries
+    the URL, so a resubmission after a failed archive gets a new archive, not the failed one again
+    (`stash_archives.sync_project`). The note names the submitter by Patchwork ID only
+    (docs/weave-integration.md "Member data")."""
     project = row.project
+    submission = f"{project.id}/{row.revision_id}" if row.revision_id is not None else str(project.id)
     return {
         "url": row.url,
         "note": f"Ganymede submission {project.title!r} ({row.source}), by {project.submitter.weave_sub}."[:2000],
         "reference": {
             "patch": PATCH,
-            "submission": str(project.id),
+            "submission": submission,
+            "project": str(project.id),
             "revision": str(row.revision_id) if row.revision_id is not None else "",
             "source": row.source,
             "project_url": f"{base_url.rstrip('/')}/projects/{project.id}",
@@ -150,6 +154,15 @@ def _apply_archive(row: StashArchive, archive: dict) -> None:
         row.page_url = page_url[:2048]
     status = archive.get("status")
     row.archive_status = status[:32] if isinstance(status, str) else row.archive_status
+    # Stash's `problem`: set while a capture has failed, null otherwise (a rerun that works clears it).
+    problem = archive.get("problem")
+    if isinstance(problem, dict):
+        code, hint, message = problem.get("code"), problem.get("hint"), problem.get("message")
+        row.problem_code = code[:32] if isinstance(code, str) and code else None
+        row.problem_hint = hint[:1000] if isinstance(hint, str) and hint else None
+        row.problem_message = message[:2000] if isinstance(message, str) and message else None
+    elif "problem" in archive:
+        row.problem_code = row.problem_hint = row.problem_message = None
     completed_at = archive.get("completed_at")
     if isinstance(completed_at, str) and completed_at:
         with contextlib.suppress(ValueError):
@@ -292,8 +305,10 @@ def _refresh(
             if row.archive_status != before:
                 result.refreshed += 1
         elif response.status == 404:
-            # An admin deleted the archive in Stash. Stop asking; the page says the copy is gone.
+            # An admin deleted the archive in Stash. Stop asking; the page says the copy is gone, and nothing
+            # about why the deleted copy had failed.
             row.archive_status = "missing"
+            row.problem_code = row.problem_hint = row.problem_message = None
             row.last_status = response.status
             row.last_error = response.error
             result.refreshed += 1

@@ -199,3 +199,132 @@ def test_display_reads_each_state(db_session: Session, member: Actor) -> None:
 
     row.state = StashArchiveState.FAILED
     assert (stash_archives.display(row).label, stash_archives.display(row).tone) == ("Not archivable", "bad")
+
+
+def test_display_names_the_problem_when_stash_says_why(db_session: Session, member: Actor) -> None:
+    project = _project(db_session, member, repo_url=REPO)
+    projects.submit(db_session, member, project=project)
+    [row] = _rows(db_session, project)
+    row.state = StashArchiveState.ARCHIVED
+    row.archive_status = "partial"
+    row.problem_hint = "The source is private. Ask the owner to share it, then run the archive again."
+
+    for code, label, tone, fixable in [
+        ("not_public", "Link is private", "bad", True),
+        ("not_found", "Link is dead", "bad", True),
+        ("blocked", "Site refused the archiver", "info", False),
+        ("too_large", "Too large to archive", "info", False),
+        ("timeout", "Archive timed out", "info", False),
+        ("tool_failed", "Partly archived", "info", False),
+    ]:
+        row.problem_code = code
+        shown = stash_archives.display(row)
+        assert (shown.label, shown.tone, shown.detail, shown.problem_code) == (label, tone, row.problem_hint, code), (
+            code
+        )
+        assert row.submitter_can_fix is fixable, code
+
+    # A problem on a done archive is stale: the status wins and the hint is not shown.
+    row.archive_status = "done"
+    shown = stash_archives.display(row)
+    assert (shown.label, shown.detail) == ("Archived", None)
+
+
+def test_problems_for_team_keeps_only_what_the_member_can_fix(db_session: Session, member: Actor) -> None:
+    project = _project(db_session, member, repo_url=REPO)
+    projects.submit(db_session, member, project=project)
+    [row] = _rows(db_session, project)
+    row.state = StashArchiveState.ARCHIVED
+    row.archive_status = "failed"
+
+    row.problem_code = "blocked"
+    assert stash_archives.problems_for_team(db_session, project) == []
+
+    row.problem_code = "not_found"
+    row.problem_hint = "Nothing is at that URL."
+    [shown] = stash_archives.problems_for_team(db_session, project)
+    assert (shown.url, shown.label, shown.detail) == (
+        REPO,
+        "Link is dead",
+        "Nothing is at this link. Send the right URL.",
+    )
+
+
+def test_problems_for_team_ignores_a_link_the_project_no_longer_submits_and_an_archive_still_running(
+    db_session: Session, member: Actor
+) -> None:
+    project = _project(db_session, member, repo_url=REPO)
+    projects.submit(db_session, member, project=project)
+    [row] = _rows(db_session, project)
+    row.state = StashArchiveState.ARCHIVED
+    row.archive_status = "running"  # Stash reports a problem while another capture still runs
+    row.problem_code = "not_public"
+    row.problem_hint = "Stash's hint"
+    assert stash_archives.problems_for_team(db_session, project) == []
+
+    row.archive_status = "failed"
+    [shown] = stash_archives.problems_for_team(db_session, project)
+    assert shown.detail == "This link needs a sign-in or a share. Make it public, or send a public URL."
+
+    # The member sends another link: the old one is no longer part of the submission.
+    project.repo_url = "https://github.com/someone/rover2"
+    db_session.flush()
+    assert stash_archives.problems_for_team(db_session, project) == []
+
+
+def test_a_resubmission_with_the_same_link_asks_stash_again_after_a_problem_the_member_fixed(
+    db_session: Session, member: Actor, reviewer: Actor, weave
+) -> None:
+    project = _project(db_session, member, repo_url=REPO)
+    projects.submit(db_session, member, project=project)
+    project = _approve(db_session, reviewer, project, weave)
+    [row] = _rows(db_session, project)
+    first_revision_id = row.revision_id
+    row.state = StashArchiveState.ARCHIVED
+    row.archive_id = "arc_1"
+    row.page_url = "https://stash.test/archives/1"
+    row.archive_status = "failed"
+    row.problem_code = "not_public"
+    row.problem_hint = "private"
+    row.attempts = 3
+    row.last_status = 201
+    db_session.flush()
+
+    # An amendment with the same link, after the member made the repository public.
+    projects.start_amendment(db_session, member, project=project)
+    projects.submit(db_session, member, project=project, criteria_read=True)
+
+    [row] = _rows(db_session, project)
+    assert row.state is StashArchiveState.PENDING
+    assert row.revision_id == project.current_revision_id != first_revision_id
+    assert (row.archive_id, row.archive_status, row.problem_code, row.attempts, row.last_status) == (
+        None,
+        None,
+        None,
+        0,
+        None,
+    )
+    assert stash_archives.problems_for_team(db_session, project) == []
+
+    # A second submit of the same revision changes nothing more.
+    assert stash_archives.sync_project(db_session, project) == 0
+
+
+def test_a_resubmission_leaves_an_archive_alone_when_the_problem_is_not_the_members(
+    db_session: Session, member: Actor, reviewer: Actor, weave
+) -> None:
+    project = _project(db_session, member, repo_url=REPO)
+    projects.submit(db_session, member, project=project)
+    project = _approve(db_session, reviewer, project, weave)
+    [row] = _rows(db_session, project)
+    row.state = StashArchiveState.ARCHIVED
+    row.archive_id = "arc_1"
+    row.archive_status = "partial"
+    row.problem_code = "blocked"
+    db_session.flush()
+
+    projects.start_amendment(db_session, member, project=project)
+    projects.submit(db_session, member, project=project, criteria_read=True)
+
+    [row] = _rows(db_session, project)
+    assert (row.state, row.archive_id, row.problem_code) == (StashArchiveState.ARCHIVED, "arc_1", "blocked")
