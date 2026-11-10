@@ -34,6 +34,7 @@ def test_slack_reconcile_calls_through_to_the_service_function() -> None:
         patch("krater.worker.app.get_sessionmaker") as mock_get_sessionmaker,
     ):
         fake_session = mock_get_sessionmaker.return_value.return_value
+        mock_reconcile.return_value = []
 
         slack_reconcile.func(timestamp=123)
 
@@ -41,6 +42,33 @@ def test_slack_reconcile_calls_through_to_the_service_function() -> None:
             fake_session, mock_get_slack_client.return_value, mock_get_weave_client.return_value
         )
         fake_session.close.assert_called_once()
+
+
+def test_a_slack_reconcile_run_with_a_failed_step_counts_towards_the_slack_alert() -> None:
+    with (
+        patch("krater.worker.app.slack_notify.reconcile", return_value=["sync_reviewer_invites"]),
+        patch("krater.worker.app.get_slack_client"),
+        patch("krater.worker.app.get_weave_client"),
+        patch("krater.worker.app.get_sessionmaker"),
+        patch("krater.worker.app._report_failure") as mock_report,
+    ):
+        slack_reconcile.func(timestamp=123)
+
+        key, message = mock_report.call_args.args
+        assert key == "slack" and "sync_reviewer_invites" in message
+
+
+def test_a_good_slack_reconcile_run_reports_nothing() -> None:
+    with (
+        patch("krater.worker.app.slack_notify.reconcile", return_value=[]),
+        patch("krater.worker.app.get_slack_client"),
+        patch("krater.worker.app.get_weave_client"),
+        patch("krater.worker.app.get_sessionmaker"),
+        patch("krater.worker.app._report_failure") as mock_report,
+    ):
+        slack_reconcile.func(timestamp=123)
+
+        mock_report.assert_not_called()
 
 
 def test_slack_notify_revision_submitted_looks_up_and_calls_through() -> None:
