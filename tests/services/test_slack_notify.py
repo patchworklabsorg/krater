@@ -11,7 +11,7 @@ from krater.services import grants, projects, slack_notify
 from krater.services.actor import GROUP_MEMBER, GROUP_REVIEWER, Actor
 from krater.slack.errors import SlackRequestFailedError
 from krater.slack.fake import FakeSlackClient
-from krater.weave import StubWeaveClient
+from krater.weave import StubWeaveClient, WeaveUnavailableError
 from tests.factories import new_project
 from tests.services.conftest import add_to_team
 
@@ -580,6 +580,32 @@ def test_reconcile_runs_every_step(db_session: Session, member: Actor, reviewer:
     slack_notify.reconcile(db_session, slack_client, weave)
 
     assert slack_client.channels[project.slack_channel_id]["archived"] is True
+
+
+def test_reconcile_skips_a_step_weave_cant_answer_and_runs_the_rest(
+    db_session: Session, member: Actor, reviewer: Actor, weave: StubWeaveClient, monkeypatch
+) -> None:
+    project = new_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=5000)
+    slack_client = FakeSlackClient()
+    project.slack_channel_id = slack_client.create_channel("ganymede-rover-test")
+    project.status = ProjectStatus.COMPLETED
+    db_session.flush()
+    db_session.commit()
+
+    def weave_down(role):
+        raise WeaveUnavailableError("Weave's directory returned 429")
+
+    monkeypatch.setattr(weave, "list_users_with_role", weave_down)
+    failed = slack_notify.reconcile(db_session, slack_client, weave)
+
+    assert failed == ["sync_reviewer_invites"]
+    assert slack_client.channels[project.slack_channel_id]["archived"] is True  # the later steps still ran
+
+
+def test_reconcile_reports_no_failed_steps_on_a_good_run(
+    db_session: Session, member: Actor, reviewer: Actor, weave: StubWeaveClient
+) -> None:
+    assert slack_notify.reconcile(db_session, FakeSlackClient(), weave) == []
 
 
 # --------------------------------------------------------------------------------------------------

@@ -49,6 +49,7 @@ from krater.slack.client import SlackClient
 from krater.slack.errors import SlackError, SlackRequestFailedError
 from krater.weave import links as weave_links
 from krater.weave.client import WeaveClient
+from krater.weave.errors import WeaveUnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -615,23 +616,28 @@ def sync_missed_archives(session: Session, slack_client: SlackClient) -> None:
         archive_project_channel(session, slack_client, project=project)
 
 
-def reconcile(session: Session, slack_client: SlackClient, weave_client: WeaveClient) -> None:
-    """Run every periodic Slack step in order, committing after each so one step's `SlackError` doesn't
-    lose the others' work."""
+def reconcile(session: Session, slack_client: SlackClient, weave_client: WeaveClient) -> list[str]:
+    """Run every periodic Slack step in order, committing after each so one step's failure doesn't lose the others'
+    work. A step that Slack refuses, or that can't reach Weave (the reviewer list comes from Weave's directory), is
+    logged and skipped: the next run tries it again. Returns the names of the steps that failed, for the caller to
+    count towards the `slack` admin alert."""
     steps = (
         ("sync_reviewer_invites", lambda: sync_reviewer_invites(session, slack_client, weave_client)),
         ("sync_budget_notifications", lambda: sync_budget_notifications(session, slack_client)),
         ("sync_box_notifications", lambda: sync_box_notifications(session, slack_client)),
         ("sync_missed_archives", lambda: sync_missed_archives(session, slack_client)),
     )
+    failed = []
     for name, step in steps:
         try:
             step()
-        except SlackError:
+        except (SlackError, WeaveUnavailableError):
             logger.exception("krater.slack reconcile step %s failed; continuing", name)
             session.rollback()
+            failed.append(name)
         else:
             session.commit()
+    return failed
 
 
 __all__ = [

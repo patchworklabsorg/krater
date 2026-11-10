@@ -40,7 +40,7 @@ from krater.slack import SlackError, get_slack_client
 from krater.stash import sender as stash_sender
 from krater.storage import StorageError, get_compute_store
 from krater.vast import get_vast_client
-from krater.weave import get_weave_client
+from krater.weave import WeaveUnavailableError, get_weave_client
 
 logger = logging.getLogger(__name__)
 
@@ -583,9 +583,13 @@ def slack_reconcile(timestamp: int) -> None:
     del timestamp
     session = get_sessionmaker()()
     try:
-        slack_notify.reconcile(session, get_slack_client(), get_weave_client())
-    except SlackError as exc:
-        # `reconcile` already catches per-step Slack errors and logs+continues; this is a last-resort net.
+        failed = slack_notify.reconcile(session, get_slack_client(), get_weave_client())
+        if failed:
+            # Each step logged its own error. A run with a failed step counts towards the `slack` alert, so one
+            # Slack or Weave hiccup stays quiet and a lasting one still reaches the admins.
+            _report_failure("slack", f"slack_reconcile: {', '.join(failed)} failed; see the worker's log")
+    except (SlackError, WeaveUnavailableError) as exc:
+        # `reconcile` already catches each step's errors and continues; this is a last-resort net.
         logger.exception("krater.slack_reconcile task failed")
         _report_failure("slack", f"slack_reconcile: {_failure(exc)}")
     finally:
