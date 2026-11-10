@@ -578,12 +578,17 @@ def _slack_reconcile_cron() -> str:
 @app.task(name="slack_reconcile")
 def slack_reconcile(timestamp: int) -> None:
     """Invite newly-added reviewers to open project channels, post any missed budget warning/teardown
-    notifications, and archive any finished project's channel that was missed. Thin wrapper around
-    `krater.services.slack_notify.reconcile`."""
+    notifications, archive any finished project's channel that was missed, and post any missed review message.
+    Thin wrapper around `krater.services.slack_notify.reconcile`."""
     del timestamp
     session = get_sessionmaker()()
     try:
-        failed = slack_notify.reconcile(session, get_slack_client(), get_weave_client())
+        failed = slack_notify.reconcile(
+            session,
+            get_slack_client(),
+            get_weave_client(),
+            feed_channel_id=get_settings().slack_feed_channel_id or None,
+        )
         if failed:
             # Each step logged its own error. A run with a failed step counts towards the `slack` alert, so one
             # Slack or Weave hiccup stays quiet and a lasting one still reaches the admins.

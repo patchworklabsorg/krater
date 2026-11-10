@@ -5,7 +5,7 @@ the actual logic is unit-tested in `tests/services/`.
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 from krater.worker.app import (
     app,
@@ -39,7 +39,10 @@ def test_slack_reconcile_calls_through_to_the_service_function() -> None:
         slack_reconcile.func(timestamp=123)
 
         mock_reconcile.assert_called_once_with(
-            fake_session, mock_get_slack_client.return_value, mock_get_weave_client.return_value
+            fake_session,
+            mock_get_slack_client.return_value,
+            mock_get_weave_client.return_value,
+            feed_channel_id=ANY,
         )
         fake_session.close.assert_called_once()
 

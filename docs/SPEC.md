@@ -287,6 +287,9 @@ join), and all reviewers. When someone gets the `reviewer` role in
 Weave, a periodic job invites them to open project channels. Someone who leaves the team, or is removed from it, is
 removed from the channel (`conversations.kick`), unless they're a reviewer, who belong in every open channel. The
 channel is archived when the project ends up `completed` or `withdrawn`.
+If the job that posts a submission's review message fails (Slack down, a bad bot token), the periodic job posts it
+later, with the channel, the invites and the feed line. It waits 10 minutes after the submission, so it doesn't race
+the submission's own job.
 
 **Admin alerts channel:** the worker posts there when something behind the portal keeps failing (Quilt delivery,
 Slack tasks, the compute scheduler, background jobs ending in errors, prices not refreshed), again every 6 hours

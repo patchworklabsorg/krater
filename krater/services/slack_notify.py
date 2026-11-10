@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 import re
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
@@ -56,6 +57,9 @@ logger = logging.getLogger(__name__)
 #: Slack channel names: lowercase letters, numbers and hyphens, 80 characters max.
 _MAX_CHANNEL_NAME_LENGTH = 80
 _MAX_WRITE_UP_EXCERPT_LENGTH = 400
+#: How long a submission's own deferred job has to post its review message before the reconcile posts it. Without
+#: the wait, a reconcile run that starts while that job is still running could post the message twice.
+MISSED_REVIEW_MESSAGE_GRACE = timedelta(minutes=10)
 
 
 def _slugify(text: str) -> str:
@@ -616,7 +620,43 @@ def sync_missed_archives(session: Session, slack_client: SlackClient) -> None:
         archive_project_channel(session, slack_client, project=project)
 
 
-def reconcile(session: Session, slack_client: SlackClient, weave_client: WeaveClient) -> list[str]:
+def sync_missed_review_messages(
+    session: Session,
+    slack_client: SlackClient,
+    weave_client: WeaveClient,
+    *,
+    feed_channel_id: str | None,
+    now: datetime | None = None,
+) -> None:
+    """Post the review message of any submitted, still-pending revision that has none, because the job deferred by
+    its submission failed (a bad bot token, Slack down). Runs `notify_revision_submitted`, so the channel, the team
+    invite and the feed line for a new project's first proposal come with it. A revision submitted less than
+    `MISSED_REVIEW_MESSAGE_GRACE` ago is left to its own job. Commits after each revision, so a later failure can't
+    roll back a message Slack already has and post it twice on the next run."""
+    cutoff = (now or datetime.now(UTC)) - MISSED_REVIEW_MESSAGE_GRACE
+    stmt = (
+        sa.select(ProjectRevision.id)
+        .join(Project, ProjectRevision.project_id == Project.id)
+        .where(
+            ProjectRevision.outcome == RevisionOutcome.PENDING,
+            ProjectRevision.submitted_at.is_not(None),
+            ProjectRevision.submitted_at < cutoff,
+            ProjectRevision.slack_message_ts.is_(None),
+            Project.status.not_in((ProjectStatus.COMPLETED, ProjectStatus.WITHDRAWN)),
+        )
+        .order_by(ProjectRevision.submitted_at)
+    )
+    for revision_id in session.scalars(stmt).all():
+        revision = session.get(ProjectRevision, revision_id)
+        notify_revision_submitted(
+            session, slack_client, weave_client, revision=revision, feed_channel_id=feed_channel_id
+        )
+        session.commit()
+
+
+def reconcile(
+    session: Session, slack_client: SlackClient, weave_client: WeaveClient, *, feed_channel_id: str | None = None
+) -> list[str]:
     """Run every periodic Slack step in order, committing after each so one step's failure doesn't lose the others'
     work. A step that Slack refuses, or that can't reach Weave (the reviewer list comes from Weave's directory), is
     logged and skipped: the next run tries it again. Returns the names of the steps that failed, for the caller to
@@ -626,6 +666,10 @@ def reconcile(session: Session, slack_client: SlackClient, weave_client: WeaveCl
         ("sync_budget_notifications", lambda: sync_budget_notifications(session, slack_client)),
         ("sync_box_notifications", lambda: sync_box_notifications(session, slack_client)),
         ("sync_missed_archives", lambda: sync_missed_archives(session, slack_client)),
+        (
+            "sync_missed_review_messages",
+            lambda: sync_missed_review_messages(session, slack_client, weave_client, feed_channel_id=feed_channel_id),
+        ),
     )
     failed = []
     for name, step in steps:
@@ -652,5 +696,6 @@ __all__ = [
     "reconcile",
     "sync_budget_notifications",
     "sync_missed_archives",
+    "sync_missed_review_messages",
     "sync_reviewer_invites",
 ]
