@@ -4,6 +4,9 @@ invites, idempotency, decision updates, admin overrides, archiving and the perio
 
 from __future__ import annotations
 
+from datetime import timedelta
+
+import pytest
 from sqlalchemy.orm import Session
 
 from krater.models import AuditEvent, FundingHold, ProjectStatus, ReviewDecision, ReviewSource, RevisionOutcome
@@ -600,6 +603,123 @@ def test_reconcile_skips_a_step_weave_cant_answer_and_runs_the_rest(
 
     assert failed == ["sync_reviewer_invites"]
     assert slack_client.channels[project.slack_channel_id]["archived"] is True  # the later steps still ran
+
+
+def _submitted_minutes_ago(db_session: Session, member: Actor, minutes: int, title: str = "Rover"):
+    project = new_project(db_session, member, title=title, write_up="w", budget_requested_cents=5000)
+    project = projects.submit(db_session, member, project=project, criteria_read=True)
+    revision = project.current_revision
+    revision.submitted_at = revision.submitted_at - timedelta(minutes=minutes)
+    db_session.flush()
+    return revision
+
+
+def test_sync_missed_review_messages_posts_a_message_the_submission_job_missed(
+    db_session: Session, member: Actor, reviewer: Actor, weave: StubWeaveClient
+) -> None:
+    revision = _submitted_minutes_ago(db_session, member, 30)
+    reviewer.user.slack_user_id = "U_REVIEWER"
+    slack_client = FakeSlackClient()
+
+    slack_notify.sync_missed_review_messages(db_session, slack_client, weave, feed_channel_id="C_FEED")
+
+    assert revision.slack_message_ts is not None
+    assert (revision.slack_message_channel_id, revision.slack_message_ts) in slack_client.messages
+    assert slack_client.channels[revision.slack_message_channel_id]["members"] >= {"U_REVIEWER"}
+    assert [msg for (chan, _ts), msg in slack_client.messages.items() if chan == "C_FEED"]
+
+
+def test_sync_missed_review_messages_leaves_a_fresh_submission_to_its_own_job(
+    db_session: Session, member: Actor, weave: StubWeaveClient
+) -> None:
+    revision = _submitted_minutes_ago(db_session, member, 1)
+    slack_client = FakeSlackClient()
+
+    slack_notify.sync_missed_review_messages(db_session, slack_client, weave, feed_channel_id=None)
+
+    assert revision.slack_message_ts is None
+    assert slack_client.messages == {}
+
+
+def test_sync_missed_review_messages_doesnt_post_twice(
+    db_session: Session, member: Actor, weave: StubWeaveClient
+) -> None:
+    _submitted_minutes_ago(db_session, member, 30)
+    slack_client = FakeSlackClient()
+
+    slack_notify.sync_missed_review_messages(db_session, slack_client, weave, feed_channel_id=None)
+    slack_notify.sync_missed_review_messages(db_session, slack_client, weave, feed_channel_id=None)
+
+    assert len(slack_client.messages) == 1
+
+
+def test_sync_missed_review_messages_skips_decided_revisions(
+    db_session: Session, member: Actor, weave: StubWeaveClient
+) -> None:
+    revision = _submitted_minutes_ago(db_session, member, 30)
+    revision.outcome = RevisionOutcome.REJECTED
+    db_session.flush()
+    slack_client = FakeSlackClient()
+
+    slack_notify.sync_missed_review_messages(db_session, slack_client, weave, feed_channel_id=None)
+
+    assert slack_client.messages == {}
+
+
+def test_sync_missed_review_messages_leaves_out_submissions_older_than_the_window(
+    db_session: Session, member: Actor, weave: StubWeaveClient
+) -> None:
+    revision = _submitted_minutes_ago(db_session, member, 8 * 24 * 60)
+    slack_client = FakeSlackClient()
+
+    slack_notify.sync_missed_review_messages(db_session, slack_client, weave, feed_channel_id=None)
+
+    assert revision.slack_message_ts is None
+    assert slack_client.messages == {}
+
+
+def test_sync_missed_review_messages_carries_on_past_a_revision_slack_refuses(
+    db_session: Session, member: Actor, weave: StubWeaveClient
+) -> None:
+    slack_client = _BrokenChannelSlack()
+    broken = _submitted_minutes_ago(db_session, member, 60, title="Kicked")
+    broken.project.slack_channel_id = slack_client.create_channel("ganymede-kicked")
+    slack_client.broken_channel_id = broken.project.slack_channel_id
+    fine = _submitted_minutes_ago(db_session, member, 30, title="Fine")
+    db_session.commit()
+
+    with pytest.raises(SlackRequestFailedError):
+        slack_notify.sync_missed_review_messages(db_session, slack_client, weave, feed_channel_id=None)
+
+    assert broken.slack_message_ts is None
+    assert fine.slack_message_ts is not None
+
+
+def test_a_failed_feed_line_keeps_the_review_message_and_doesnt_post_it_twice(
+    db_session: Session, member: Actor, weave: StubWeaveClient
+) -> None:
+    slack_client = _BrokenChannelSlack()
+    slack_client.broken_channel_id = "C_FEED"
+    revision = _submitted_minutes_ago(db_session, member, 30)
+    db_session.commit()
+
+    slack_notify.sync_missed_review_messages(db_session, slack_client, weave, feed_channel_id="C_FEED")
+    slack_notify.sync_missed_review_messages(db_session, slack_client, weave, feed_channel_id="C_FEED")
+
+    assert revision.slack_message_ts is not None
+    assert len(slack_client.messages) == 1
+
+
+def test_reconcile_posts_a_missed_review_message(
+    db_session: Session, member: Actor, reviewer: Actor, weave: StubWeaveClient
+) -> None:
+    revision = _submitted_minutes_ago(db_session, member, 30)
+    db_session.commit()
+    slack_client = FakeSlackClient()
+
+    assert slack_notify.reconcile(db_session, slack_client, weave, feed_channel_id="C_FEED") == []
+
+    assert revision.slack_message_ts is not None
 
 
 def test_reconcile_reports_no_failed_steps_on_a_good_run(
