@@ -758,10 +758,17 @@ def _box_message(session: Session, slack_client: SlackClient, event: AuditEvent,
         icon, title = _ENDED.get(payload.get("state", ""), (":information_source:", "Job ended"))
         reason = (payload.get("reason") or "").strip()
         spent = _format_cents(payload.get("spend_cents") or 0)
+        parts = payload.get("cost_parts") or {}
+        split = (
+            f" (GPU {_format_cents(parts.get('gpu', 0))}, disk {_format_cents(parts.get('disk', 0))}, "
+            f"data {_format_cents(parts.get('data', 0))})"
+            if parts and payload.get("spend_cents")
+            else ""
+        )
         text = (
             f"{icon} *{title}*: {who}, *{name}*"
             + (f": {_escape_mrkdwn(reason)}" if reason and payload.get("state") != "succeeded" else ".")
-            + f" It cost about {spent}. <{link}|See its results and log>."
+            + f" It cost about {spent}{split}. <{link}|See its results and log>."
         )
     elif event.action == AUDIT_JOB_IDLE:
         hourly = payload.get("hourly_microusd") or 0

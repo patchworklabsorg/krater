@@ -149,6 +149,11 @@ def _can_launch_for(actor: Actor, project: Project) -> bool:
     return teams.on_team(project, actor.user.id)
 
 
+def validate_spec(spec: JobSpec, *, cap_cents: int) -> None:
+    """Raise `ValidationFailed` for what `submit_job` would refuse in `spec` itself (for estimating before queueing)."""
+    _validate(spec, cap_microusd=cap_cents * MICROUSD_PER_CENT)
+
+
 def _validate(spec: JobSpec, *, cap_microusd: int) -> None:
     errors: dict[str, str] = {}
     if not spec.name.strip() or len(spec.name) > 200:

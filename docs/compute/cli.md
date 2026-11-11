@@ -76,6 +76,14 @@ model with offers if you named none; on demand with `--on-demand`, otherwise int
 and exits with 2 without queueing anything. `krater prices` is the whole list, cheapest first, with only the models that have offers now unless
 you pass `--all`, and `--gpu 4090` narrows it to names containing that.
 
+### What it may cost
+
+`krater submit ... --estimate` checks the options like a real submit and prints what the job may cost: its max price
+for its max runtime, plus its data estimate at the transfer price cap, and recent prices for the GPU models named. It
+queues nothing. A queued job prints the same line, and `krater show <job>` splits the spend into GPU, disk and data,
+with Vast's figure for each where it has one. `POST /api/v1/projects/{id}/jobs/estimate` takes the same body as a
+submit.
+
 ### Data transfer
 
 Vast bills data into and out of the machine per GB on top of the hourly price. `--data-in 400 --data-out 100` (GB)

@@ -35,6 +35,7 @@ from krater.services import (
     compute_files,
     compute_jobs,
     compute_settings,
+    job_costs,
     people,
     price_history,
     project_secrets,
@@ -209,6 +210,7 @@ def _form_page(
     posted=None,
     status_code=200,
     transfer_warning: str | None = None,
+    estimate=None,
 ):
     settings = get_settings()
     policy = compute_settings.effective_policy(db_session, project)
@@ -224,6 +226,7 @@ def _form_page(
                 compute_settings.FIELDS_BY_NAME["transfer_cap_microusd_per_gb"], policy.transfer_cap_microusd_per_gb
             ),
             "transfer_warning": transfer_warning,
+            "estimate": estimate,
             "escalations": ESCALATION_LABELS,
             "errors": errors or {},
             "posted": posted or {},
@@ -293,6 +296,17 @@ async def submit_job(
             data_in_gb=_int(data_in, "data_in_gb", "data into the machine") if data_in else None,
             data_out_gb=_int(data_out, "data_out_gb", "data out of the machine") if data_out else None,
         )
+        if posted.get("action") == "estimate":
+            # Only the price: nothing is queued, and the form comes back as it was.
+            compute_jobs.validate_spec(spec, cap_cents=hourly_cap_cents(project, get_settings()))
+            policy = compute_settings.effective_policy(db_session, project)
+            estimate = job_costs.estimate(
+                db_session,
+                spec,
+                transfer_cap_microusd_per_gb=policy.transfer_cap_microusd_per_gb,
+                now=datetime.now(UTC),
+            )
+            return _form_page(request, db_session, project, weave_client, posted=posted, estimate=estimate)
         job = compute_jobs.submit_job(
             db_session,
             actor,
@@ -350,6 +364,10 @@ def job_page(
     live = [row for row in job.instances if row.is_live]
     charged = [row.transfer_charged_microusd for row in job.instances if row.transfer_charged_microusd is not None]
     is_team = _is_team(actor, project)
+    policy = compute_settings.effective_policy(db_session, project)
+    estimate = job_costs.estimate(
+        db_session, job, transfer_cap_microusd_per_gb=policy.transfer_cap_microusd_per_gb, now=now
+    )
     can_read_files = compute_files.can_read(actor, project)
     files, log, files_error = [], None, False
     if can_read_files:
@@ -368,6 +386,8 @@ def job_page(
             "events": events,
             "instance": live[-1] if live else None,
             "transfer_charged_cents": -(-sum(charged) // compute_jobs.MICROUSD_PER_CENT) if charged else None,
+            "estimate": estimate,
+            "costs": job_costs.breakdown(job),
             "can_cancel": (is_team or actor.is_admin) and (job.is_active or job.state is ComputeJobState.QUEUED),
             "can_stop": is_team and job.kind is ComputeJobKind.BOX and job.state is ComputeJobState.RUNNING,
             "can_resume": is_team and job.kind is ComputeJobKind.BOX and job.state is ComputeJobState.STOPPED,
