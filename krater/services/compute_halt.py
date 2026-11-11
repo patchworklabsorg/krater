@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.orm import Session
 
 from krater.models import ComputeJob, ComputeJobState, ComputeSettings, SpendSnapshot
@@ -95,7 +96,7 @@ def _totals_at(session: Session, at: datetime | None) -> dict[uuid.UUID, int]:
     """Each project's cumulative spend as of `at` (its latest snapshot then), or now for `None`."""
     stmt = (
         sa.select(SpendSnapshot.project_id, SpendSnapshot.estimated_spend_cents)
-        .distinct(SpendSnapshot.project_id)
+        .ext(distinct_on(SpendSnapshot.project_id))
         .order_by(SpendSnapshot.project_id, SpendSnapshot.taken_at.desc())
     )
     if at is not None:

@@ -350,3 +350,13 @@ def test_only_plain_digit_ids_reach_a_vast_path(client: VastClient, fake: FakeVa
     with pytest.raises(ValueError, match="not a Vast id"):
         client.show_instance(bad)
     assert fake.requests == []
+
+
+# -- Account -----------------------------------------------------------------------------------------
+
+
+def test_account_credit_is_read_as_a_decimal(client: VastClient, fake: FakeVast) -> None:
+    fake.account_credit = 87.125
+
+    assert client.account_credit() == Decimal("87.125")
+    assert fake.requests[-1] == ("GET", "/api/v0/users/current/")

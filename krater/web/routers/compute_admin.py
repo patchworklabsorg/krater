@@ -13,6 +13,7 @@ from typing import Annotated
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import RedirectResponse
+from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.orm import Session
 
 from krater.compute import search_quota
@@ -322,7 +323,7 @@ def compute_overview_page(
         check.project_id: check
         for check in db_session.scalars(
             sa.select(SpendReconciliation)
-            .distinct(SpendReconciliation.project_id)
+            .ext(distinct_on(SpendReconciliation.project_id))
             .order_by(SpendReconciliation.project_id, SpendReconciliation.checked_at.desc())
         )
     }
