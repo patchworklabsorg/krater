@@ -38,6 +38,7 @@
           <a class="site-nav__link" href="/"{% if on_home %} aria-current="{{ 'page' if path == '/' else 'true' }}"{% endif %}>{{ "My projects" if signed_in_name else "Home" }}</a>
           <a class="site-nav__link" href="/gallery"{% if path.startswith("/gallery") %} aria-current="{{ 'page' if path == '/gallery' else 'true' }}"{% endif %}>Gallery</a>
           <a class="site-nav__link" href="/pricing"{% if path.startswith("/pricing") %} aria-current="{{ 'page' if path == '/pricing' else 'true' }}"{% endif %}>GPU pricing</a>
+          <a class="site-nav__link" href="/help"{% if path.startswith("/help") %} aria-current="{{ 'page' if path == '/help' else 'true' }}"{% endif %}>Help</a>
           {% if show_admin %}
             <a class="site-nav__link" href="/admin"{% if path.startswith("/admin") %} aria-current="{{ 'page' if path == '/admin' else 'true' }}"{% endif %}>Admin</a>
           {% endif %}

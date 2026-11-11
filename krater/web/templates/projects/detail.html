@@ -375,6 +375,41 @@
 {% if is_team and (can_edit_draft or can_submit or can_submit_completion or can_start_amendment or can_start_completion or can_withdraw) %}
 <section class="card">
   <h2>Your actions</h2>
+  {% set cur = summary.current_revision %}
+  {% set status = project.status.value %}
+  <p class="next-step"><strong>Next:</strong>
+    {% if status == "draft" %}
+      finish your application with <strong>Edit draft</strong>, then tick the criteria box and choose
+      <strong>Submit for review</strong>. Reviewers discuss it with you in the project's Slack channel.
+      <a href="/help/using-krater#submitting">How review works</a>
+    {% elif status == "changes_requested" %}
+      a reviewer asked for changes. Their reason is under <strong>Revision history</strong>. Edit the draft and
+      submit it again. <a href="/help/using-krater#review">About review</a>
+    {% elif status == "pending_review" %}
+      reviewers are deciding. Answer their questions in the project's Slack channel; the decision shows there and
+      here. <a href="/help/using-krater#review">About review</a>
+    {% elif status == "approved" and cur and cur.kind.value == "amendment" and not cur.submitted_at %}
+      finish your amendment with <strong>Edit draft</strong> and submit it. Your current budget keeps working
+      meanwhile. <a href="/help/using-krater#asking-for-more-budget-amendments">About amendments</a>
+    {% elif status == "approved" and cur and cur.kind.value == "amendment" and cur.outcome.value == "pending" %}
+      reviewers are deciding your amendment. Your current budget keeps working meanwhile.
+    {% elif status == "approved" and cur and cur.kind.value == "completion" and not cur.submitted_at %}
+      finish your final write-up with <strong>Edit draft</strong>, then choose
+      <strong>Submit completion for review</strong>.
+      <a href="/help/using-krater#finishing-completion-and-the-gallery">About completion</a>
+    {% elif status == "approved" %}
+      {% if compute_on %}run your work from <a href="/projects/{{ project.id }}/compute">Compute</a>
+      (<a href="/help/compute-jobs">how to run jobs</a>).{% else %}do the work on your budget.{% endif %}
+      Need more budget? <strong>Start amendment</strong>. Finished? <strong>Start completion</strong> to write it
+      up for the gallery.
+    {% elif status == "pending_completion_review" %}
+      reviewers are reading your write-up. Once it's approved it's published in the gallery, and unspent budget is
+      returned.
+    {% elif status == "completion_changes_requested" %}
+      a reviewer asked for changes to your write-up. Their reason is under <strong>Revision history</strong>. Edit it
+      and submit it again.
+    {% endif %}
+  </p>
   {% if can_submit %}
     {# The same box as the edit page's submit form: `projects.submit` refuses a submission without it. #}
     <form method="post" action="/projects/{{ project.id }}/submit" class="form submit-form">

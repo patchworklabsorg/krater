@@ -2405,3 +2405,60 @@ fieldset.choice-list legend {
   font-size: var(--text-sm);
   color: var(--text-muted);
 }
+
+/* Help (/help): the guides in docs/guides. A guide keeps its own h2-h4 headings, with ids for its contents list;
+   the sticky header would cover a heading jumped to, so it stops a little lower. */
+.help-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.help-list li + li {
+  margin-top: var(--space-3);
+}
+
+.help-list__title {
+  font-weight: 600;
+}
+
+.help-list p {
+  margin: var(--space-1) 0 0;
+  color: var(--text-muted);
+}
+
+.help-more {
+  color: var(--text-muted);
+}
+
+.help-guide {
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.help-guide h2 {
+  margin: var(--space-5) 0 var(--space-3);
+  font-size: var(--text-xl);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+
+.help-guide h3 {
+  font-size: var(--text-lg);
+}
+
+.help-guide > h2:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.help-guide :is(h2, h3, h4) {
+  scroll-margin-top: 5rem;
+}
+
+/* The project page's "Next:" line: what the team does now, for the project's status. */
+.next-step {
+  margin: 0 0 var(--space-3);
+  max-width: 48rem;
+}
