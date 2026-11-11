@@ -153,6 +153,9 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="queue it even if its data transfer could cost a large share of the budget, without asking",
     )
+    submit.add_argument(
+        "--estimate", action="store_true", help="only say what it may cost and what this shape costs now; queue nothing"
+    )
 
     job_help = "its id, the first characters of it, or its name"
     show = commands.add_parser("show", help="a job's state, machine and recent events")
@@ -456,6 +459,10 @@ def run(
         if args.confirm_transfer_cost:
             body["confirm_transfer_cost"] = True
         path = f"/projects/{resolve.resolve_project(krater, args.project)}/jobs"
+        if args.estimate:
+            estimate = krater.post(path + "/estimate", body)
+            out(estimate, lambda: say(estimate["summary"]))
+            return 0
         try:
             job = krater.post(path, body)
         except KraterError as exc:
@@ -470,7 +477,13 @@ def run(
                 say("Not queued. --confirm-transfer-cost queues it without asking.")
                 return 1
             job = krater.post(path, {**body, "confirm_transfer_cost": True})
-        out(job, lambda: say(f"Queued {job['kind']} {job['id']}: {job['state_reason'] or job['state']}"))
+
+        def queued() -> None:
+            say(f"Queued {job['kind']} {job['id']}: {job['state_reason'] or job['state']}")
+            if job.get("estimate"):
+                say(job["estimate"]["summary"])
+
+        out(job, queued)
     elif args.command == "show":
         job = krater.get(f"/jobs/{resolve.resolve_job(krater, args.job)}")
 
@@ -484,6 +497,14 @@ def run(
                 f"  spent ${job['spend_cents'] / 100:.2f}"
                 + (f"; exit code {job['exit_code']}" if job["exit_code"] is not None else "")
             )
+            costs = job.get("costs") or []
+            if any(part["estimate_microusd"] or part["charged_microusd"] for part in costs):
+                say(
+                    "  cost: "
+                    + ", ".join(
+                        f"{part['label'].lower()} ${_best(part) / 1_000_000:.3f}" for part in costs if _best(part)
+                    )
+                )
             machine = job.get("machine")
             if machine:
                 say(f"  machine: {machine['gpu']} at {_money(machine['usd_per_hour'])}/h, {machine['state']}")
@@ -738,6 +759,11 @@ def _unreachable(exc: httpx.HTTPError) -> str:
     if isinstance(exc, httpx.TimeoutException):
         return f"{where} didn't answer in time."
     return f"couldn't reach {where} ({exc.__class__.__name__}). Check the address and your connection."
+
+
+def _best(part: dict) -> int:
+    """Vast's charge for a cost part once it has one, else Krater's estimate."""
+    return part["charged_microusd"] if part["charged_microusd"] is not None else part["estimate_microusd"]
 
 
 def report(exc: Exception) -> int:

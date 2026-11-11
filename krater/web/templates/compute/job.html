@@ -53,6 +53,11 @@
       {% endif %}; after {{ job.max_wait_minutes }} minutes waiting to start: {{ escalations[job.on_max_wait] | lower }}
     </dd>
     <dt>Spent</dt><dd>{{ job.spend_cents | dollars }}{% if job.exit_code is not none %}; exit code {{ job.exit_code }}{% endif %}</dd>
+    <dt>May cost</dt>
+    <dd>
+      up to {{ estimate.total_up_to_cents | dollars }} at its max price for its full max runtime{% if estimate.data_cents %}, data included at the price cap{% endif %}{% if estimate.market %};
+        this shape cost {{ estimate.market.low_microusd | rate }} to {{ estimate.market.typical_microusd | rate }} in the last day{% endif %}
+    </dd>
     <dt>Data transfer</dt>
     <dd>
       {% if transfer_charged_cents is not none %}{{ transfer_charged_cents | dollars }} charged by Vast so far{% else %}nothing charged yet{% endif %}{% if job.data_in_gb is not none or job.data_out_gb is not none %};
@@ -60,6 +65,32 @@
     </dd>
   </dl>
 </section>
+
+{% if costs.split_known and (job.spend_cents or costs.charged) %}
+<section class="card" id="costs" aria-labelledby="costs-head">
+  <h2 id="costs-head">What it cost</h2>
+  <div class="table-scroll">
+    <table class="table">
+      <thead>
+        <tr><th scope="col">Part</th><th scope="col" class="num">Krater's estimate</th><th scope="col" class="num">Vast charged</th></tr>
+      </thead>
+      <tbody>
+        {% for line in costs.lines %}
+          <tr>
+            <td>{{ line.label }}</td>
+            <td class="num">${{ "%.3f" | format(line.estimate_microusd / 1000000) }}</td>
+            <td class="num">{% if line.charged_microusd is not none %}${{ "%.3f" | format(line.charged_microusd / 1000000) }}{% else %}<span class="muted">not yet</span>{% endif %}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="muted">
+    Krater estimates as the job runs: data from what the machine reports every minute, the image pull from the image's
+    size. Every hour it checks Vast's charges, and Vast's figure is what the budget counts.
+  </p>
+</section>
+{% endif %}
 
 {% if can_read_files %}
 <section class="card" id="output">

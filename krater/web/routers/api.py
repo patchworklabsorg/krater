@@ -25,7 +25,15 @@ from sqlalchemy.orm import Session
 from krater.config import get_settings
 from krater.db import get_session
 from krater.models import ComputeEscalation, ComputeEvent, ComputeJob, ComputeJobKind, ComputeOutbid, Project, User
-from krater.services import compute_files, compute_jobs, price_history, project_secrets, teams
+from krater.services import (
+    compute_files,
+    compute_jobs,
+    compute_settings,
+    job_costs,
+    price_history,
+    project_secrets,
+    teams,
+)
 from krater.services import projects as project_service
 from krater.services import users as user_service
 from krater.services.actor import Actor
@@ -179,7 +187,71 @@ def _job_json(job: ComputeJob, *, detail: bool = False, session: Session | None 
             sa.select(ComputeEvent).where(ComputeEvent.job_id == job.id).order_by(ComputeEvent.at.desc()).limit(50)
         )
         data["events"] = [{"at": _iso(e.at), "kind": e.kind, "message": e.message} for e in events]
+        data["estimate"] = _estimate_json(session, job.project, job)
+        data["costs"] = [
+            {
+                "label": line.label,
+                "estimate_microusd": line.estimate_microusd,
+                "charged_microusd": line.charged_microusd,
+            }
+            for line in job_costs.breakdown(job).lines
+        ]
     return data
+
+
+def _estimate_json(session: Session, project: Project, shape) -> dict:
+    policy = compute_settings.effective_policy(session, project)
+    estimate = job_costs.estimate(
+        session, shape, transfer_cap_microusd_per_gb=policy.transfer_cap_microusd_per_gb, now=datetime.now(UTC)
+    )
+    return {**estimate.as_json(), "summary": estimate.summary()}
+
+
+def _spec(body: dict) -> JobSpec:
+    """A job spec from a submit body. Raises `ValidationFailed`."""
+    gpus = body.get("gpu_names", [])
+    if not isinstance(gpus, list) or not all(isinstance(g, str) and len(g) <= 100 for g in gpus) or len(gpus) > 50:
+        raise ValidationFailed({"gpu_names": "Give a list of GPU model names."})
+    command = body.get("command")
+    if command is not None and not isinstance(command, str):
+        raise ValidationFailed({"command": "Give the command as one string."})
+    if "limit_usd_per_hour" in body:
+        # A limit order: one price it starts at or under and never pays more than, and it holds its machine
+        # when outbid rather than starting over elsewhere.
+        if "target_usd_per_hour" in body or "max_usd_per_hour" in body:
+            raise ValidationFailed({"limit_usd_per_hour": "Give a limit, or a target and a max, not both."})
+        target = high = _price(body, "limit_usd_per_hour")
+        outbid_default = ComputeOutbid.HOLD.value
+    else:
+        target, high = _price(body, "target_usd_per_hour"), _price(body, "max_usd_per_hour")
+        outbid_default = ComputeOutbid.MOVE.value
+    return JobSpec(
+        name=str(body.get("name", "")),
+        image=str(body.get("image", "")).strip(),
+        command=command or None,
+        kind=ComputeJobKind.BOX if body.get("kind") == "box" else ComputeJobKind.JOB,
+        gpu_names=tuple(gpus),
+        min_gpu_ram_gb=_int(body, "min_gpu_ram_gb", None),
+        num_gpus=_int(body, "num_gpus", 1),
+        disk_gb=_int(body, "disk_gb", 32),
+        target_microusd=target,
+        max_microusd=high,
+        interruptible=bool(body.get("interruptible", True)),
+        max_wait_minutes=_int(body, "max_wait_minutes", 12 * 60),
+        on_max_wait=_choice(body, "on_max_wait", ComputeEscalation, "keep_waiting"),
+        max_runtime_minutes=_int(body, "max_runtime_minutes", 8 * 60),
+        on_outbid=_choice(body, "on_outbid", ComputeOutbid, outbid_default),
+        data_in_gb=_int(body, "data_in_gb", None),
+        data_out_gb=_int(body, "data_out_gb", None),
+    )
+
+
+async def _body(request: Request) -> dict | None:
+    try:
+        body = await request.json()
+    except ValueError:
+        return None
+    return body if isinstance(body, dict) else None
 
 
 @router.get("/cli-config")
@@ -272,48 +344,11 @@ async def submit(
     weave_client: Annotated[WeaveClient, Depends(get_weave_client)],
 ):
     project = _project(db_session, actor, project_id)
-    try:
-        body = await request.json()
-    except ValueError:
-        return _error(400, "Send a JSON object.")
-    if not isinstance(body, dict):
+    body = await _body(request)
+    if body is None:
         return _error(400, "Send a JSON object.")
     try:
-        gpus = body.get("gpu_names", [])
-        if not isinstance(gpus, list) or not all(isinstance(g, str) and len(g) <= 100 for g in gpus) or len(gpus) > 50:
-            raise ValidationFailed({"gpu_names": "Give a list of GPU model names."})
-        command = body.get("command")
-        if command is not None and not isinstance(command, str):
-            raise ValidationFailed({"command": "Give the command as one string."})
-        if "limit_usd_per_hour" in body:
-            # A limit order: one price it starts at or under and never pays more than, and it holds its machine
-            # when outbid rather than starting over elsewhere.
-            if "target_usd_per_hour" in body or "max_usd_per_hour" in body:
-                raise ValidationFailed({"limit_usd_per_hour": "Give a limit, or a target and a max, not both."})
-            target = high = _price(body, "limit_usd_per_hour")
-            outbid_default = ComputeOutbid.HOLD.value
-        else:
-            target, high = _price(body, "target_usd_per_hour"), _price(body, "max_usd_per_hour")
-            outbid_default = ComputeOutbid.MOVE.value
-        spec = JobSpec(
-            name=str(body.get("name", "")),
-            image=str(body.get("image", "")).strip(),
-            command=command or None,
-            kind=ComputeJobKind.BOX if body.get("kind") == "box" else ComputeJobKind.JOB,
-            gpu_names=tuple(gpus),
-            min_gpu_ram_gb=_int(body, "min_gpu_ram_gb", None),
-            num_gpus=_int(body, "num_gpus", 1),
-            disk_gb=_int(body, "disk_gb", 32),
-            target_microusd=target,
-            max_microusd=high,
-            interruptible=bool(body.get("interruptible", True)),
-            max_wait_minutes=_int(body, "max_wait_minutes", 12 * 60),
-            on_max_wait=_choice(body, "on_max_wait", ComputeEscalation, "keep_waiting"),
-            max_runtime_minutes=_int(body, "max_runtime_minutes", 8 * 60),
-            on_outbid=_choice(body, "on_outbid", ComputeOutbid, outbid_default),
-            data_in_gb=_int(body, "data_in_gb", None),
-            data_out_gb=_int(body, "data_out_gb", None),
-        )
+        spec = _spec(body)
         job = compute_jobs.submit_job(
             db_session,
             actor,
@@ -338,7 +373,24 @@ async def submit(
         db_session.rollback()
         return _error(409, str(exc))
     db_session.commit()
-    return _job_json(job)
+    return {**_job_json(job), "estimate": _estimate_json(db_session, project, job)}
+
+
+@router.post("/projects/{project_id}/jobs/estimate")
+async def estimate(project_id: uuid.UUID, request: Request, actor: Me, db_session: Db):
+    """What a job with this body may cost, and what its shape costs now. Queues nothing."""
+    project = _project(db_session, actor, project_id)
+    if not _is_team(actor, project):
+        return _error(403, "Only the project's team can run jobs on its budget.")
+    body = await _body(request)
+    if body is None:
+        return _error(400, "Send a JSON object.")
+    try:
+        spec = _spec(body)
+        compute_jobs.validate_spec(spec, cap_cents=hourly_cap_cents(project, get_settings()))
+    except ValidationFailed as exc:
+        return _error(422, "Check the job's fields.", fields=exc.errors)
+    return _estimate_json(db_session, project, spec)
 
 
 @router.get("/jobs/{job_id}")

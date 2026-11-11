@@ -50,6 +50,7 @@ class Fake:
         self.valid_access = {"access-1"}
         self.refreshes = 0
         self.jobs: list[dict] = []
+        self.estimated: list[dict] = []
         self.secrets: dict[str, str] = {}
         self.jobs_422 = False
         # Krater asks before queuing a job whose data transfer could cost a lot (409 with `confirm`).
@@ -162,6 +163,9 @@ class Fake:
             return httpx.Response(
                 200, json={"name": "Ada", "email": "ada@example.org", "member": True, "reviewer": False, "admin": False}
             )
+        if path == f"/projects/{PROJECT}/jobs/estimate" and request.method == "POST":
+            self.estimated.append(json.loads(request.content))
+            return httpx.Response(200, json={"up_to_cents": 400, "summary": "Up to $4.00 if it runs its full 8 hours."})
         if path == f"/projects/{PROJECT}/jobs" and request.method == "POST":
             body = json.loads(request.content)
             if self.transfer_confirm and body.get("confirm_transfer_cost") is not True:
@@ -1546,3 +1550,32 @@ def test_login_defaults_to_ganymedes_krater(monkeypatch) -> None:
     monkeypatch.delenv("KRATER_URL", raising=False)
     assert main._parser().parse_args(["login"]).url == main.DEFAULT_URL
     assert main._parser().parse_args(["login", "--url", "https://other"]).url == "https://other"
+
+
+def test_submit_estimate_only_says_the_price_and_queues_nothing(http, fake) -> None:
+    _login(http, [])
+    said: list[str] = []
+
+    code = run([*SUBMIT_4090, "--data-in", "40", "--estimate"], http=http, say=said.append)
+
+    assert code == 0
+    assert fake.estimated[0]["data_in_gb"] == 40
+    assert [job for job in fake.jobs if "body" in job] == []
+    assert said == ["Up to $4.00 if it runs its full 8 hours."]
+
+
+def test_submit_says_what_the_job_may_cost(http, fake, monkeypatch) -> None:
+    _login(http, [])
+    said: list[str] = []
+    original = fake.api
+
+    def with_estimate(request, path):
+        response = original(request, path)
+        if path == f"/projects/{PROJECT}/jobs" and response.status_code == 201:
+            return httpx.Response(201, json={**json.loads(response.content), "estimate": {"summary": "Up to $1."}})
+        return response
+
+    monkeypatch.setattr(fake, "api", with_estimate)
+    run(SUBMIT_4090, http=http, say=said.append)
+
+    assert said[-2:] == [f"Queued job {JOB}: Queued.", "Up to $1."]

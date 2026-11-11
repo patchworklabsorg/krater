@@ -242,6 +242,14 @@ at the top of the form ($5 an hour unless an admin set another).
 
 Choose **Queue it**. The job starts when a machine at or under your price is free.
 
+To see the price first, choose **Estimate the cost**: the form comes back filled in, with what the job may cost and
+nothing queued. It shows:
+
+- **Up to**: your max price for the max runtime, the most the machine can cost. Most jobs finish sooner and cost less.
+- **Data**: your data estimate at the transfer price cap, the most that data can cost.
+- **Recent prices** for the GPUs you named (not for "any GPU with this much memory"): the cheapest and typical full
+  hourly price over the last day. If even the cheapest is above your max price, expect the job to wait.
+
 ## Choosing a price
 
 ### Look at the market first
@@ -343,8 +351,11 @@ when Krater moves it to another machine.
 
 Open the job from your project's **Compute** page. It shows:
 
-- **Job**: the image (and the exact digest it ran), the command, GPU, price, what it has spent so far, and its exit
-  code once it has one;
+- **Job**: the image (and the exact digest it ran), the command, GPU, price, what it **may cost** (the same estimate
+  as the form's), what it has spent so far, and its exit code once it has one;
+- **What it cost**: the spend split into GPU, disk, data in (with the image pull) and data out, Krater's own estimate
+  next to what Vast charged for each part at its last hourly check. Vast's figures are the ones the bill uses. Jobs
+  from before 12 November 2026 show only the total;
 - **Output**: the end of what the command printed, updated every minute, with a link to the whole log;
 - **Files**: checkpoints, outputs and logs, to download;
 - **What happened**: every step, with times: queued, rented, started, outbid, bid raised, moved, finished;
@@ -549,6 +560,7 @@ job is its name or the start of its id. If that matches more than one, the CLI l
 | `--max-runtime MIN` | 480 by default |
 | `--data-in GB`, `--data-out GB` | Your data transfer estimate |
 | `--confirm-transfer-cost` | Queue without asking, even if transfer could cost a large share of the budget |
+| `--estimate` | Say what the job may cost and queue nothing |
 
 Leave the price out, and `krater submit` shows current prices for the GPUs you named, explains the options, and
 queues nothing.

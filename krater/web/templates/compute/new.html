@@ -181,8 +181,26 @@
       </div>
     {% endif %}
 
+    {% if estimate %}
+      <div class="notice" role="status" id="estimate">
+        <p><strong>What it may cost.</strong>
+          Up to {{ estimate.up_to_cents | dollars }} if it runs its full {{ "%g" | format(estimate.runtime_hours | float) }} hours
+          at its max price of {{ estimate.max_hourly_microusd | rate }}{% if estimate.data_cents %}, plus up to
+          {{ estimate.data_cents | dollars }} for the data you estimated, at the transfer price cap{% endif %}.
+          Most jobs finish sooner and cost less; the image pull comes on top, at the host's price.</p>
+        {% if estimate.market %}
+          <p>In the last day this shape cost {{ estimate.market.low_microusd | rate }} at the cheapest and
+            {{ estimate.market.typical_microusd | rate }} typically{% if estimate.market_above_max %}: even the cheapest
+            is above your max price, so expect it to wait{% endif %}.</p>
+        {% elif posted.gpu %}
+          <p class="muted">No recent prices for these GPU models: see the <a href="/pricing/history">price history</a>.</p>
+        {% endif %}
+      </div>
+    {% endif %}
+
     <div class="form-actions">
       <button type="submit" class="button button--primary">Queue it</button>
+      <button type="submit" class="button" name="action" value="estimate">Estimate the cost</button>
       <p class="muted">It starts when an offer at or under your price appears.</p>
     </div>
   </form>

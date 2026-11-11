@@ -75,6 +75,7 @@ from krater.services import (
     compute_settings,
     compute_watch,
     funding_holds,
+    job_costs,
 )
 from krater.services.compute_settings import ComputePolicy
 from krater.services.launch_rules import LAUNCHABLE_STATUSES, hourly_cap_cents
@@ -153,6 +154,20 @@ def _transfer(job: ComputeJob, image_bytes: int | None = None) -> offers.Transfe
 
 #: A credit reading older than this doesn't hold anything back.
 CREDIT_FRESH = timedelta(hours=2)
+
+
+def _cost_parts(job: ComputeJob) -> dict[str, int] | None:
+    """GPU, disk and data in cents for the job-ended notice, Vast's figures where it has them; `None` when the split
+    isn't known (machines rented before it was kept)."""
+    costs = job_costs.breakdown(job)
+    if not costs.split_known:
+        return None
+    parts = costs.part_cents()
+    return {
+        "gpu": parts.get("GPU", 0),
+        "disk": parts.get("Disk", 0),
+        "data": sum(cents for label, cents in parts.items() if label not in ("GPU", "Disk")),
+    }
 
 
 def _mbps(value: float | None) -> int | None:
@@ -756,6 +771,7 @@ class Scheduler:
                     "reason": job.state_reason or "",
                     "exit_code": job.exit_code,
                     "spend_cents": job.spend_cents,
+                    "cost_parts": _cost_parts(job),
                 },
             )
         self.session.commit()
