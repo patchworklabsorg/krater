@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
@@ -50,8 +51,11 @@ class Project(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         nullable=True,
     )
     repo_url: Mapped[str | None] = mapped_column(sa.String(2048), nullable=True)
+    # When the project became `completed` or `withdrawn`; its Slack channels are archived a week after
+    # (`krater.services.slack_notify.ARCHIVE_AFTER`). Null while it's open, and for projects finished before this.
+    finished_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
     slack_channel_id: Mapped[str | None] = mapped_column(sa.String(64), nullable=True)
-    # Set once the channel has been archived (on `completed`/`withdrawn`; see `krater.services.slack_notify`).
+    # Set once the channel has been archived (a week after `finished_at`; see `krater.services.slack_notify`).
     # `slack_channel_id` is kept even after archiving, so the project page can still link to it.
     slack_channel_archived: Mapped[bool] = mapped_column(
         sa.Boolean, nullable=False, default=False, server_default=sa.false()

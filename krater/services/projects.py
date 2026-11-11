@@ -812,6 +812,7 @@ def _apply_approve(
 
     if stage is ApprovalStage.COMPLETION:
         project.status = ProjectStatus.COMPLETED
+        project.finished_at = datetime.now(UTC)
         grants.cancel_pending(
             session, project, actor=actor, reason="The project was completed before its team was verified."
         )
@@ -1189,6 +1190,7 @@ def withdraw(session: Session, actor: Actor, *, project: Project, reason: str | 
         )
 
     project.status = ProjectStatus.WITHDRAWN
+    project.finished_at = datetime.now(UTC)
     grants.cancel_pending(session, project, actor=actor, reason=reason or "The project was withdrawn.")
     _supersede_pending_revisions(session, project)
 

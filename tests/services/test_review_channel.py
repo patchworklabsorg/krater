@@ -3,6 +3,8 @@ channel gets a notice the decision updates, and nobody on the team is ever in it
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 from sqlalchemy.orm import Session
 
 from krater.models import ProjectStatus, ReviewDecision, ReviewSource
@@ -209,3 +211,44 @@ def test_the_reconcile_archives_a_missed_reviewer_channel(
     slack_notify.sync_missed_archives(db_session, slack_client)
 
     assert slack_client.channels[project.slack_review_channel_id]["archived"]
+
+
+def test_withdrawing_announces_the_archive_and_archives_a_week_later(
+    db_session: Session, member: Actor, reviewer: Actor, weave: StubWeaveClient
+) -> None:
+    project = _submitted(db_session, member, reviewer)
+    slack_client = FakeSlackClient()
+    _notify(db_session, slack_client, weave, project)
+    project = projects.withdraw(db_session, member, project=project)
+    assert project.finished_at is not None
+
+    slack_notify.announce_archive(db_session, slack_client, project=project)
+    slack_notify.archive_project_channel(db_session, slack_client, project=project)  # the deferred job: not due
+
+    for channel_id in (project.slack_channel_id, project.slack_review_channel_id):
+        assert not slack_client.channels[channel_id]["archived"]
+        texts = [m["text"] for (chan, _ts), m in slack_client.messages.items() if chan == channel_id]
+        assert any("is withdrawn. Krater archives this channel on" in text for text in texts)
+
+    week_later = project.finished_at + slack_notify.ARCHIVE_AFTER
+    slack_notify.sync_missed_archives(db_session, slack_client, now=week_later - timedelta(minutes=1))
+    assert not slack_client.channels[project.slack_channel_id]["archived"]
+    slack_notify.sync_missed_archives(db_session, slack_client, now=week_later)
+    assert slack_client.channels[project.slack_channel_id]["archived"]
+    assert slack_client.channels[project.slack_review_channel_id]["archived"]
+
+
+def test_a_project_finished_before_finished_at_is_archived_at_once(
+    db_session: Session, member: Actor, reviewer: Actor, weave: StubWeaveClient
+) -> None:
+    project = _submitted(db_session, member, reviewer)
+    slack_client = FakeSlackClient()
+    _notify(db_session, slack_client, weave, project)
+    project.status = ProjectStatus.WITHDRAWN  # as an older row: finished, with no finished_at
+    db_session.flush()
+
+    slack_notify.announce_archive(db_session, slack_client, project=project)
+    slack_notify.sync_missed_archives(db_session, slack_client)
+
+    assert slack_client.channels[project.slack_channel_id]["archived"]
+    assert not any("Krater archives" in m["text"] for m in slack_client.messages.values())

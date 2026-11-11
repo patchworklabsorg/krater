@@ -152,7 +152,7 @@ def _process_decision(
     # Both are self-guarding no-ops when they don't apply (still pending, no channel, not terminal) --
     # see `krater.services.slack_notify` -- so it's safe to always call them here.
     slack_notify.notify_decision(session, slack_client, revision=revision)
-    slack_notify.archive_project_channel(session, slack_client, project=revision.project)
+    slack_notify.announce_archive(session, slack_client, project=revision.project)
     session.commit()
 
 

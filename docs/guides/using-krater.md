@@ -225,7 +225,8 @@ changes requested**: edit and resubmit. When it's approved:
 - the project becomes **Completed** and appears in the [gallery](/gallery), with the team, the compute it used (as an
   estimate) and your write-up;
 - spend is frozen, any unspent budget goes back to Patchwork, and the project's machines are destroyed;
-- the Slack channel is archived.
+- the Slack channels stay open for a week, then are archived (Krater posts the date). Archived channels stay
+  readable and searchable.
 
 You can keep running compute while your completion is under review.
 
@@ -235,8 +236,8 @@ doesn't know), who are shown by first name only unless an admin chose otherwise.
 ## Withdrawing
 
 The project's lead, or an admin, can **Withdraw project** from its page at any point before it's completed. It
-can't be undone. Unspent budget is reclaimed, its machines are destroyed, the Slack channel is archived, and
-Stash stops archiving its links.
+can't be undone. Unspent budget is reclaimed, its machines are destroyed, Stash stops archiving its links,
+and the Slack channels are archived a week later.
 
 ## Slack
 
