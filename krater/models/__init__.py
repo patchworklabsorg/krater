@@ -7,6 +7,7 @@ from krater.models.box_admin import BoxAdmin
 from krater.models.budget_entry import BudgetEntry
 from krater.models.compute_job import ComputeEvent, ComputeInstance, ComputeJob, SpendReconciliation
 from krater.models.compute_settings import ComputeSettings, ProjectComputeSettings
+from krater.models.compute_watch import ProviderAccount, StorageUsage
 from krater.models.enums import (
     ApprovalStage,
     BudgetEntryKind,
@@ -77,6 +78,7 @@ __all__ = [
     "ProjectMember",
     "ProjectRevision",
     "ProjectSecret",
+    "ProviderAccount",
     "ProjectStatus",
     "QuiltOutbox",
     "QuiltOutboxState",
@@ -94,6 +96,7 @@ __all__ = [
     "StashArchive",
     "StashArchiveState",
     "StorageReservation",
+    "StorageUsage",
     "User",
     "VastSearchQuota",
     "WorkerHeartbeat",

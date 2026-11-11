@@ -87,6 +87,9 @@ class ComputeJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # what it has spent so far. Both cents. The hold is released (0) when the job ends.
     hold_cents: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=0)
     spend_cents: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=0)
+    # When the scheduler wrote the notice of its end for the project's channel (batch jobs only), or decided none
+    # was due. Null until then.
+    end_notified_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
 
     project: Mapped[Project] = relationship()
     instances: Mapped[list[ComputeInstance]] = relationship(back_populates="job", order_by="ComputeInstance.attempt")
@@ -195,6 +198,8 @@ class ComputeInstance(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     start_requested_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
     # Since when the box has looked idle (low GPU use and no open session), by its heartbeats.
     idle_since: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    # A batch job's machine: when its team was warned that its GPU sat idle. Cleared once the GPU is busy again.
+    idle_warned_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
     # How to reach a box over SSH, from Vast (the direct port when there is one).
     ssh_host: Mapped[str | None] = mapped_column(sa.String(255), nullable=True)
     ssh_port: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
