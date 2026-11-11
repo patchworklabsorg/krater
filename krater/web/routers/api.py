@@ -172,6 +172,11 @@ def _job_json(job: ComputeJob, *, detail: bool = False, session: Session | None 
         row = live[-1] if live else None
         data["command"] = job.command
         data["max_runtime_minutes"] = job.max_runtime_minutes
+        data["min_gpu_ram_gb"] = job.min_gpu_ram_gb
+        data["max_wait_minutes"] = job.max_wait_minutes
+        data["on_max_wait"] = job.on_max_wait.value
+        # What it was queued with, as a submit body: `krater rerun` posts it again (with a new name, if given).
+        data["spec"] = submit_body(job)
         data["machine"] = (
             None
             if row is None
@@ -197,6 +202,33 @@ def _job_json(job: ComputeJob, *, detail: bool = False, session: Session | None 
             for line in job_costs.breakdown(job).lines
         ]
     return data
+
+
+def submit_body(job: ComputeJob) -> dict[str, Any]:
+    """The body that queues the same job again through `POST /projects/{id}/jobs`."""
+    body: dict[str, Any] = {
+        "name": job.name,
+        "image": job.image,
+        "command": job.command,
+        "kind": job.kind.value,
+        "gpu_names": list(job.gpu_names),
+        "min_gpu_ram_gb": job.min_gpu_ram_gb,
+        "num_gpus": job.num_gpus,
+        "disk_gb": job.disk_gb,
+        "interruptible": job.interruptible,
+        "max_wait_minutes": job.max_wait_minutes,
+        "on_max_wait": job.on_max_wait.value,
+        "max_runtime_minutes": job.max_runtime_minutes,
+        "on_outbid": job.on_outbid.value,
+        "data_in_gb": job.data_in_gb,
+        "data_out_gb": job.data_out_gb,
+    }
+    if job.is_limit_order:
+        body["limit_usd_per_hour"] = _rate(job.target_microusd)
+    else:
+        body["target_usd_per_hour"] = _rate(job.target_microusd)
+        body["max_usd_per_hour"] = _rate(job.max_microusd)
+    return body
 
 
 def _estimate_json(session: Session, project: Project, shape) -> dict:

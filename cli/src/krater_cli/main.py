@@ -35,7 +35,7 @@ from decimal import Decimal, InvalidOperation
 
 import httpx
 
-from krater_cli import __version__, auth, follow, resolve, store
+from krater_cli import __version__, auth, follow, jobfile, resolve, store
 from krater_cli.api import Krater, KraterError
 from krater_cli.resolve import ResolveError, short
 
@@ -52,6 +52,16 @@ INTERRUPTED = 130
 
 #: Ganymede's Krater. Staging and local copies pass --url or set $KRATER_URL.
 DEFAULT_URL = "https://krater.patchworklabs.org"
+#: `krater submit`'s defaults, applied after a job file: an option's argparse default is None, so a file's value
+#: isn't mistaken for one the member typed.
+SUBMIT_DEFAULTS = {
+    "gpus": 1,
+    "disk": 32,
+    "max_wait": 12 * 60,
+    "on_max_wait": "keep_waiting",
+    "max_runtime": 8 * 60,
+    "count": 1,
+}
 
 
 def _duration(text: str) -> int:
@@ -111,16 +121,22 @@ def _parser() -> argparse.ArgumentParser:
     jobs = commands.add_parser("jobs", help="a project's jobs and boxes, newest first")
     jobs.add_argument("project", help="its id, the first characters of it, or part of its title")
 
-    submit = commands.add_parser("submit", help="queue a job or a box")
-    submit.add_argument("project", help="its id, the first characters of it, or part of its title")
-    submit.add_argument("--name", required=True)
-    submit.add_argument("--image", required=True, help="your container image; it needs a POSIX sh")
+    submit = commands.add_parser("submit", help="queue a job or a box (or a sweep of jobs)")
+    submit.set_defaults(submit_parser=submit)
+    submit.add_argument(
+        "project", nargs="?", help="its id, the first characters of it, or part of its title (or `project` in -f)"
+    )
+    submit.add_argument(
+        "-f", "--file", metavar="JOB.TOML", help="read the options from a TOML file; options given here win"
+    )
+    submit.add_argument("--name", help="required, here or in the file")
+    submit.add_argument("--image", help="your container image; it needs a POSIX sh (required)")
     submit.add_argument("--command", dest="job_command", help="what the job runs (not for a box)")
     submit.add_argument("--box", action="store_true", help="an interactive SSH box instead of a job")
     submit.add_argument("--gpu", action="append", default=[], help="a GPU model you accept (repeatable)")
     submit.add_argument("--min-vram", type=int, help="or: any GPU with at least this many GB")
-    submit.add_argument("--gpus", type=int, default=1)
-    submit.add_argument("--disk", type=int, default=32, help="GB")
+    submit.add_argument("--gpus", type=int, help="GPUs on the machine (default 1)")
+    submit.add_argument("--disk", type=int, help="GB (default 32)")
     # Not `required=True`: without a price Krater shows what an hour costs now, which is what a member needs to pick.
     submit.add_argument(
         "--limit",
@@ -136,14 +152,14 @@ def _parser() -> argparse.ArgumentParser:
         metavar="DURATION",
         help="cancel it if it hasn't started within this long (90m, 12h, 2d)",
     )
-    submit.add_argument("--max-wait", type=int, default=12 * 60, help="minutes to wait for the target price")
-    submit.add_argument("--on-max-wait", choices=ESCALATIONS, default="keep_waiting")
+    submit.add_argument("--max-wait", type=int, help="minutes to wait for the target price (default 720)")
+    submit.add_argument("--on-max-wait", choices=ESCALATIONS, help="then what (default keep_waiting)")
     submit.add_argument(
         "--on-outbid",
         choices=OUTBID,
         help="when outbid for a while: move to another machine, or hold this one (default: hold with --limit)",
     )
-    submit.add_argument("--max-runtime", type=int, default=8 * 60, help="minutes")
+    submit.add_argument("--max-runtime", type=int, help="minutes (default 480)")
     submit.add_argument(
         "--data-in", type=int, help="GB the job moves into its machine (image, datasets); Vast bills it per GB"
     )
@@ -156,8 +172,21 @@ def _parser() -> argparse.ArgumentParser:
     submit.add_argument(
         "--estimate", action="store_true", help="only say what it may cost and what this shape costs now; queue nothing"
     )
+    submit.add_argument("--count", type=int, help="queue this many copies, each with $KRATER_SWEEP_INDEX (0, 1, ...)")
+    submit.add_argument(
+        "--sweep",
+        action="append",
+        default=[],
+        metavar="NAME=V1,V2",
+        help="one job per value, with $NAME set in its command (repeatable: every combination)",
+    )
 
     job_help = "its id, the first characters of it, or its name"
+    rerun = commands.add_parser("rerun", help="queue a job again with the same settings")
+    rerun.add_argument("job", help=job_help)
+    rerun.add_argument("--name", help="a new name (default: the same)")
+    rerun.add_argument("--confirm-transfer-cost", action="store_true", help="don't ask about a costly transfer")
+    rerun.add_argument("--estimate", action="store_true", help="only say what it may cost; queue nothing")
     show = commands.add_parser("show", help="a job's state, machine and recent events")
     show.add_argument("job", help=job_help)
     logs = commands.add_parser("logs", help="what a job's command printed (the end of it)")
@@ -328,6 +357,81 @@ def _explain_prices(krater: Krater, args: argparse.Namespace, say: Callable[[str
     )
 
 
+def _queue(
+    krater: Krater,
+    path: str,
+    runs: list[tuple[dict, dict]],
+    args: argparse.Namespace,
+    *,
+    say: Callable[[str], None],
+    prompt: Callable[[str], str],
+    out: Callable[[object, Callable[[], None]], None],
+) -> int:
+    """Queue each job (one, or a sweep's), asking once if Krater says the data transfer could cost a lot. If Krater
+    refuses one part-way through a sweep, says which were queued before raising."""
+    if args.estimate:
+        estimate = krater.post(path + "/estimate", runs[0][0])
+        if len(runs) == 1:
+            out(estimate, lambda: say(estimate["summary"]))
+        else:
+            each = estimate.get("total_up_to_cents", estimate.get("up_to_cents", 0))
+            out(
+                {**estimate, "jobs": len(runs)},
+                lambda: say(
+                    f"{len(runs)} jobs. Each: {estimate['summary']} All of them: up to ${each * len(runs) / 100:,.2f}."
+                ),
+            )
+        return 0
+    confirm = bool(args.confirm_transfer_cost)
+    queued: list[tuple[dict, dict]] = []
+    for body, variables in runs:
+        try:
+            job = krater.post(path, {**body, "confirm_transfer_cost": True} if confirm else body)
+        except KraterError as exc:
+            if exc.confirm != "confirm_transfer_cost" or confirm:
+                if queued:
+                    say(f"Queued {len(queued)} of {len(runs)} jobs before Krater refused {body['name']}:")
+                    _say_queued(queued, say)
+                raise
+            say(str(exc) + (f" (each of the {len(runs)} jobs)" if len(runs) > 1 else ""))
+            try:
+                answer = prompt("Queue it anyway? [y/N] " if len(runs) == 1 else "Queue them anyway? [y/N] ")
+            except EOFError:
+                answer = ""
+            if answer.strip().lower() not in ("y", "yes"):
+                say("Not queued. --confirm-transfer-cost queues it without asking.")
+                return 1
+            confirm = True
+            job = krater.post(path, {**body, "confirm_transfer_cost": True})
+        queued.append((job, variables))
+
+    if len(queued) == 1:
+        job = queued[0][0]
+
+        def one() -> None:
+            say(f"Queued {job['kind']} {job['id']}: {job['state_reason'] or job['state']}")
+            if job.get("estimate"):
+                say(job["estimate"]["summary"])
+
+        out(job, one)
+    else:
+
+        def many() -> None:
+            say(f"Queued {len(queued)} jobs:")
+            _say_queued(queued, say)
+            if queued[0][0].get("estimate"):
+                say("Each: " + queued[0][0]["estimate"]["summary"])
+
+        out({"jobs": [job for job, _ in queued]}, many)
+    return 0
+
+
+def _say_queued(queued: list[tuple[dict, dict]], say: Callable[[str], None]) -> None:
+    for job, variables in queued:
+        shown = " ".join(f"{k}={v}" for k, v in variables.items() if k != jobfile.INDEX_VAR)
+        say(f"  {short(job['id'])}  {job.get('name', '')}  {shown}".rstrip())
+
+
 def _job_price(job: dict, *, long: bool = False) -> str:
     """A job's price rule: `limit $0.0800` for a limit order, else `$0.0700/$0.1000` (target/max)."""
     if job.get("limit_order"):
@@ -419,6 +523,22 @@ def run(
         ]
         out(data, lambda: _table(rows, say) if data["jobs"] else say("No jobs yet."))
     elif args.command == "submit":
+        try:
+            sweep_table = jobfile.apply(jobfile.load(args.file), args, args.submit_parser) if args.file else {}
+        except jobfile.JobFileError as exc:
+            say(str(exc))
+            return 2
+        for dest, default in SUBMIT_DEFAULTS.items():
+            if getattr(args, dest) is None:
+                setattr(args, dest, default)
+        missing = [
+            option
+            for option, dest in (("a project", "project"), ("--name", "name"), ("--image", "image"))
+            if not getattr(args, dest)
+        ]
+        if missing:
+            say(f"Give {', '.join(missing)}, here or in a job file (-f).")
+            return 2
         if args.limit is not None and (args.target is not None or args.max is not None):
             say("Give --limit, or --target with --max, not both.")
             return 2
@@ -456,34 +576,22 @@ def run(
             body["data_in_gb"] = args.data_in
         if args.data_out is not None:
             body["data_out_gb"] = args.data_out
-        if args.confirm_transfer_cost:
-            body["confirm_transfer_cost"] = True
-        path = f"/projects/{resolve.resolve_project(krater, args.project)}/jobs"
-        if args.estimate:
-            estimate = krater.post(path + "/estimate", body)
-            out(estimate, lambda: say(estimate["summary"]))
-            return 0
         try:
-            job = krater.post(path, body)
-        except KraterError as exc:
-            if exc.confirm != "confirm_transfer_cost":
-                raise
+            runs = jobfile.expand(body, jobfile.sweep_values(args.sweep, sweep_table), args.count)
+        except jobfile.JobFileError as exc:
             say(str(exc))
-            try:
-                answer = prompt("Queue it anyway? [y/N] ")
-            except EOFError:
-                answer = ""
-            if answer.strip().lower() not in ("y", "yes"):
-                say("Not queued. --confirm-transfer-cost queues it without asking.")
-                return 1
-            job = krater.post(path, {**body, "confirm_transfer_cost": True})
-
-        def queued() -> None:
-            say(f"Queued {job['kind']} {job['id']}: {job['state_reason'] or job['state']}")
-            if job.get("estimate"):
-                say(job["estimate"]["summary"])
-
-        out(job, queued)
+            return 2
+        path = f"/projects/{resolve.resolve_project(krater, args.project)}/jobs"
+        return _queue(krater, path, runs, args, say=say, prompt=prompt, out=out)
+    elif args.command == "rerun":
+        source = krater.get(f"/jobs/{resolve.resolve_job(krater, args.job)}")
+        if not source.get("spec"):
+            say("This Krater doesn't send a job's settings yet, so it can't be run again from here.")
+            return 1
+        body = {**source["spec"], **({"name": args.name} if args.name else {})}
+        return _queue(
+            krater, f"/projects/{source['project_id']}/jobs", [(body, {})], args, say=say, prompt=prompt, out=out
+        )
     elif args.command == "show":
         job = krater.get(f"/jobs/{resolve.resolve_job(krater, args.job)}")
 

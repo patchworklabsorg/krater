@@ -16,6 +16,12 @@
   </div>
 </div>
 
+{% if source %}
+  <div class="notice" role="status">
+    <p>Filled in from <a href="/projects/{{ project.id }}/compute/{{ source.id }}">{{ source.name }}</a>. Change anything you like, then queue it.</p>
+  </div>
+{% endif %}
+
 {% if verification_pending %}
   <div class="guardian-banner" role="status">
     <p><strong>This project's compute is held until every team member is verified in Weave.</strong> Waiting on:</p>

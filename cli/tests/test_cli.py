@@ -177,7 +177,14 @@ class Fake:
                         "confirm": "confirm_transfer_cost",
                     },
                 )
-            job = {"id": JOB, "kind": body["kind"], "state": "queued", "state_reason": "Queued.", "body": body}
+            job = {
+                "id": JOB,
+                "name": body["name"],
+                "kind": body["kind"],
+                "state": "queued",
+                "state_reason": "Queued.",
+                "body": body,
+            }
             self.jobs.append(job)
             return httpx.Response(201, json=job)
         acted = re.fullmatch(r"/jobs/([0-9a-f-]{36})/(cancel|stop|resume|move)", path)
@@ -1579,3 +1586,186 @@ def test_submit_says_what_the_job_may_cost(http, fake, monkeypatch) -> None:
     run(SUBMIT_4090, http=http, say=said.append)
 
     assert said[-2:] == [f"Queued job {JOB}: Queued.", "Up to $1."]
+
+
+# -- Job files, sweeps and rerun ------------------------------------------------------------------------------
+
+
+def _job_file(tmp_path, text: str) -> str:
+    path = tmp_path / "job.toml"
+    path.write_text(text, encoding="utf-8")
+    return str(path)
+
+
+JOB_TOML = f"""
+project = "{PROJECT}"
+name = "train"
+image = "ghcr.io/me/train:v3"
+command = "python train.py"
+gpu = ["RTX 4090", "RTX 3090"]
+limit = 0.4
+max-runtime = 600
+disk = 64
+"""
+
+
+def test_a_job_file_gives_the_options(http, fake, tmp_path) -> None:
+    _login(http, [])
+    assert run(["submit", "-f", _job_file(tmp_path, JOB_TOML)], http=http, say=lambda _: None) == 0
+    body = fake.jobs[0]["body"]
+    assert body["name"] == "train" and body["gpu_names"] == ["RTX 4090", "RTX 3090"]
+    assert body["limit_usd_per_hour"] == "0.4" and body["max_runtime_minutes"] == 600 and body["disk_gb"] == 64
+    assert body["num_gpus"] == 1 and body["max_wait_minutes"] == 720  # defaults still apply
+
+
+def test_the_command_line_wins_over_the_file(http, fake, tmp_path) -> None:
+    _login(http, [])
+    path = _job_file(tmp_path, JOB_TOML)
+    run(["submit", "-f", path, "--max-runtime", "60", "--gpu", "H100", "--name", "short"], http=http, say=print)
+    body = fake.jobs[0]["body"]
+    assert body["max_runtime_minutes"] == 60 and body["gpu_names"] == ["H100"] and body["name"] == "short"
+    assert body["disk_gb"] == 64
+
+
+def test_a_job_file_without_a_name_says_so(http, fake, tmp_path) -> None:
+    _login(http, [])
+    said: list[str] = []
+    path = _job_file(tmp_path, f'project = "{PROJECT}"\nimage = "x"\nlimit = 0.4\n')
+    assert run(["submit", "-f", path], http=http, say=said.append) == 2
+    assert said == ["Give --name, here or in a job file (-f)."]
+    assert fake.jobs == []
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        ('name = "a"\nmax-runtim = 5\n', "The job file has 'max-runtim', which isn't an option of krater submit."),
+        ('name = "a"\nmax-runtime = "long"\n', "max-runtime: must be a whole number."),
+        ('name = "a"\non-demand = "yes"\n', "on-demand must be true or false."),
+        (
+            'name = "a"\non-max-wait = "panic"\n',
+            "on-max-wait must be one of: keep_waiting, raise_bid, on_demand, cancel.",
+        ),
+        ("name = [", None),
+    ],
+)
+def test_a_bad_job_file_says_what_is_wrong(http, fake, tmp_path, text, message) -> None:
+    _login(http, [])
+    said: list[str] = []
+    assert run(["submit", "-f", _job_file(tmp_path, text)], http=http, say=said.append) == 2
+    if message is not None:
+        assert said == [message]
+    else:
+        assert "isn't valid TOML" in said[0]
+
+
+def test_a_sweep_queues_one_job_per_combination(http, fake, tmp_path) -> None:
+    _login(http, [])
+    said: list[str] = []
+    path = _job_file(tmp_path, JOB_TOML + "\n[sweep]\nlr = [0.1, 0.01]\n")
+
+    code = run(["submit", "-f", path, "--sweep", "seed=1,2"], http=http, say=said.append)
+
+    assert code == 0
+    bodies = [job["body"] for job in fake.jobs]
+    assert [b["name"] for b in bodies] == ["train-0", "train-1", "train-2", "train-3"]
+    assert bodies[0]["command"] == "export KRATER_SWEEP_INDEX=0 lr=0.1 seed=1; python train.py"
+    assert bodies[3]["command"] == "export KRATER_SWEEP_INDEX=3 lr=0.01 seed=2; python train.py"
+    assert said[0] == "Queued 4 jobs:" and said[1].endswith("train-0  lr=0.1 seed=1")
+
+
+def test_count_queues_copies_with_an_index_and_quotes_values(http, fake) -> None:
+    _login(http, [])
+    run([*SUBMIT_4090, "--count", "2", "--sweep", "msg=a b"], http=http, say=lambda _: None)
+    commands = [job["body"]["command"] for job in fake.jobs]
+    assert commands == [
+        "export KRATER_SWEEP_INDEX=0 msg='a b'; python train.py",
+        "export KRATER_SWEEP_INDEX=1 msg='a b'; python train.py",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("extra", "message"),
+    [
+        (["--count", "101"], "That sweep is 101 jobs; one submit queues at most 100."),
+        (
+            ["--sweep", "PATH=/x"],
+            "Can't sweep 'PATH': use a name of letters, digits and _ that isn't PATH, HOME or KRATER_...",
+        ),
+        (["--sweep", "lr"], "--sweep lr: give it as name=value1,value2."),
+        (["--count", "0"], "--count must be 1 or more."),
+    ],
+)
+def test_a_bad_sweep_queues_nothing(http, fake, extra, message) -> None:
+    _login(http, [])
+    said: list[str] = []
+    assert run([*SUBMIT_4090, *extra], http=http, say=said.append) == 2
+    assert said == [message] and fake.jobs == []
+
+
+def test_a_box_cant_be_swept(http, fake) -> None:
+    _login(http, [])
+    said: list[str] = []
+    argv = ["submit", PROJECT, "--name", "nb", "--image", "x", "--box", "--limit", "0.3", "--count", "2"]
+    assert run(argv, http=http, say=said.append) == 2
+    assert said == ["A sweep is for jobs, not boxes."]
+
+
+def test_a_sweep_estimate_says_the_total(http, fake) -> None:
+    _login(http, [])
+    said: list[str] = []
+    assert run([*SUBMIT_4090, "--count", "3", "--estimate"], http=http, say=said.append) == 0
+    assert said == ["3 jobs. Each: Up to $4.00 if it runs its full 8 hours. All of them: up to $12.00."]
+    assert fake.jobs == []
+
+
+def test_a_sweep_asks_about_the_transfer_once(http, fake) -> None:
+    _login(http, [])
+    fake.transfer_confirm = True
+    asked: list[str] = []
+
+    code = run([*SUBMIT_4090, "--count", "3"], http=http, say=lambda _: None, prompt=lambda q: asked.append(q) or "y")
+
+    assert code == 0 and asked == ["Queue them anyway? [y/N] "]
+    assert len([job for job in fake.jobs if "body" in job]) == 3
+
+
+def test_a_sweep_refused_part_way_says_what_was_queued(http, fake, monkeypatch) -> None:
+    _login(http, [])
+    said: list[str] = []
+    original = fake.api
+    posts = []
+
+    def refuse_the_second(request, path):
+        if path == f"/projects/{PROJECT}/jobs" and request.method == "POST":
+            posts.append(1)
+            if len(posts) == 2:
+                return httpx.Response(409, json={"error": "The budget is spent."})
+        return original(request, path)
+
+    monkeypatch.setattr(fake, "api", refuse_the_second)
+    with pytest.raises(KraterError, match="The budget is spent."):
+        run([*SUBMIT_4090, "--count", "3"], http=http, say=said.append)
+    assert said[0] == "Queued 1 of 3 jobs before Krater refused train-1:"
+    assert len(posts) == 2
+
+
+def test_rerun_queues_the_same_settings(http, fake) -> None:
+    _login(http, [])
+    spec = {"name": "train", "image": "x", "command": "go", "kind": "job", "limit_usd_per_hour": "0.4000"}
+    fake.details[JOB_C] = {**job_row(JOB_C, "train"), "spec": spec}
+    fake.project_jobs[PROJECT].append(job_row(JOB_C, "train"))
+    said: list[str] = []
+
+    assert run(["rerun", JOB_C, "--name", "train-again"], http=http, say=said.append) == 0
+
+    assert fake.jobs[0]["body"] == {**spec, "name": "train-again"}
+    assert said == [f"Queued job {JOB}: Queued."]
+
+
+def test_rerun_without_settings_from_an_older_krater_says_so(http, fake) -> None:
+    _login(http, [])
+    fake.details[JOB_C] = job_row(JOB_C, "train")
+    said: list[str] = []
+    assert run(["rerun", JOB_C], http=http, say=said.append) == 1
+    assert said == ["This Krater doesn't send a job's settings yet, so it can't be run again from here."]
