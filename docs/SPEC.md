@@ -261,6 +261,13 @@ is asked again on every submission, and when it was ticked is kept on the revisi
    or not the team is verified yet. Its `BudgetEntry(initial_approval)` is written then if Weave clears every team
    member, and is held until it does otherwise (see "Verification before funding"). A reviewer approving on the web
    can instead approve it as *awaiting funding* or *awaiting 3rd party review* (see "Funding holds").
+   **Granting less.** An approver on the web (the reviewer's Approve form, or the admin override) may grant less than
+   the proposal asks for, or approve an amendment that adds budget for a lower new total (still above today's
+   ceiling). Granting less needs a reason, which the team sees on the project page and in the Slack decision. The
+   amount is kept on the review (`reviews.budget_cents`); when the policy is met the approval grants the lowest amount
+   any approval chose (the admin override's own amount wins), and keeps it on the revision
+   (`project_revisions.budget_approved_cents`, null for the full request). Slack's Approve button grants the full
+   amount, and its review message says so.
 5. **Reject.** A reason is required. The project moves to `changes_requested`, and the submitter edits and resubmits
    (step 2, same project, new revision).
 6. **Amend.** An `approved` project can have its scope or budget amended. This creates an `amendment` revision reviewed

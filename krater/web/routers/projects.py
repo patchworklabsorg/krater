@@ -110,6 +110,15 @@ _SLACK_PROMOTION_REQUIRED_MESSAGE = (
 def _decision_message(db_session: Session, project: Project, revision: ProjectRevision, default: str) -> str:
     """The flash after a decision: says so when this approval's budget is held, for a funding hold or for the
     team's verification."""
+    if (
+        revision.granted_less
+        and revision.outcome is RevisionOutcome.APPROVED
+        and not grants.pending(db_session, project)
+    ):
+        return (
+            f"Approved for {format_cents(revision.budget_approved_cents)} of the "
+            f"{format_cents(revision.budget_requested_cents)} asked for."
+        )
     held = grants.pending(db_session, project)
     if held is not None and held.revision_id == revision.id and project.funding_hold is not None:
         return (
@@ -643,6 +652,14 @@ def _build_detail_context(
         # A proposal or amendment approval may be held for funding (`krater.services.funding_holds`).
         "can_hold_funding": current_is_pending and current.kind is not RevisionKind.COMPLETION,
         "funding_hold_choices": [(hold.value, label) for hold, label in funding_holds.LABELS.items()],
+        # An approver may grant less than a proposal asks for, or approve a lower new total for an amendment that adds
+        # budget (`project_service.record_review`). The field starts at the full request.
+        "can_grant_less": current_is_pending
+        and (
+            current.kind is RevisionKind.PROPOSAL
+            or (current.kind is RevisionKind.AMENDMENT and (amendment_adds_cents or 0) > 0)
+        ),
+        "grant_input": cents_to_input(current.budget_requested_cents) if current is not None else "",
         # "OSPool" when an OSPool grant funds it, else its funding hold, else "Awaiting verification" while its budget
         # is held or Weave hasn't cleared the team.
         "approval_hold": funding_holds.approval_label(
@@ -979,6 +996,17 @@ def remove_team_member(
 # --------------------------------------------------------------------------------------------------
 
 
+def _grant_amount(value: str) -> int | None:
+    """The approve forms' "Amount to grant" in cents: blank is the full request. A bad amount is a `ValidationFailed`
+    on the field, like the service's own checks."""
+    if not value.strip():
+        return None
+    try:
+        return parse_dollars(value)
+    except InvalidDollarAmount as exc:
+        raise ValidationFailed({"budget_cents": str(exc)}) from exc
+
+
 @router.post("/projects/{project_id}/review", dependencies=[Depends(verify_csrf_token)])
 def record_review(
     request: Request,
@@ -989,6 +1017,7 @@ def record_review(
     decision: Annotated[str, Form()],
     reason: Annotated[str, Form()] = "",
     funding_hold: Annotated[str, Form()] = "",
+    budget: Annotated[str, Form()] = "",
 ):
     project = _get_visible_project(db_session, actor, project_id)
     try:
@@ -1001,6 +1030,8 @@ def record_review(
         return templates.TemplateResponse(request, "projects/detail.html", context, status_code=422)
 
     revision = project.current_revision
+    # The approve and reject forms post here separately; the error goes back to the form it came from.
+    error_form = "review_approve" if decision_enum is ReviewDecision.APPROVE else "review"
     try:
         hold = funding_holds.parse(funding_hold)
         project_service.record_review(
@@ -1012,11 +1043,18 @@ def record_review(
             source=ReviewSource.WEB,
             weave_client=weave_client,
             funding_hold=hold,
+            budget_cents=_grant_amount(budget) if decision_enum is ReviewDecision.APPROVE else None,
         )
     except ValidationFailed as exc:
         db_session.rollback()
         context = _build_detail_context(
-            db_session, weave_client, project, actor, errors=exc.errors, error_form="review", posted={"reason": reason}
+            db_session,
+            weave_client,
+            project,
+            actor,
+            errors=exc.errors,
+            error_form=error_form,
+            posted={"reason": reason, "budget": budget},
         )
         return templates.TemplateResponse(request, "projects/detail.html", context, status_code=422)
     except InvalidState as exc:
@@ -1049,6 +1087,7 @@ def admin_decide(
     decision: Annotated[str, Form()],
     reason: Annotated[str, Form()] = "",
     funding_hold: Annotated[str, Form()] = "",
+    budget: Annotated[str, Form()] = "",
 ):
     project = _get_visible_project(db_session, actor, project_id)
     try:
@@ -1078,6 +1117,8 @@ def admin_decide(
             reason=reason,
             weave_client=weave_client,
             funding_hold=hold,
+            # Like the hold, an amount sent with "Admin reject" means nothing: the field sits on the shared form.
+            budget_cents=_grant_amount(budget) if decision_enum is ReviewDecision.APPROVE else None,
         )
     except ValidationFailed as exc:
         db_session.rollback()
@@ -1088,7 +1129,7 @@ def admin_decide(
             actor,
             errors=exc.errors,
             error_form="admin_decide",
-            posted={"reason": reason},
+            posted={"reason": reason, "budget": budget},
         )
         return templates.TemplateResponse(request, "projects/detail.html", context, status_code=422)
     except InvalidState as exc:
@@ -1096,7 +1137,15 @@ def admin_decide(
 
     revision_id = revision.id
     action = "admin_approve" if decision_enum is ReviewDecision.APPROVE else "admin_reject"
-    extra = f"Approved as {funding_holds.LABELS[hold].lower()}: its budget is held." if hold else None
+    notes = []
+    if revision.granted_less:
+        notes.append(
+            f"Approved for {format_cents(revision.budget_approved_cents)} of the "
+            f"{format_cents(revision.budget_requested_cents)} asked for."
+        )
+    if hold:
+        notes.append(f"Approved as {funding_holds.LABELS[hold].lower()}: its budget is held.")
+    extra = " ".join(notes) or None
 
     def _notify() -> None:
         slack_notify_decision.defer(revision_id=str(revision_id))

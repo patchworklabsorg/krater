@@ -165,6 +165,35 @@ def test_notify_decision_updates_the_message_and_drops_the_buttons(
     assert "Approved" in updated["text"]
 
 
+def test_notify_decision_says_when_less_was_granted_and_why(
+    db_session: Session, member: Actor, reviewer: Actor, weave: StubWeaveClient
+) -> None:
+    project = new_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=18_000)
+    project = projects.submit(db_session, member, project=project, criteria_read=True)
+    revision = project.current_revision
+    slack_client = FakeSlackClient()
+    slack_notify.notify_revision_submitted(db_session, slack_client, weave, revision=revision, feed_channel_id=None)
+    posted = slack_client.messages[(revision.slack_message_channel_id, revision.slack_message_ts)]
+    assert "To grant less, approve on" in str(posted["blocks"])
+
+    projects.record_review(
+        db_session,
+        reviewer,
+        revision=revision,
+        decision=ReviewDecision.APPROVE,
+        reason="A smaller first step.",
+        source=ReviewSource.WEB,
+        weave_client=weave,
+        budget_cents=5_000,
+    )
+    db_session.refresh(revision)
+    slack_notify.notify_decision(db_session, slack_client, revision=revision)
+
+    updated = slack_client.messages[(revision.slack_message_channel_id, revision.slack_message_ts)]
+    assert "Approved for $50.00 of the $180.00 asked for." in updated["text"]
+    assert "*Reason:* A smaller first step." in str(updated["blocks"])
+
+
 def test_notify_decision_says_an_approval_is_awaiting_funding(
     db_session: Session, member: Actor, reviewer: Actor, weave: StubWeaveClient
 ) -> None:
