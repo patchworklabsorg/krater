@@ -122,6 +122,61 @@ def test_an_admin_override_grants_less_and_records_it(db_session, member, admin,
     assert event.reason == REASON
 
 
+def test_an_admin_override_at_the_full_amount_beats_a_reviewers_lower_one(
+    db_session, member, reviewer, admin, weave
+) -> None:
+    db_session.add(ApprovalPolicy(stage=ApprovalStage.PROPOSAL, min_approvals=2))
+    project = _approve(db_session, reviewer, _submitted(db_session, member), weave, amount=5_000, reason=REASON)
+
+    projects.admin_decide(
+        db_session,
+        admin,
+        revision=project.current_revision,
+        decision=ReviewDecision.APPROVE,
+        reason="Board: fund it all.",
+        weave_client=weave,
+        budget_cents=18_000,
+    )
+
+    assert budget.ceiling_cents(db_session, project) == 18_000
+    assert project.approved_revision.budget_approved_cents is None
+
+
+def test_an_admin_override_without_an_amount_keeps_a_reviewers_lower_one(
+    db_session, member, reviewer, admin, weave
+) -> None:
+    db_session.add(ApprovalPolicy(stage=ApprovalStage.PROPOSAL, min_approvals=2))
+    project = _approve(db_session, reviewer, _submitted(db_session, member), weave, amount=5_000, reason=REASON)
+
+    projects.admin_decide(
+        db_session,
+        admin,
+        revision=project.current_revision,
+        decision=ReviewDecision.APPROVE,
+        reason="Board: go ahead.",
+        weave_client=weave,
+    )
+
+    assert budget.ceiling_cents(db_session, project) == 5_000
+
+
+def test_an_amount_from_a_reviewer_who_joined_the_team_no_longer_counts(
+    db_session, member, reviewer, make_actor, weave
+) -> None:
+    db_session.add(ApprovalPolicy(stage=ApprovalStage.PROPOSAL, min_approvals=2))
+    second = make_actor(groups=frozenset({GROUP_MEMBER, "ganymede:reviewer"}), display_name="Second Reviewer")
+    third = make_actor(groups=frozenset({GROUP_MEMBER, "ganymede:reviewer"}), display_name="Third Reviewer")
+    project = _approve(db_session, reviewer, _submitted(db_session, member), weave, amount=1_000, reason=REASON)
+    add_to_team(db_session, project, reviewer)  # their approval, and its amount, stop counting
+
+    project = _approve(db_session, second, project, weave)
+    assert project.status is ProjectStatus.PENDING_REVIEW
+    project = _approve(db_session, third, project, weave)
+
+    assert project.status is ProjectStatus.APPROVED
+    assert budget.ceiling_cents(db_session, project) == 18_000
+
+
 @pytest.mark.parametrize(
     ("amount", "reason", "field"),
     [

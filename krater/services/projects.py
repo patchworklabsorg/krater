@@ -733,6 +733,8 @@ def _granted_cents(session: Session, revision: ProjectRevision, chosen: int | No
             Review.revision_id == revision.id,
             Review.decision == ReviewDecision.APPROVE,
             Review.budget_cents.is_not(None),
+            # As in `approval_policy`: a reviewer who has since joined (or been invited to) the team no longer counts.
+            Review.reviewer_id.not_in(teams.conflict_user_ids(revision.project)),
         )
     )
     return revision.budget_requested_cents if lowest is None else min(lowest, revision.budget_requested_cents)
@@ -945,7 +947,11 @@ def admin_decide(
         raise InvalidState("This revision has already been decided.")
     _require_project_matches_revision_stage(project, revision)
     _check_funding_hold(revision, decision, funding_hold)
-    budget_cents = _check_budget(session, revision, decision, budget_cents, reason)
+    chosen = _check_budget(session, revision, decision, budget_cents, reason)
+    if chosen is None and budget_cents is not None and decision is ReviewDecision.APPROVE:
+        # The admin chose the full request on purpose: it wins over a lower amount a reviewer chose.
+        chosen = revision.budget_requested_cents
+    budget_cents = chosen
 
     if decision is ReviewDecision.REJECT:
         _apply_reject(session, revision)
