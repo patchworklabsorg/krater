@@ -1540,3 +1540,9 @@ def test_confirm_transfer_cost_skips_the_question(http, fake) -> None:
 
     assert code == 0
     assert len(fake.jobs) == 1 and fake.jobs[0]["body"]["confirm_transfer_cost"] is True
+
+
+def test_login_defaults_to_ganymedes_krater(monkeypatch) -> None:
+    monkeypatch.delenv("KRATER_URL", raising=False)
+    assert main._parser().parse_args(["login"]).url == main.DEFAULT_URL
+    assert main._parser().parse_args(["login", "--url", "https://other"]).url == "https://other"

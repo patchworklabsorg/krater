@@ -1,6 +1,6 @@
 """`krater`: Krater Compute from a terminal.
 
-    krater login --url https://krater.example.org
+    krater login                      # Ganymede's Krater; --url https://... for another
     krater projects                              (--all includes finished ones)
     krater submit <project> --name train --image ghcr.io/me/train:v3 --command "python train.py" \\
         --gpu "RTX 4090" --target 0.30 --max 0.45 --max-runtime 240
@@ -50,6 +50,10 @@ TIMED_OUT = 124
 INTERRUPTED = 130
 
 
+#: Ganymede's Krater. Staging and local copies pass --url or set $KRATER_URL.
+DEFAULT_URL = "https://krater.patchworklabs.org"
+
+
 def _duration(text: str) -> int:
     """Minutes from `90m`, `12h`, `2d` or a bare number of minutes."""
     cleaned = text.strip().lower()
@@ -93,7 +97,11 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
 
     login = commands.add_parser("login", help="sign in with Weave")
-    login.add_argument("--url", default=os.environ.get("KRATER_URL"), help="Krater's address (or $KRATER_URL)")
+    login.add_argument(
+        "--url",
+        default=os.environ.get("KRATER_URL") or DEFAULT_URL,
+        help=f"Krater's address (or $KRATER_URL; default {DEFAULT_URL})",
+    )
     login.add_argument("--no-browser", action="store_true", help="don't open a browser; paste the code instead")
     commands.add_parser("logout", help="forget the stored sign-in")
     commands.add_parser("whoami", help="who you're signed in as")

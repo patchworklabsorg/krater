@@ -475,10 +475,10 @@ pip install "git+https://github.com/patchworklabsorg/krater#subdirectory=cli"
 Then sign in:
 
 ```bash
-krater login --url https://krater.patchworklabs.org
+krater login
 ```
 
-Set `KRATER_URL` to skip `--url`. To update later, run the same install command again (with uv, add `--force`).
+It signs in to `https://krater.patchworklabs.org`; for another Krater, add `--url` or set `KRATER_URL`. To update later, run the same install command again (with uv, add `--force`).
 
 `krater login` prints a Weave link (and opens it). Sign in there, and Weave shows a code: paste it into the
 terminal. It works over SSH too. You need to have signed in to Krater in a browser once before.
