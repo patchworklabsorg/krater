@@ -140,7 +140,7 @@ project's Slack channel so reviewers see it.
 | **Reclaim budget** | Take back unspent budget, such as from a stalled project |
 | **Funding hold** | Set, change or clear the project's hold |
 | **Hourly cap** | The most any one machine of the project may cost per hour, or back to the default ($5) |
-| **Withdraw project (admin)** | Close it: unspent budget reclaimed, machines destroyed, channel archived |
+| **Withdraw project (admin)** | Close it: unspent budget reclaimed, machines destroyed, channels archived a week later |
 | **Record an OSPool grant** | See [OSPool grants](ospool-grants.md) |
 
 **Your own project** (you lead it, are on its team or are invited): you can't decide it, add to its budget, raise its

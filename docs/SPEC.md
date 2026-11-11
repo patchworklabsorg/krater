@@ -275,8 +275,8 @@ is asked again on every submission, and when it was ticked is kept on the revisi
    under the same policy. **The project stays `approved` and keeps its current ceiling while the amendment is
    reviewed.** If the amendment is approved, the budget difference is written to the ledger. If it's rejected, nothing
    changes.
-7. **Withdraw.** The submitter or an admin can withdraw a project at any point. The channel is archived, unspent budget
-   is reclaimed, and the workspace is torn down.
+7. **Withdraw.** The submitter or an admin can withdraw a project at any point. Unspent budget is reclaimed and the
+   workspace is torn down; the channels are archived a week later.
 
 Only approvals on the **current** revision count. A new revision marks earlier pending ones as `superseded`.
 
@@ -294,7 +294,9 @@ Members are the team (the lead and everyone who has accepted an invitation; a ne
 join), and all reviewers. When someone gets the `reviewer` role in
 Weave, a periodic job invites them to open project channels. Someone who leaves the team, or is removed from it, is
 removed from the channel (`conversations.kick`), unless they're a reviewer, who belong in every open channel. The
-channel is archived when the project ends up `completed` or `withdrawn`.
+channel is archived **a week after** the project ends up `completed` or `withdrawn` (`finished_at`), for last
+questions and thanks: when it finishes, Krater posts in its channels the date they'll be archived, and the periodic
+job archives them then. Projects that finished before `finished_at` existed are archived at once.
 
 **Per-project reviewers-only channel** (`ganymede-rev-<slug>-<id>`): created with the first review message posted
 after it came in (never for older projects all at once) and reused after that. Members are every current reviewer

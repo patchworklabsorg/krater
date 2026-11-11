@@ -3,10 +3,12 @@ in Krater's users by stored Slack id only, then re-checked against Weave by thei
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 from sqlalchemy.orm import Session
 
 from krater.models import ProjectStatus, ReviewDecision, ReviewSource, RevisionOutcome
-from krater.services import projects, slack_reviews
+from krater.services import projects, slack_notify, slack_reviews
 from krater.services.actor import GROUP_MEMBER, GROUP_REVIEWER, Actor
 from krater.slack.fake import FakeSlackClient
 from krater.weave import StubWeaveClient, WeaveUnavailableError
@@ -134,7 +136,7 @@ def test_reject_records_the_rejection_with_its_reason(
     assert revision.reviews[0].source is ReviewSource.SLACK
 
 
-def test_approve_that_completes_the_project_archives_the_channel(
+def test_approve_that_completes_the_project_archives_the_channel_a_week_later(
     db_session: Session, member: Actor, reviewer: Actor, weave: StubWeaveClient
 ) -> None:
     reviewer.user.slack_user_id = "U_REVIEWER"
@@ -161,6 +163,15 @@ def test_approve_that_completes_the_project_archives_the_channel(
 
     db_session.refresh(project)
     assert project.status is ProjectStatus.COMPLETED
+    assert project.finished_at is not None
+    # Not yet: the channel says when, and stays open for a week.
+    assert project.slack_channel_archived is False
+    notices = [m["text"] for (chan, _ts), m in slack_client.messages.items() if chan == project.slack_channel_id]
+    assert any("Krater archives this channel on" in text for text in notices)
+
+    slack_notify.sync_missed_archives(db_session, slack_client, now=project.finished_at + timedelta(days=6))
+    assert project.slack_channel_archived is False
+    slack_notify.sync_missed_archives(db_session, slack_client, now=project.finished_at + timedelta(days=7))
     assert project.slack_channel_archived is True
     assert slack_client.channels[project.slack_channel_id]["archived"] is True
 

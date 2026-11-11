@@ -62,6 +62,9 @@ _MAX_WRITE_UP_EXCERPT_LENGTH = 400
 MISSED_REVIEW_MESSAGE_GRACE = timedelta(minutes=10)
 #: The oldest submission the reconcile posts a missed review message for.
 MISSED_REVIEW_MESSAGE_WINDOW = timedelta(days=7)
+#: How long a finished (`completed`/`withdrawn`) project's channels stay open, for the last questions and thanks,
+#: before the periodic reconcile archives them.
+ARCHIVE_AFTER = timedelta(days=7)
 
 
 def _slugify(text: str) -> str:
@@ -495,12 +498,52 @@ def post_admin_override(
     slack_client.post_message(project.slack_channel_id, blocks=blocks, text="\n".join(fallback_lines))
 
 
-def archive_project_channel(session: Session, slack_client: SlackClient, *, project: Project) -> None:
-    """Archive `project`'s channels (the team's and the reviewers') once it's `completed`/`withdrawn`. Idempotent: a
-    no-op for a project that isn't actually terminal, and for a channel it doesn't have or that's already archived,
-    so this is safe to defer unconditionally after every decision/withdrawal, and to re-run from the periodic
-    reconcile."""
+def _archive_on(project: Project) -> datetime | None:
+    """When `project`'s channels are due to be archived: `ARCHIVE_AFTER` after it finished. `None` for a project
+    finished before Krater recorded when, which is due now."""
+    return project.finished_at + ARCHIVE_AFTER if project.finished_at is not None else None
+
+
+def announce_archive(session: Session, slack_client: SlackClient, *, project: Project) -> None:
+    """Tell `project`'s open channels, just after it finished, when they'll be archived. A no-op unless it's
+    `completed`/`withdrawn` with a date to give. Called once, from the job its finish defers."""
     if project.status not in (ProjectStatus.COMPLETED, ProjectStatus.WITHDRAWN):
+        return
+    due = _archive_on(project)
+    if due is None:
+        return
+    finished = "completed" if project.status is ProjectStatus.COMPLETED else "withdrawn"
+    when = f"{due:%B} {due.day}, {due:%Y}"
+    text = (
+        f"This project is {finished}. Krater archives this channel on {when}: it stays readable and searchable, "
+        "but nobody can post in it after that."
+    )
+    blocks = [{"type": "section", "text": {"type": "mrkdwn", "text": text}}]
+    channels = [
+        (project.slack_channel_id, project.slack_channel_archived),
+        (project.slack_review_channel_id, project.slack_review_channel_archived),
+    ]
+    for channel_id, archived in channels:
+        if channel_id is None or archived:
+            continue
+        try:
+            slack_client.post_message(channel_id, blocks=blocks, text=text)
+        except SlackError:
+            # Only a heads-up: the archive itself still happens on time.
+            logger.exception("krater.slack archive notice for project %s failed; not retried", project.id)
+
+
+def archive_project_channel(
+    session: Session, slack_client: SlackClient, *, project: Project, now: datetime | None = None
+) -> None:
+    """Archive `project`'s channels (the team's and the reviewers') once it has been `completed`/`withdrawn` for
+    `ARCHIVE_AFTER`. Idempotent: a no-op for a project that isn't finished or isn't due yet, and for a channel it
+    doesn't have or that's already archived, so it's safe to re-run from the periodic reconcile, which is what
+    archives them on time."""
+    if project.status not in (ProjectStatus.COMPLETED, ProjectStatus.WITHDRAWN):
+        return
+    due = _archive_on(project)
+    if due is not None and (now or datetime.now(UTC)) < due:
         return
     if project.slack_channel_id is not None and not project.slack_channel_archived:
         slack_client.archive_channel(project.slack_channel_id)
@@ -745,19 +788,20 @@ def sync_box_notifications(session: Session, slack_client: SlackClient) -> None:
         session.flush()
 
 
-def sync_missed_archives(session: Session, slack_client: SlackClient) -> None:
-    """Archive the channel of any `completed`/`withdrawn` project whose immediate archive (deferred from
-    the web request/Slack action that finished it) never ran -- `docs/SPEC.md`: "archive channels of
-    finished projects that were missed"."""
+def sync_missed_archives(session: Session, slack_client: SlackClient, *, now: datetime | None = None) -> None:
+    """Archive the channels of every project that has been `completed`/`withdrawn` for `ARCHIVE_AFTER` (or finished
+    before Krater recorded when) and still has one open. This is what archives them, a week after the finish."""
+    now = now or datetime.now(UTC)
     stmt = sa.select(Project).where(
         Project.status.in_((ProjectStatus.COMPLETED, ProjectStatus.WITHDRAWN)),
+        sa.or_(Project.finished_at.is_(None), Project.finished_at <= now - ARCHIVE_AFTER),
         sa.or_(
             sa.and_(Project.slack_channel_id.is_not(None), Project.slack_channel_archived.is_(False)),
             sa.and_(Project.slack_review_channel_id.is_not(None), Project.slack_review_channel_archived.is_(False)),
         ),
     )
     for project in session.scalars(stmt):
-        archive_project_channel(session, slack_client, project=project)
+        archive_project_channel(session, slack_client, project=project, now=now)
 
 
 def sync_missed_review_messages(
@@ -852,6 +896,7 @@ __all__ = [
     "sync_review_channel",
     "AUDIT_BUDGET_TEARDOWN",
     "AUDIT_BUDGET_WARNING",
+    "announce_archive",
     "archive_project_channel",
     "channel_name_for",
     "ensure_channel",

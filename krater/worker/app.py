@@ -508,15 +508,17 @@ def slack_remove_from_channel(project_id: str, user_id: str) -> None:
 
 @app.task(name="slack_archive_channel")
 def slack_archive_channel(project_id: str) -> None:
-    """Archive a project's channel. A no-op unless the project is actually `completed`/`withdrawn` --
-    see `krater.services.slack_notify.archive_project_channel` -- so it's safe to defer unconditionally
-    after every decision/withdrawal, whether or not it actually finished the project."""
+    """Tell a just-finished project's channels when they'll be archived (`ARCHIVE_AFTER` later; the periodic
+    reconcile archives them then), and archive any that are already due. A no-op unless the project is actually
+    `completed`/`withdrawn`, so it's safe to defer unconditionally after every decision/withdrawal."""
     session = get_sessionmaker()()
     try:
         project = session.get(Project, uuid.UUID(project_id))
         if project is None:
             return
-        slack_notify.archive_project_channel(session, get_slack_client(), project=project)
+        slack_client = get_slack_client()
+        slack_notify.announce_archive(session, slack_client, project=project)
+        slack_notify.archive_project_channel(session, slack_client, project=project)
         session.commit()
     except SlackError as exc:
         logger.exception("krater.slack_archive_channel failed")
