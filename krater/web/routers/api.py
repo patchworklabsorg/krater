@@ -27,6 +27,7 @@ from krater.db import get_session
 from krater.models import ComputeEscalation, ComputeEvent, ComputeJob, ComputeJobKind, ComputeOutbid, Project, User
 from krater.services import (
     compute_files,
+    compute_inputs,
     compute_jobs,
     compute_settings,
     job_costs,
@@ -175,6 +176,8 @@ def _job_json(job: ComputeJob, *, detail: bool = False, session: Session | None 
         data["min_gpu_ram_gb"] = job.min_gpu_ram_gb
         data["max_wait_minutes"] = job.max_wait_minutes
         data["on_max_wait"] = job.on_max_wait.value
+        data["inputs"] = list(job.input_names or [])
+        data["inputs_bytes"] = job.inputs_bytes
         # What it was queued with, as a submit body: `krater rerun` posts it again (with a new name, if given).
         data["spec"] = submit_body(job)
         data["machine"] = (
@@ -222,6 +225,7 @@ def submit_body(job: ComputeJob) -> dict[str, Any]:
         "on_outbid": job.on_outbid.value,
         "data_in_gb": job.data_in_gb,
         "data_out_gb": job.data_out_gb,
+        "inputs": list(job.input_names or []),
     }
     if job.is_limit_order:
         body["limit_usd_per_hour"] = _rate(job.target_microusd)
@@ -231,10 +235,14 @@ def submit_body(job: ComputeJob) -> dict[str, Any]:
     return body
 
 
-def _estimate_json(session: Session, project: Project, shape) -> dict:
+def _estimate_json(session: Session, project: Project, shape, *, inputs_bytes: int | None = None) -> dict:
     policy = compute_settings.effective_policy(session, project)
     estimate = job_costs.estimate(
-        session, shape, transfer_cap_microusd_per_gb=policy.transfer_cap_microusd_per_gb, now=datetime.now(UTC)
+        session,
+        shape,
+        transfer_cap_microusd_per_gb=policy.transfer_cap_microusd_per_gb,
+        now=datetime.now(UTC),
+        inputs_bytes=inputs_bytes,
     )
     return {**estimate.as_json(), "summary": estimate.summary()}
 
@@ -247,6 +255,9 @@ def _spec(body: dict) -> JobSpec:
     command = body.get("command")
     if command is not None and not isinstance(command, str):
         raise ValidationFailed({"command": "Give the command as one string."})
+    inputs = body.get("inputs") or []
+    if not isinstance(inputs, list) or not all(isinstance(n, str) and len(n) <= 512 for n in inputs):
+        raise ValidationFailed({"inputs": "Give a list of input names."})
     if "limit_usd_per_hour" in body:
         # A limit order: one price it starts at or under and never pays more than, and it holds its machine
         # when outbid rather than starting over elsewhere.
@@ -275,6 +286,7 @@ def _spec(body: dict) -> JobSpec:
         on_outbid=_choice(body, "on_outbid", ComputeOutbid, outbid_default),
         data_in_gb=_int(body, "data_in_gb", None),
         data_out_gb=_int(body, "data_out_gb", None),
+        inputs=tuple(compute_inputs.check_names(inputs)),
     )
 
 
@@ -390,11 +402,15 @@ async def submit(
             now=datetime.now(UTC),
             weave_client=weave_client,
             confirm_transfer_cost=body.get("confirm_transfer_cost") is True,
+            store=get_compute_store() if spec.inputs else None,
         )
     except ConfirmationRequired as exc:
         db_session.rollback()
         # Sent again with `"confirm_transfer_cost": true`, the job is queued.
         return _error(409, str(exc), confirm="confirm_transfer_cost")
+    except StorageError:
+        db_session.rollback()
+        return _error(503, "Krater's storage didn't answer; try again in a minute.")
     except ValidationFailed as exc:
         db_session.rollback()
         return _error(422, "Check the job's fields.", fields=exc.errors)
@@ -420,9 +436,94 @@ async def estimate(project_id: uuid.UUID, request: Request, actor: Me, db_sessio
     try:
         spec = _spec(body)
         compute_jobs.validate_spec(spec, cap_cents=hourly_cap_cents(project, get_settings()))
+        inputs_bytes = compute_jobs.inputs_size(get_compute_store() if spec.inputs else None, project, spec)
     except ValidationFailed as exc:
         return _error(422, "Check the job's fields.", fields=exc.errors)
-    return _estimate_json(db_session, project, spec)
+    except StorageError:
+        return _error(503, "Krater's storage didn't answer; try again in a minute.")
+    return _estimate_json(db_session, project, spec, inputs_bytes=inputs_bytes)
+
+
+# -- Inputs: files the team uploads once for jobs to copy in (`compute_inputs`) ------------------------------------
+
+
+@router.get("/projects/{project_id}/inputs")
+def list_inputs(project_id: uuid.UUID, actor: Me, db_session: Db):
+    project = _project(db_session, actor, project_id)
+    try:
+        files = compute_inputs.list_inputs(get_compute_store(), project.id)
+    except StorageError:
+        return _error(503, "Krater's storage didn't answer; try again in a minute.")
+    return {"inputs": [{"name": f.name, "size_bytes": f.size_bytes} for f in files]}
+
+
+@router.post("/projects/{project_id}/inputs/upload")
+async def begin_input_upload(project_id: uuid.UUID, request: Request, actor: Me, db_session: Db):
+    """Where to upload input `name` of `size` bytes: one presigned PUT `url`, or `parts` for a multipart upload
+    finished with `/inputs/complete`. Within the project's storage quota."""
+    project = _project(db_session, actor, project_id)
+    body = await _body(request)
+    size = (body or {}).get("size")
+    if body is None or not isinstance(size, int) or isinstance(size, bool):
+        return _error(400, "Send a JSON object with name and size.")
+    try:
+        upload = compute_inputs.begin_upload(
+            db_session,
+            get_compute_store(),
+            actor,
+            project=project,
+            name=str(body.get("name", "")),
+            size=size,
+            now=datetime.now(UTC),
+        )
+    except NotAllowed as exc:
+        db_session.rollback()
+        return _error(403, str(exc))
+    except ValidationFailed as exc:
+        db_session.rollback()
+        return _error(422, "Check the upload.", fields=exc.errors)
+    except StorageError:
+        db_session.rollback()
+        return _error(503, "Krater's storage didn't answer; try again in a minute.")
+    db_session.commit()
+    return upload
+
+
+@router.post("/projects/{project_id}/inputs/complete")
+async def complete_input_upload(project_id: uuid.UUID, request: Request, actor: Me, db_session: Db):
+    project = _project(db_session, actor, project_id)
+    body = await _body(request) or {}
+    etags = body.get("etags") if isinstance(body.get("etags"), list) else []
+    try:
+        compute_inputs.complete_upload(
+            get_compute_store(),
+            actor,
+            project=project,
+            name=str(body.get("name", "")),
+            upload_id=str(body.get("upload_id", "")),
+            etags=etags,
+        )
+    except NotAllowed as exc:
+        return _error(403, str(exc))
+    except ValidationFailed as exc:
+        return _error(422, "Check the upload.", fields=exc.errors)
+    except StorageError:
+        return _error(503, "Krater's storage didn't answer; try again in a minute.")
+    return {"ok": True}
+
+
+@router.delete("/projects/{project_id}/inputs/{name:path}")
+def delete_input(project_id: uuid.UUID, name: str, actor: Me, db_session: Db):
+    project = _project(db_session, actor, project_id)
+    try:
+        deleted = compute_inputs.delete_input(get_compute_store(), actor, project=project, name=name)
+    except NotAllowed as exc:
+        return _error(403, str(exc))
+    except ValidationFailed as exc:
+        return _error(404, exc.errors.get("name", "No such input."))
+    except StorageError:
+        return _error(503, "Krater's storage didn't answer; try again in a minute.")
+    return {"deleted": deleted}
 
 
 @router.get("/jobs/{job_id}")

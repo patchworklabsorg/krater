@@ -149,6 +149,7 @@ def _transfer(job: ComputeJob, image_bytes: int | None = None) -> offers.Transfe
         out_gb=job.data_out_gb or 0,
         runtime_hours=Decimal(job.max_runtime_minutes) / 60,
         image_bytes=image_bytes or 0,
+        inputs_bytes=job.inputs_bytes or 0,
     )
 
 
@@ -1340,9 +1341,12 @@ class Scheduler:
         # Budget: under the project's row lock, so two jobs can't hold the same dollars.
         self.session.execute(sa.select(Project.id).where(Project.id == project.id).with_for_update())
         available = budget.remaining_cents(self.session, project) - self._held_cents(project, exclude=job)
-        # Before the first hour: the image pull and the data the member expects to bring in, both at this host's price.
+        # Before the first hour: the image pull, the inputs and the data the member expects to bring in, at this host's
+        # price.
         upfront_microusd = (
-            transfer.image_microusd(choice.offer) + transfer.in_gb * choice.offer.transfer_in_microusd_per_gb
+            transfer.image_microusd(choice.offer)
+            + transfer.in_gb * choice.offer.transfer_in_microusd_per_gb
+            + offers.bytes_cost_microusd(transfer.inputs_bytes, choice.offer.transfer_in_microusd_per_gb)
         )
         hour_cents = spend.ceil_div(choice.full_microusd + upfront_microusd, MICROUSD_PER_CENT)
         if available < hour_cents:

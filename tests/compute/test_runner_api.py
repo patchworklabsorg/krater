@@ -328,3 +328,44 @@ def test_unfinished_uploads_are_aborted_only_once_their_job_has_ended(http, mach
     assert storage_cleanup.abort_abandoned_uploads(db_session, store, now=NOW + timedelta(minutes=30)) == 0
     assert storage_cleanup.abort_abandoned_uploads(db_session, store, now=NOW + timedelta(minutes=71)) == 1
     assert store.multipart_uploads == {}
+
+
+def test_a_machine_lists_only_the_inputs_its_job_asked_for(http, machine, store, db_session) -> None:
+    job, _, token = machine
+    job.input_names = ["data/", "vocab.txt"]
+    db_session.flush()
+    for name, size in (("data/a.csv", 4), ("data/sub/b.csv", 6), ("vocab.txt", 2), ("other.bin", 9)):
+        store.put(f"projects/{job.project_id}/inputs/{name}", content_type="", size_bytes=size)
+
+    started = http.post("/runner/v1/start", headers=_auth(token)).json()
+    listed = http.post("/runner/v1/files/inputs/list", headers=_auth(token)).json()["files"]
+
+    assert started["inputs"] is True
+    assert sorted(f["name"] for f in listed) == ["data/a.csv", "data/sub/b.csv", "vocab.txt"]
+
+
+def test_a_machine_cant_change_the_projects_inputs(http, machine, store) -> None:
+    _, _, token = machine
+    upload = http.post("/runner/v1/files/inputs/upload", headers=_auth(token), json={"name": "x", "size": 1})
+    complete = http.post(
+        "/runner/v1/files/inputs/complete", headers=_auth(token), json={"name": "x", "upload_id": "u", "etags": ["e"]}
+    )
+    assert upload.status_code == 403 and complete.status_code == 403
+    assert store.list_prefix("projects/") == []
+
+
+def test_inputs_deleted_after_queueing_fail_the_listing(http, machine, store, db_session) -> None:
+    job, _, token = machine
+    job.input_names = ["gone.tar"]
+    db_session.flush()
+
+    response = http.post("/runner/v1/files/inputs/list", headers=_auth(token))
+
+    assert response.status_code == 422 and "gone.tar" in response.json()["error"] + str(response.json()["fields"])
+
+
+def test_a_job_without_inputs_gets_none(http, machine, store) -> None:
+    job, _, token = machine
+    store.put(f"projects/{job.project_id}/inputs/a.csv", content_type="", size_bytes=4)
+    assert http.post("/runner/v1/start", headers=_auth(token)).json()["inputs"] is False
+    assert http.post("/runner/v1/files/inputs/list", headers=_auth(token)).json() == {"files": []}

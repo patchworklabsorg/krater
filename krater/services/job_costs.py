@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 from krater.models import ComputeJob, GpuPriceSample
 
 MICROUSD_PER_CENT = 10_000
+BYTES_PER_GB = 1_000_000_000
 #: How far back the price history is read for an estimate.
 MARKET_WINDOW = timedelta(hours=24)
 
@@ -132,11 +133,21 @@ def market_price(session: Session, job: _Shape, *, now: datetime) -> MarketPrice
     return MarketPrice(low_microusd=low * scale, typical_microusd=typical * scale, samples=len(rows))
 
 
-def estimate(session: Session, job: _Shape, *, transfer_cap_microusd_per_gb: int, now: datetime) -> JobEstimate:
+def estimate(
+    session: Session,
+    job: _Shape,
+    *,
+    transfer_cap_microusd_per_gb: int,
+    now: datetime,
+    inputs_bytes: int | None = None,
+) -> JobEstimate:
+    """`inputs_bytes`: the size of the project inputs it copies in (a queued job's own `inputs_bytes` by default)."""
     runtime_hours = Decimal(job.max_runtime_minutes) / 60
     up_to = math.ceil(job.max_microusd * job.max_runtime_minutes / 60 / MICROUSD_PER_CENT)
-    data_gb = (job.data_in_gb or 0) + (job.data_out_gb or 0)
-    data = math.ceil(data_gb * transfer_cap_microusd_per_gb / MICROUSD_PER_CENT)
+    if inputs_bytes is None:
+        inputs_bytes = getattr(job, "inputs_bytes", 0) or 0
+    data_bytes = ((job.data_in_gb or 0) + (job.data_out_gb or 0)) * BYTES_PER_GB + inputs_bytes
+    data = math.ceil(data_bytes * transfer_cap_microusd_per_gb / BYTES_PER_GB / MICROUSD_PER_CENT)
     return JobEstimate(
         rental_type="bid" if job.interruptible else "ondemand",
         max_hourly_microusd=job.max_microusd,

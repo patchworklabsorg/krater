@@ -93,6 +93,10 @@ submit.
 - `--sweep NAME=V1,V2` (repeatable) and `--count N` expand on the member's side into up to 100 ordinary jobs, named
   `<name>-<index>`, each command prefixed with `export KRATER_SWEEP_INDEX=<index> NAME=<value>;` (values shell-quoted).
   Krater sees separate jobs; there is no sweep object. If Krater refuses one part-way, the CLI says which were queued.
+- `krater inputs upload <project> PATH...` asks `POST /api/v1/projects/{id}/inputs/upload` for presigned URLs (one
+  PUT up to 64 MB, else 64 MB parts finished with `/inputs/complete`), the same quota check a machine's uploads get,
+  and skips files already stored at the same size. `list` and `rm` (a folder ends in /) complete it; `submit --input`
+  names them.
 - `krater rerun <job>` posts the job's `spec` from `GET /api/v1/jobs/{id}` (the submit body it was queued with) to
   the submit endpoint, so the budget, verification and transfer checks run again.
 

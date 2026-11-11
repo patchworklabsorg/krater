@@ -27,7 +27,7 @@ MAX_SWEEP_JOBS = 100
 INDEX_VAR = "KRATER_SWEEP_INDEX"
 _VAR = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 #: Options that collect a list; a file gives them as a TOML list (or one value).
-_LISTS = frozenset({"gpu"})
+_LISTS = frozenset({"gpu", "input"})
 #: Not options of a job: what the file can't set.
 _NOT_IN_FILE = frozenset({"file", "help", "json", "estimate", "confirm_transfer_cost"})
 

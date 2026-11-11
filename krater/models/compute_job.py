@@ -73,6 +73,10 @@ class ComputeJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # Krater warns before queuing when it could cost a large share of the budget, and counts it when choosing a host.
     data_in_gb: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
     data_out_gb: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
+    # Files from the project's inputs (`krater.services.compute_inputs`) the runner copies onto the machine before the
+    # command: names, and folders ending in "/". Their total size when queued, counted as data in.
+    input_names: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    inputs_bytes: Mapped[int] = mapped_column(sa.BigInteger, nullable=False, default=0, server_default="0")
 
     state: Mapped[ComputeJobState] = mapped_column(pg_enum(ComputeJobState, name="compute_job_state"), nullable=False)
     # Why the job is where it is, for the member: "waiting for an RTX 4090 bid at or under $0.20/h", ...

@@ -301,3 +301,73 @@ def test_a_succeeded_job_notice_leaves_out_the_reason(db_session: Session, membe
     (message,) = slack_client.messages.values()
     text = message["blocks"][0]["text"]["text"]
     assert "Job finished" in text and "Exited with 0" not in text and "Job owner" in text
+
+
+def _messaged(db_session: Session, member: Actor, setting: int, *states: str, slack=None, at=None):
+    """Job-ended notices for `states`, synced to the submitter with `dm_job_endings` at `setting`."""
+    project = new_project(db_session, member, title="Rover")
+    member.user.slack_user_id = "U_OWNER"
+    _settings_row(db_session).dm_job_endings = setting
+    for state in states:
+        db_session.add(
+            AuditEvent(
+                action=AUDIT_JOB_ENDED,
+                project_id=project.id,
+                created_at=at or datetime.now(UTC),
+                payload={
+                    "job_id": "j1",
+                    "job_name": f"job-{state}",
+                    "owner_id": str(member.user.id),
+                    "state": state,
+                    "reason": "Exited with 1.",
+                    "spend_cents": 10,
+                },
+            )
+        )
+    db_session.flush()
+    slack = slack or FakeSlackClient()
+    slack_notify.sync_job_ending_messages(db_session, slack)
+    return slack
+
+
+def _dms(slack: FakeSlackClient) -> list[str]:
+    return sorted(m["text"] for (channel, _), m in slack.messages.items() if channel == "U_OWNER")
+
+
+def test_submitters_arent_messaged_by_default(db_session: Session, member: Actor) -> None:
+    assert _dms(_messaged(db_session, member, 0, "failed", "succeeded")) == []
+
+
+def test_failures_only_messages_the_submitter_once_about_a_failure(db_session: Session, member: Actor) -> None:
+    slack = _messaged(db_session, member, 1, "failed", "succeeded")
+    slack_notify.sync_job_ending_messages(db_session, slack)
+
+    dms = _dms(slack)
+    assert len(dms) == 1 and "Job failed" in dms[0] and "job-failed" in dms[0]
+
+
+def test_always_messages_every_ending(db_session: Session, member: Actor) -> None:
+    dms = _dms(_messaged(db_session, member, 2, "failed", "succeeded", "cancelled"))
+    assert len(dms) == 3
+
+
+def test_jobs_that_ended_before_the_window_arent_messaged(db_session: Session, member: Actor) -> None:
+    old = datetime.now(UTC) - slack_notify.DIRECT_MESSAGE_WINDOW - timedelta(minutes=1)
+    assert _dms(_messaged(db_session, member, 2, "failed", at=old)) == []
+
+
+def test_a_message_slack_refuses_is_tried_again(db_session: Session, member: Actor, monkeypatch) -> None:
+    from krater.slack.errors import SlackRequestFailedError
+
+    slack = FakeSlackClient()
+    real = slack.post_message
+
+    def refuse(channel_id, **kwargs):
+        raise SlackRequestFailedError("messages_tab_disabled")
+
+    monkeypatch.setattr(slack, "post_message", refuse)
+    _messaged(db_session, member, 2, "failed", slack=slack)
+    monkeypatch.setattr(slack, "post_message", real)
+    slack_notify.sync_job_ending_messages(db_session, slack)
+
+    assert len(_dms(slack)) == 1

@@ -87,7 +87,8 @@ spent half a budget on it renting directly. So:
 - **The member's estimate and the image.** A job may say how many GB it moves in and out (`data_in_gb`,
   `data_out_gb`; the form, the API and `krater submit --data-in --data-out`). The scheduler also knows the image's
   compressed size (`krater.registry.image_size`, from the manifest, cached by digest in `image_sizes`; unknown when
-  the registry can't say). Ranking adds, per offer, the estimate's and one pull's cost at that host's prices, and the
+  the registry can't say), and the size of the project inputs it asked for (`compute_jobs.inputs_bytes`, fixed at
+  submit; `Transfer.inputs_bytes`, priced and timed like the image). Ranking adds, per offer, the estimate's and one pull's cost at that host's prices, and the
   pull's time at its download speed (Vast's `inet_down`, 100 Mbps when missing) counted at the offer's full hourly
   price, all spread over the max runtime (`krater.compute.offers.Transfer`). Ties break on pull time, then transfer
   price. The instance records the prices, link speeds and image size it was rented with.

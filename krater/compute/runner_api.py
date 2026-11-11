@@ -19,6 +19,7 @@ import hashlib
 import math
 import re
 import secrets
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
@@ -54,7 +55,10 @@ MAX_UPLOAD_BYTES = 500 * 1024**3
 #: Presigned URLs live this long: a 64 MB part on a slow link still makes it.
 URL_EXPIRES_SECONDS = 3600
 
-AREAS = ("checkpoints", "outputs", "workspace", "logs")
+AREAS = ("checkpoints", "outputs", "workspace", "logs", "inputs")
+#: The project's inputs (`krater.services.compute_inputs`): a machine may list and download the ones its job asked
+#: for, and never change them.
+INPUTS = "inputs"
 # Wide enough for the names ML tools write (Lightning's `epoch=3-step=100.ckpt`), with no control characters or
 # backslashes, which would trip the CLI writing them to a member's disk.
 _NAME_RE = re.compile(r"^[A-Za-z0-9._\-=+,@~][A-Za-z0-9._\-=+,@~ /]{0,511}$")
@@ -108,6 +112,8 @@ class StartInfo:
     # How the runner stops its machine: `{"method": "vast_api", "url", "instance_id"}`, `{"method": "shutdown"}`, or
     # None when the provider has no self-stop. Built from the provider's `self_stop_method`, never from its name.
     self_stop: dict[str, str] | None = None
+    # Whether the job asked for any of its project's inputs: the runner copies them in before the command.
+    inputs: bool = False
     # Legacy wire names, still sent for runners already on machines, which know only Vast's integer id for the
     # machine and its API's address (`runner/api.go` ignores them when `self_stop` is present).
     vast_instance_id: int | None = None
@@ -171,6 +177,7 @@ def start(session: Session, instance: ComputeInstance, *, now: datetime, setting
         vast_instance_id=_vast_wire_id(instance),
         vast_api_url=settings.vast_api_url,
         secrets=secrets_env,
+        inputs=bool(job.input_names),
     )
 
 
@@ -265,38 +272,76 @@ def report_exit(session: Session, instance: ComputeInstance, exit_code: int, *, 
 # -- Checkpoints and outputs -------------------------------------------------------------------------------
 
 
+def inputs_prefix(project_id: uuid.UUID) -> str:
+    return f"projects/{project_id}/inputs/"
+
+
 def _prefix(instance: ComputeInstance, area: str) -> str:
     if area not in AREAS:
         raise ValidationFailed({"area": f"area must be one of {', '.join(AREAS)}"})
     job = instance.job
+    if area == INPUTS:
+        return inputs_prefix(job.project_id)
     return f"projects/{job.project_id}/jobs/{job.id}/{area}/"
 
 
-def _key(instance: ComputeInstance, area: str, name: str) -> str:
+def check_name(name: str) -> str:
+    """`name` if it's a usable relative path for a stored file; raises `ValidationFailed` otherwise."""
     segments = name.split("/")
     if not _NAME_RE.match(name) or any(s in ("", ".", "..") for s in segments) or name != name.strip():
         raise ValidationFailed(
             {"name": "Use a relative path of letters, digits, spaces and . _ - = + , @ ~, with '/' between folders."}
         )
-    return _prefix(instance, area) + name
+    return name
+
+
+def _key(instance: ComputeInstance, area: str, name: str) -> str:
+    return _prefix(instance, area) + check_name(name)
+
+
+def selected(names: list[str], wanted: list[str]) -> list[str]:
+    """The stored input `names` a job's `wanted` list picks: exact names, and everything under a name ending in /."""
+    folders = tuple(w for w in wanted if w.endswith("/"))
+    exact = set(wanted)
+    return [n for n in names if n in exact or (folders and n.startswith(folders))]
 
 
 def list_files(store: ObjectStore, instance: ComputeInstance, area: str) -> list[dict[str, Any]]:
     prefix = _prefix(instance, area)
+    items = store.list_prefix(prefix)
+    if area == INPUTS:
+        # Only what the job asked for; a job that asked for none gets none.
+        stored = [item.key[len(prefix) :] for item in items]
+        wanted = list(instance.job.input_names or [])
+        missing = [w for w in wanted if not selected(stored, [w])]
+        if missing:
+            # Deleted since the job was queued: the runner fails the job rather than run it without them.
+            raise ValidationFailed({"inputs": f"The job's inputs {', '.join(missing)} are no longer stored."})
+        chosen = set(selected(stored, wanted))
+        items = [item for item in items if item.key[len(prefix) :] in chosen]
     return [
         {
             "name": item.key[len(prefix) :],
             "size": item.size_bytes,
             "url": store.presign_download(item.key, expires=URL_EXPIRES_SECONDS),
         }
-        for item in store.list_prefix(prefix)
+        for item in items
     ]
 
 
 def project_usage_bytes(store: ObjectStore, instance: ComputeInstance) -> dict[str, int]:
     """Bytes stored per key under the instance's project."""
-    prefix = f"projects/{instance.job.project_id}/"
+    return _usage(store, instance.job.project_id)
+
+
+def _usage(store: ObjectStore, project_id: uuid.UUID) -> dict[str, int]:
+    prefix = f"projects/{project_id}/"
     return {item.key: item.size_bytes for item in store.list_prefix(prefix)}
+
+
+def _no_inputs(area: str) -> None:
+    if area == INPUTS:
+        raise NotAllowed("A machine can read its project's inputs but not change them.")
 
 
 def begin_upload(
@@ -317,17 +362,40 @@ def begin_upload(
     Storage lists a file only once its upload finishes, so the size is reserved (`StorageReservation`) until the URLs
     expire, and the quota counts each file at the larger of what's stored and what's reserved for it. The project's
     row lock makes two uploads check the quota one after the other. The caller commits."""
-    key = _key(instance, area, name)
+    _no_inputs(area)
+    return reserve_upload(
+        session,
+        store,
+        instance.job.project_id,
+        _key(instance, area, name),
+        name,
+        size,
+        quota_bytes=quota_bytes,
+        now=now,
+    )
+
+
+def reserve_upload(
+    session: Session,
+    store: ObjectStore,
+    project_id: uuid.UUID,
+    key: str,
+    name: str,
+    size: int,
+    *,
+    quota_bytes: int,
+    now: datetime,
+) -> dict[str, Any]:
+    """`begin_upload` for any key under the project (a machine's files, or a member's inputs)."""
     if not 0 <= size <= MAX_UPLOAD_BYTES:
         raise ValidationFailed({"size": f"Files can be up to {MAX_UPLOAD_BYTES // 1024**3} GB."})
-    project_id = instance.job.project_id
     session.execute(sa.select(Project.id).where(Project.id == project_id).with_for_update())
     session.execute(
         sa.delete(StorageReservation).where(
             StorageReservation.project_id == project_id, StorageReservation.expires_at <= now
         )
     )
-    usage = project_usage_bytes(store, instance)
+    usage = _usage(store, project_id)
     reserved = session.execute(
         sa.select(StorageReservation.key, StorageReservation.size_bytes).where(
             StorageReservation.project_id == project_id
@@ -371,7 +439,11 @@ def begin_upload(
 def complete_upload(
     store: ObjectStore, instance: ComputeInstance, area: str, name: str, upload_id: str, etags: list[str]
 ) -> None:
-    key = _key(instance, area, name)
+    _no_inputs(area)
+    finish_upload(store, _key(instance, area, name), upload_id, etags)
+
+
+def finish_upload(store: ObjectStore, key: str, upload_id: str, etags: list[str]) -> None:
     if not upload_id or not etags or not all(isinstance(e, str) and e for e in etags):
         raise ValidationFailed({"etags": "Send the ETag of every part, in order."})
     store.complete_multipart_upload(key, upload_id=upload_id, parts=list(enumerate(etags, start=1)))

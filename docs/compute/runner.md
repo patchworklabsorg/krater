@@ -20,7 +20,11 @@ Checked locally on 2026-10-11 with alpine (busybox wget), python:3.12-slim (Pyth
 The runner then:
 
 1. calls `POST /runner/v1/start` with its token and gets the command and whether this is a resume;
-2. restores the job's checkpoints into `$KRATER_CHECKPOINT_DIR` (default `/krater/checkpoints`);
+2. restores the job's checkpoints into `$KRATER_CHECKPOINT_DIR` (default `/krater/checkpoints`), and when `start`
+   says `inputs`, copies the project inputs the job asked for into `$KRATER_INPUT_DIR` (default `/krater/inputs`)
+   from `files/inputs/list`. If that fails it reports exit code 125 and runs nothing: a job without its data would
+   bill for nothing. Krater answers that list with only the job's own inputs, refuses it (422) when one was deleted
+   since the job was queued, and refuses a machine's upload to `inputs` (403);
 3. runs the command with `sh -c`;
 4. sends a heartbeat every minute, with the mean GPU use from `nvidia-smi` sampled every 15 s, and stops the
    command (SIGTERM, then SIGKILL after 30 s) when Krater answers `stop`;
@@ -177,6 +181,7 @@ page instead.
 | `KRATER_RESUMED` | `1` when this is a resume (a later attempt, or a restart after a pause): load the latest checkpoint |
 | `KRATER_CHECKPOINT_DIR` | Save checkpoints here. Restored before the command starts |
 | `KRATER_OUTPUT_DIR` | Put results here. Uploaded when the command exits |
+| `KRATER_INPUT_DIR` | The project inputs the job asked for, copied in before the command |
 | `KRATER_JOB_ID`, `KRATER_ATTEMPT` | For logs |
 | the project's secrets | Such as `HF_TOKEN`, set on the project's Compute page |
 

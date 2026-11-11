@@ -44,6 +44,9 @@ type fakeKrater struct {
 	synced   int
 	// Storage answers 503 to this many PUTs before working, to stand in for a transient storage outage.
 	storageFails int
+	// The job asked for project inputs; inputsGone: Krater refuses the list, as when they were deleted.
+	inputs     bool
+	inputsGone bool
 
 	mu         sync.Mutex
 	objects    map[string][]byte // "area/name" -> content
@@ -67,6 +70,7 @@ func (f *fakeKrater) cfg(t *testing.T) Config {
 		Token:         f.token,
 		CheckpointDir: filepath.Join(dir, "checkpoints"),
 		OutputDir:     filepath.Join(dir, "outputs"),
+		InputDir:      filepath.Join(dir, "inputs"),
 		LogDir:        filepath.Join(dir, "logs"),
 	}
 }
@@ -100,7 +104,7 @@ func (f *fakeKrater) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		f.writeJSON(w, map[string]any{"job_id": "j1", "attempt": 1, "resumed": f.resumed, "command": f.command,
 			"kind": kind, "ssh_keys": f.sshKeys, "heartbeat_seconds": 1, "checkpoint_sync_seconds": 3600,
-			"secrets": f.secrets})
+			"secrets": f.secrets, "inputs": f.inputs})
 	case path == "/runner/v1/heartbeat":
 		f.heartbeats = append(f.heartbeats, body)
 		n := len(f.heartbeats)
@@ -124,6 +128,11 @@ func (f *fakeKrater) handle(w http.ResponseWriter, r *http.Request) {
 		f.writeJSON(w, map[string]any{"state": "done"})
 	case strings.HasSuffix(path, "/list"):
 		area := strings.Split(path, "/")[4]
+		if area == "inputs" && f.inputsGone {
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			f.writeJSON(w, map[string]any{"error": "The job's inputs data/ are no longer stored."})
+			return
+		}
 		files := []map[string]any{}
 		for key, data := range f.objects {
 			if strings.HasPrefix(key, area+"/") {
@@ -675,5 +684,44 @@ func TestOnlyKratersOwnAnswersCountAsContactOrRefusal(t *testing.T) {
 				t.Errorf("touched = %v, want %v", touched, c.touched)
 			}
 		})
+	}
+}
+
+func TestAJobGetsItsInputsBeforeItsCommand(t *testing.T) {
+	f := newFakeKrater(t)
+	f.inputs = true
+	f.objects["inputs/data/train.csv"] = []byte("rows")
+	f.command = `test "$(cat "$KRATER_INPUT_DIR/data/train.csv")" = rows`
+	cfg := f.cfg(t)
+
+	code, err := Run(context.Background(), cfg, http.DefaultClient, http.DefaultClient, noGPU)
+
+	if err != nil || code != 0 {
+		t.Fatalf("Run = %d, %v; want 0, nil", code, err)
+	}
+	for _, key := range keys(f.objects) {
+		if strings.HasPrefix(key, "inputs/") && key != "inputs/data/train.csv" {
+			t.Errorf("the runner wrote to the project's inputs: %v", keys(f.objects))
+		}
+	}
+}
+
+func TestAJobWhoseInputsCantBeCopiedFailsWithoutRunning(t *testing.T) {
+	f := newFakeKrater(t)
+	f.inputs, f.inputsGone = true, true
+	cfg := f.cfg(t)
+	marker := filepath.Join(t.TempDir(), "ran")
+	f.command = "touch " + marker
+
+	code, err := Run(context.Background(), cfg, http.DefaultClient, http.DefaultClient, noGPU)
+
+	if err == nil || code != SetupFailed {
+		t.Fatalf("Run = %d, %v; want %d and an error", code, err, SetupFailed)
+	}
+	if fmt.Sprint(f.exitCodes) != fmt.Sprint([]int{SetupFailed}) {
+		t.Errorf("exit codes reported: %v", f.exitCodes)
+	}
+	if _, statErr := os.Stat(marker); statErr == nil {
+		t.Errorf("the command ran without its inputs")
 	}
 }

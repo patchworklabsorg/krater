@@ -32,10 +32,11 @@ from krater.models import (
     ReviewDecision,
     RevisionKind,
     RevisionOutcome,
+    SlackDirectMessage,
     SlackNotification,
     User,
 )
-from krater.services import compute_watch, funding_holds, grants, ospool_grants, teams
+from krater.services import compute_settings, compute_watch, funding_holds, grants, ospool_grants, teams
 from krater.services.actor import GROUP_REVIEWER
 from krater.services.budget_alerts import AUDIT_BUDGET_TEARDOWN, AUDIT_BUDGET_WARNING
 from krater.services.compute_jobs import (
@@ -67,6 +68,11 @@ MISSED_REVIEW_MESSAGE_WINDOW = timedelta(days=7)
 #: How long a finished (`completed`/`withdrawn`) project's channels stay open, for the last questions and thanks,
 #: before the periodic reconcile archives them.
 ARCHIVE_AFTER = timedelta(days=7)
+#: Job-ended messages to the submitter go only for jobs that ended this recently: turning the setting on doesn't
+#: message about old jobs, and a message Slack refuses is retried until then.
+DIRECT_MESSAGE_WINDOW = timedelta(hours=2)
+#: `dm_job_endings` values.
+DM_NEVER, DM_FAILURES, DM_ALWAYS = 0, 1, 2
 
 
 def _slugify(text: str) -> str:
@@ -835,6 +841,38 @@ def sync_box_notifications(session: Session, slack_client: SlackClient) -> None:
         session.flush()
 
 
+def sync_job_ending_messages(session: Session, slack_client: SlackClient, *, now: datetime | None = None) -> None:
+    """Message each ended job's submitter from Krater's app, as the org's `dm_job_endings` says (never, failures
+    only, or always), once each (`SlackDirectMessage`), on top of the notice in the project's channel. Posted to their
+    Slack user id, as the verification reminders are, so it needs no scope beyond `chat:write`."""
+    setting = compute_settings.org_limits(session).dm_job_endings
+    if setting == DM_NEVER:
+        return
+    now = now or datetime.now(UTC)
+    stmt = sa.select(AuditEvent).where(
+        AuditEvent.action == AUDIT_JOB_ENDED,
+        AuditEvent.project_id.is_not(None),
+        AuditEvent.created_at >= now - DIRECT_MESSAGE_WINDOW,
+        AuditEvent.id.not_in(sa.select(SlackDirectMessage.audit_event_id)),
+    )
+    for event in list(session.scalars(stmt)):
+        payload = event.payload or {}
+        project = session.get(Project, event.project_id)
+        owner = session.get(User, uuid.UUID(payload["owner_id"])) if payload.get("owner_id") else None
+        wanted = setting == DM_ALWAYS or payload.get("state") == "failed"
+        slack_id = slack_id_for(session, slack_client, owner) if wanted and owner is not None else None
+        if project is not None and slack_id is not None:
+            blocks, text = _box_message(session, slack_client, event, project)
+            try:
+                slack_client.post_message(slack_id, blocks=blocks, text=text)
+            except SlackRequestFailedError:
+                # Retried until the window closes, without holding up anything else.
+                logger.warning("krater.slack job-ended message %s to its submitter failed; retrying", event.id)
+                continue
+        session.add(SlackDirectMessage(audit_event_id=event.id))
+        session.flush()
+
+
 def sync_missed_archives(session: Session, slack_client: SlackClient, *, now: datetime | None = None) -> None:
     """Archive the channels of every project that has been `completed`/`withdrawn` for `ARCHIVE_AFTER` (or finished
     before Krater recorded when) and still has one open. This is what archives them, a week after the finish."""
@@ -918,6 +956,7 @@ def reconcile(
         ("sync_reviewer_invites", lambda: sync_reviewer_invites(session, slack_client, weave_client)),
         ("sync_budget_notifications", lambda: sync_budget_notifications(session, slack_client)),
         ("sync_box_notifications", lambda: sync_box_notifications(session, slack_client)),
+        ("sync_job_ending_messages", lambda: sync_job_ending_messages(session, slack_client)),
         ("sync_missed_archives", lambda: sync_missed_archives(session, slack_client)),
         (
             "sync_missed_review_messages",

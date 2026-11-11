@@ -32,6 +32,7 @@ import time
 import webbrowser
 from collections.abc import Callable, Sequence
 from decimal import Decimal, InvalidOperation
+from urllib.parse import quote
 
 import httpx
 
@@ -118,8 +119,9 @@ def _parser() -> argparse.ArgumentParser:
     projects = commands.add_parser("projects", help="your projects")
     projects.add_argument("--all", action="store_true", help="include withdrawn and completed projects")
 
+    project_help = "its id, the first characters of it, or part of its title"
     jobs = commands.add_parser("jobs", help="a project's jobs and boxes, newest first")
-    jobs.add_argument("project", help="its id, the first characters of it, or part of its title")
+    jobs.add_argument("project", help=project_help)
 
     submit = commands.add_parser("submit", help="queue a job or a box (or a sweep of jobs)")
     submit.set_defaults(submit_parser=submit)
@@ -171,6 +173,13 @@ def _parser() -> argparse.ArgumentParser:
     )
     submit.add_argument(
         "--estimate", action="store_true", help="only say what it may cost and what this shape costs now; queue nothing"
+    )
+    submit.add_argument(
+        "--input",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="a file from the project's inputs to copy into $KRATER_INPUT_DIR first; a folder ends in / (repeatable)",
     )
     submit.add_argument("--count", type=int, help="queue this many copies, each with $KRATER_SWEEP_INDEX (0, 1, ...)")
     submit.add_argument(
@@ -237,6 +246,20 @@ def _parser() -> argparse.ArgumentParser:
     secrets_rm = secret_commands.add_parser("rm")
     secrets_rm.add_argument("project")
     secrets_rm.add_argument("name")
+
+    inputs = commands.add_parser("inputs", help="a project's inputs: files its jobs can copy in before they start")
+    input_commands = inputs.add_subparsers(dest="inputs_command", required=True)
+    inputs_list = input_commands.add_parser("list")
+    inputs_list.add_argument("project", help=project_help)
+    inputs_upload = input_commands.add_parser(
+        "upload", help="upload files or folders (a folder keeps its name: data/x.csv); same-size files are skipped"
+    )
+    inputs_upload.add_argument("project", help=project_help)
+    inputs_upload.add_argument("paths", nargs="+", metavar="PATH")
+    inputs_upload.add_argument("--as", dest="as_name", metavar="NAME", help="store one file or folder under this name")
+    inputs_rm = input_commands.add_parser("rm", help="delete an input, or a folder of them (ending in /)")
+    inputs_rm.add_argument("project", help=project_help)
+    inputs_rm.add_argument("name")
 
     prices = commands.add_parser("prices", help="what an hour costs now, per GPU model")
     prices.add_argument("--all", action="store_true", help="include models nobody is offering right now")
@@ -576,6 +599,8 @@ def run(
             body["data_in_gb"] = args.data_in
         if args.data_out is not None:
             body["data_out_gb"] = args.data_out
+        if args.input:
+            body["inputs"] = args.input
         try:
             runs = jobfile.expand(body, jobfile.sweep_values(args.sweep, sweep_table), args.count)
         except jobfile.JobFileError as exc:
@@ -737,6 +762,19 @@ def run(
         else:
             data = krater.delete(f"{base}/{args.name}")
             out(data, lambda: say(f"Deleted {args.name}."))
+    elif args.command == "inputs":
+        project_id = resolve.resolve_project(krater, args.project)
+        base = f"/projects/{project_id}/inputs"
+        if args.inputs_command == "list":
+            data = krater.get(base)
+            rows = [["NAME", "SIZE"]] + [[f["name"], _size(f["size_bytes"])] for f in data["inputs"]]
+            out(data, lambda: _table(rows, say) if data["inputs"] else say("No inputs yet."))
+        elif args.inputs_command == "upload":
+            return _upload_inputs(krater, http, base, args.paths, args.as_name, say)
+        else:
+            data = krater.delete(f"{base}/{quote(args.name, safe='/')}")
+            count = data["deleted"]
+            out(data, lambda: say(f"Deleted {count} input file{'s' if count != 1 else ''}."))
     elif args.command == "prices":
         data = krater.get("/prices")
         rows = [p for p in data["prices"] if not args.gpu or args.gpu.lower() in p["gpu"].lower()]
@@ -782,6 +820,69 @@ def _expired(response: httpx.Response) -> bool:
 def _file_list(krater: Krater, job_id: str, only: str | None) -> list[dict]:
     data = krater.get(f"/jobs/{job_id}/files")
     return [f for f in data["files"] if only is None or f["area"] == only]
+
+
+def _input_files(paths: list[str], as_name: str | None) -> list[tuple[str, str]]:
+    """(local path, stored name) for each file to upload. A folder keeps its own name as the stored folder."""
+    if as_name and len(paths) > 1:
+        raise KraterError("--as names one file or folder; give one path with it.", status=2)
+    found = []
+    for path in paths:
+        base = (as_name or os.path.basename(os.path.normpath(path))).strip("/")
+        if os.path.isdir(path):
+            for root, dirs, names in os.walk(path):
+                dirs.sort()
+                for name in sorted(names):
+                    local = os.path.join(root, name)
+                    found.append((local, f"{base}/{os.path.relpath(local, path).replace(os.sep, '/')}"))
+        elif os.path.isfile(path):
+            found.append((path, base))
+        else:
+            raise KraterError(f"No file or folder {path}.", status=2)
+    return found
+
+
+def _upload_inputs(
+    krater: Krater, http: httpx.Client, base: str, paths: list[str], as_name: str | None, say: Callable[[str], None]
+) -> int:
+    files = _input_files(paths, as_name)
+    stored = {f["name"]: f["size_bytes"] for f in krater.get(base)["inputs"]}
+    sent = skipped = 0
+    for local, name in files:
+        size = os.path.getsize(local)
+        if stored.get(name) == size:
+            skipped += 1
+            continue
+        upload = krater.post(f"{base}/upload", {"name": name, "size": size})
+        with open(local, "rb") as handle:
+            if "url" in upload:
+                _put(http, upload["url"], handle, 0, size)
+            else:
+                part = upload["part_bytes"]
+                etags = [
+                    _put(http, url, handle, n * part, min(part, size - n * part))
+                    for n, url in enumerate(upload["parts"])
+                ]
+                krater.post(f"{base}/complete", {"name": name, "upload_id": upload["upload_id"], "etags": etags})
+        sent += 1
+        say(f"Uploaded {name} ({_size(size)})")
+    if skipped:
+        say(f"{skipped} already there at the same size, skipped.")
+    if not sent and not skipped:
+        say("No files to upload.")
+    return 0
+
+
+def _put(http: httpx.Client, url: str, handle, offset: int, length: int) -> str:
+    """PUT `length` bytes of `handle` from `offset` to a presigned URL (at most one 64 MB part, so it's read whole).
+    Returns the ETag storage answers with."""
+    handle.seek(offset)
+    response = http.put(url, content=handle.read(length), timeout=httpx.Timeout(300, connect=10))
+    if response.status_code >= 300:
+        raise KraterError(
+            f"Storage refused the upload ({response.status_code}); try again.", status=response.status_code
+        )
+    return response.headers.get("ETag", "")
 
 
 def _fetch(http: httpx.Client, url: str, target: str) -> httpx.Response | None:

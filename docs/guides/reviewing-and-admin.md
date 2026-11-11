@@ -181,6 +181,7 @@ Below the defaults are the **organization limits**, one value for all of Krater:
 | Monthly spending cap | Off | The same for the calendar month (UTC) |
 | Low credit alert | Off | The alerts channel hears when the Vast account's credit falls under this |
 | Credit reserve | Off | Krater rents nothing new while the credit wouldn't cover this many hours of every machine it holds plus the new one; jobs wait, saying why |
+| Message the submitter when a job ends | 0 (never) | 1: Krater's Slack app messages whoever queued a job when it fails; 2: whenever one ends. On top of the notice in the project's channel |
 | Delete finished projects' files after | 30 days | A completed or withdrawn project's checkpoints and outputs are deleted this long after it finishes. The date is fixed then and posted in its channel; 0 keeps them |
 
 The spending caps use Krater's own estimate, which trails Vast's charges by up to an hour, so leave a margin.

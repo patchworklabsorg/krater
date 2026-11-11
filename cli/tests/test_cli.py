@@ -99,6 +99,10 @@ class Fake:
         self.revoked: list[dict] = []
         self.revoke_status = 200
         self.api_failures: list[object] = []  # raised or answered, one per API request, before it works
+        self.inputs: dict[str, int] = {}  # the project's stored inputs, name -> size
+        self.input_part_bytes = 64 * 1024 * 1024
+        self.put_bodies: dict[str, bytes] = {}  # presigned PUTs, by URL path
+        self.completed: list[dict] = []
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -151,6 +155,9 @@ class Fake:
         if url.startswith("https://store.test/"):
             # A presigned URL: the CLI must not send its Krater sign-in along.
             assert "authorization" not in request.headers
+            if request.method == "PUT":
+                self.put_bodies[urlparse(url).path] = request.content
+                return httpx.Response(200, headers={"ETag": f'"etag-{len(request.content)}"'})
             if "sig=old" in url:
                 return httpx.Response(self.expired_status, text="Request has expired")
             return httpx.Response(
@@ -163,6 +170,31 @@ class Fake:
             return httpx.Response(
                 200, json={"name": "Ada", "email": "ada@example.org", "member": True, "reviewer": False, "admin": False}
             )
+        if path == f"/projects/{PROJECT}/inputs" and request.method == "GET":
+            return httpx.Response(
+                200, json={"inputs": [{"name": n, "size_bytes": s} for n, s in sorted(self.inputs.items())]}
+            )
+        if path == f"/projects/{PROJECT}/inputs/upload":
+            body = json.loads(request.content)
+            name, size = body["name"], body["size"]
+            if size <= self.input_part_bytes:
+                self.inputs[name] = size
+                return httpx.Response(200, json={"name": name, "url": f"https://store.test/put/{name}"})
+            count = -(-size // self.input_part_bytes)
+            parts = [f"https://store.test/part/{name}/{n}" for n in range(1, count + 1)]
+            return httpx.Response(
+                200, json={"name": name, "upload_id": "u1", "part_bytes": self.input_part_bytes, "parts": parts}
+            )
+        if path == f"/projects/{PROJECT}/inputs/complete":
+            body = json.loads(request.content)
+            self.completed.append(body)
+            return httpx.Response(200, json={"ok": True})
+        if path.startswith(f"/projects/{PROJECT}/inputs/") and request.method == "DELETE":
+            name = path.removeprefix(f"/projects/{PROJECT}/inputs/")
+            gone = [n for n in self.inputs if n == name or (name.endswith("/") and n.startswith(name))]
+            for n in gone:
+                del self.inputs[n]
+            return httpx.Response(200, json={"deleted": len(gone)})
         if path == f"/projects/{PROJECT}/jobs/estimate" and request.method == "POST":
             self.estimated.append(json.loads(request.content))
             return httpx.Response(200, json={"up_to_cents": 400, "summary": "Up to $4.00 if it runs its full 8 hours."})
@@ -1769,3 +1801,69 @@ def test_rerun_without_settings_from_an_older_krater_says_so(http, fake) -> None
     said: list[str] = []
     assert run(["rerun", JOB_C], http=http, say=said.append) == 1
     assert said == ["This Krater doesn't send a job's settings yet, so it can't be run again from here."]
+
+
+# -- Inputs ---------------------------------------------------------------------------------------------------
+
+
+def test_inputs_upload_sends_files_and_folders_to_presigned_urls(http, fake, tmp_path) -> None:
+    _login(http, [])
+    data = tmp_path / "data"
+    (data / "sub").mkdir(parents=True)
+    (data / "a.csv").write_bytes(b"1,2\n")
+    (data / "sub" / "b.csv").write_bytes(b"3,4\n")
+    single = tmp_path / "vocab.txt"
+    single.write_bytes(b"hello")
+    said: list[str] = []
+
+    assert run(["inputs", "upload", PROJECT, str(data), str(single)], http=http, say=said.append) == 0
+
+    assert fake.put_bodies == {"/put/data/a.csv": b"1,2\n", "/put/data/sub/b.csv": b"3,4\n", "/put/vocab.txt": b"hello"}
+    assert said == ["Uploaded data/a.csv (4 B)", "Uploaded data/sub/b.csv (4 B)", "Uploaded vocab.txt (5 B)"]
+
+
+def test_inputs_upload_skips_what_is_already_there_and_names_one_with_as(http, fake, tmp_path) -> None:
+    _login(http, [])
+    fake.inputs = {"train.bin": 3}
+    local = tmp_path / "x.bin"
+    local.write_bytes(b"abc")
+    said: list[str] = []
+
+    run(["inputs", "upload", PROJECT, str(local), "--as", "train.bin"], http=http, say=said.append)
+
+    assert fake.put_bodies == {} and said == ["1 already there at the same size, skipped."]
+
+
+def test_a_big_input_goes_up_in_parts(http, fake, tmp_path) -> None:
+    _login(http, [])
+    fake.input_part_bytes = 4
+    local = tmp_path / "big.bin"
+    local.write_bytes(b"0123456789")
+
+    run(["inputs", "upload", PROJECT, str(local)], http=http, say=lambda _: None)
+
+    assert fake.put_bodies == {"/part/big.bin/1": b"0123", "/part/big.bin/2": b"4567", "/part/big.bin/3": b"89"}
+    assert fake.completed == [{"name": "big.bin", "upload_id": "u1", "etags": ['"etag-4"', '"etag-4"', '"etag-2"']}]
+
+
+def test_inputs_list_and_rm(http, fake) -> None:
+    _login(http, [])
+    fake.inputs = {"data/a.csv": 2048, "data/b.csv": 10, "vocab.txt": 5}
+    said: list[str] = []
+
+    run(["inputs", "list", PROJECT], http=http, say=said.append)
+    run(["inputs", "rm", PROJECT, "data/"], http=http, say=said.append)
+
+    assert said[0].split() == ["NAME", "SIZE"] and "data/a.csv" in said[1]
+    assert said[-1] == "Deleted 2 input files."
+    assert fake.inputs == {"vocab.txt": 5}
+
+
+def test_submit_names_its_inputs(http, fake, tmp_path) -> None:
+    _login(http, [])
+    run([*SUBMIT_4090, "--input", "data/", "--input", "vocab.txt"], http=http, say=lambda _: None)
+    assert fake.jobs[0]["body"]["inputs"] == ["data/", "vocab.txt"]
+
+    path = _job_file(tmp_path, JOB_TOML + 'input = "data/"\n')
+    run(["submit", "-f", path], http=http, say=lambda _: None)
+    assert fake.jobs[1]["body"]["inputs"] == ["data/"]
