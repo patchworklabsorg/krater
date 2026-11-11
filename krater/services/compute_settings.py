@@ -35,6 +35,7 @@ class PolicyField:
     default: int
     # "bp": stored in basis points, shown and entered as a fraction (9500 <-> 0.95).
     # "usd_per_tb": stored in micro-dollars per GB, shown and entered in dollars per TB (20000 <-> 20).
+    # "usd": stored in cents, shown and entered in dollars (12550 <-> 125.5).
     kind: str = "int"
 
 
@@ -186,8 +187,79 @@ POLICY_FIELDS: tuple[PolicyField, ...] = (
         100,
         10,
     ),
+    PolicyField(
+        "max_machines",
+        "Machines at once",
+        "The most machines one project may have running, starting or outbid at once. More jobs wait in the queue "
+        "until one ends. A stopped box doesn't count, but resuming one needs a free place.",
+        "machines",
+        1,
+        100,
+        4,
+    ),
+    PolicyField(
+        "job_idle_warn_minutes",
+        "Idle GPU warning",
+        "A batch job whose GPU stays under 5% use this long gets one warning in its project's channel (often the code "
+        "isn't using the GPU, or it's stuck). It keeps running. 0 turns the warning off.",
+        "minutes",
+        0,
+        1440,
+        30,
+    ),
 )
 FIELDS_BY_NAME = {f.name: f for f in POLICY_FIELDS}
+
+#: Organization-wide limits: one value for all of Krater, no per-project override. 0 turns each one off, and the
+#: spending caps and the credit alert are off until an admin sets them.
+ORG_FIELDS: tuple[PolicyField, ...] = (
+    PolicyField(
+        "org_daily_cap_cents",
+        "Daily spending cap",
+        "Krater's compute spend across every project in one UTC day. When it's reached, Krater stops every machine "
+        "(as the stop switch does) until midnight UTC, or until an admin raises it. Spend is Krater's estimate, which "
+        "can trail Vast's charges by up to an hour, so keep a margin. 0 = no cap.",
+        "USD",
+        0,
+        100_000_000,
+        0,
+        kind="usd",
+    ),
+    PolicyField(
+        "org_monthly_cap_cents",
+        "Monthly spending cap",
+        "The same for a calendar month (UTC). 0 = no cap.",
+        "USD",
+        0,
+        100_000_000,
+        0,
+        kind="usd",
+    ),
+    PolicyField(
+        "credit_alert_cents",
+        "Low credit alert",
+        "Admins are alerted in Slack when the Vast account's credit falls under this. Krater checks it every hour. "
+        "0 = no alert.",
+        "USD",
+        0,
+        100_000_000,
+        0,
+        kind="usd",
+    ),
+    PolicyField(
+        "finished_files_days",
+        "Delete finished projects' files after",
+        "A completed or withdrawn project's checkpoints and outputs are deleted this many days after it finishes, so "
+        "storage doesn't fill up. The date is fixed when the project finishes and posted in its channel. Changing "
+        "this doesn't move dates already set. 0 = keep them.",
+        "days",
+        0,
+        3650,
+        30,
+    ),
+)
+ORG_FIELDS_BY_NAME = {f.name: f for f in ORG_FIELDS}
+AUDIT_ORG = "compute_org_limits_update"
 
 
 @dataclass(frozen=True)
@@ -209,6 +281,8 @@ class ComputePolicy:
     box_resume_timeout_minutes: int
     transfer_cap_microusd_per_gb: int
     transfer_warn_percent: int
+    max_machines: int
+    job_idle_warn_minutes: int
     #: The fields a project overrides (empty for the global policy).
     overridden: frozenset[str] = frozenset()
 
@@ -225,7 +299,7 @@ assert {f.name for f in fields(ComputePolicy)} - {"overridden"} == set(FIELDS_BY
 
 
 #: What a scaled kind's stored integer is divided by to show it: basis points per 1, micro-dollars per GB per $/TB.
-_SCALED = {"bp": 10_000, "usd_per_tb": 1_000}
+_SCALED = {"bp": 10_000, "usd_per_tb": 1_000, "usd": 100}
 
 
 def format_value(field: PolicyField, value: int | None) -> str:
@@ -265,7 +339,7 @@ def _check_bounds(field: PolicyField, value: int) -> None:
 
 
 def _defaults() -> dict[str, int]:
-    return {f.name: f.default for f in POLICY_FIELDS}
+    return {f.name: f.default for f in POLICY_FIELDS + ORG_FIELDS}
 
 
 def _global_row(session: Session) -> ComputeSettings:
@@ -382,6 +456,53 @@ def set_project_overrides(
     audit.record(session, actor, AUDIT_PROJECT, project=project, payload={"changed": changed}, reason=reason)
     session.flush()
     return effective_policy(session, project)
+
+
+@dataclass(frozen=True)
+class OrgLimits:
+    org_daily_cap_cents: int
+    org_monthly_cap_cents: int
+    credit_alert_cents: int
+    finished_files_days: int
+
+    def values(self) -> dict[str, int]:
+        return {f.name: getattr(self, f.name) for f in ORG_FIELDS}
+
+
+def org_limits(session: Session) -> OrgLimits:
+    row = _global_row(session)
+    return OrgLimits(**{f.name: getattr(row, f.name) for f in ORG_FIELDS})
+
+
+def update_org_limits(session: Session, actor: Actor, *, values: dict[str, int], reason: str) -> OrgLimits:
+    """Set the organization-wide limits. `values` must carry every `ORG_FIELDS` field. Admin only; `reason`
+    required."""
+    _require_admin_and_reason(actor, reason)
+    missing = set(ORG_FIELDS_BY_NAME) - set(values)
+    if missing:
+        raise ValidationFailed({name: "Required." for name in sorted(missing)})
+    errors: dict[str, str] = {}
+    for name in ORG_FIELDS_BY_NAME:
+        try:
+            _check_bounds(ORG_FIELDS_BY_NAME[name], values[name])
+        except ValidationFailed as exc:
+            errors.update(exc.errors)
+    if errors:
+        raise ValidationFailed(errors)
+    row = _global_row(session)
+    changed = {
+        name: {"old": getattr(row, name), "new": values[name]}
+        for name in ORG_FIELDS_BY_NAME
+        if getattr(row, name) != values[name]
+    }
+    if not changed:
+        return org_limits(session)
+    for name in ORG_FIELDS_BY_NAME:
+        setattr(row, name, values[name])
+    row.updated_by_id = actor.user.id
+    audit.record(session, actor, AUDIT_ORG, payload={"changed": changed}, reason=reason)
+    session.flush()
+    return org_limits(session)
 
 
 def projects_with_overrides(session: Session) -> list[tuple[Project, dict[str, int | None]]]:

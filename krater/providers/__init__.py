@@ -121,6 +121,11 @@ class ComputeProvider(Protocol):
         their holder could get into every member's box."""
         ...
 
+    def account_credit(self) -> Decimal | None:
+        """Credit left on the account, in dollars, for the low-credit alert and the admin overview. `None` when the
+        provider doesn't say (a provider billed by invoice)."""
+        ...
+
 
 @dataclass(frozen=True)
 class ProviderInfo:

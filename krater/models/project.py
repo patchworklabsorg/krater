@@ -54,6 +54,11 @@ class Project(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # When the project became `completed` or `withdrawn`; its Slack channels are archived a week after
     # (`krater.services.slack_notify.ARCHIVE_AFTER`). Null while it's open, and for projects finished before this.
     finished_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    # When its checkpoints and outputs in Krater's storage are deleted: set once, when it finishes, from the
+    # `finished_files_days` setting then, and told to the team in its channel. Null: never (it isn't finished, the
+    # setting was 0, or it finished before Krater deleted files). `files_deleted_at` is when that was done.
+    files_delete_on: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    files_deleted_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
     slack_channel_id: Mapped[str | None] = mapped_column(sa.String(64), nullable=True)
     # Set once the channel has been archived (a week after `finished_at`; see `krater.services.slack_notify`).
     # `slack_channel_id` is kept even after archiving, so the project page can still link to it.

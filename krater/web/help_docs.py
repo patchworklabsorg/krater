@@ -51,6 +51,11 @@ GUIDES: tuple[Guide, ...] = (
     ),
     Guide("ospool-grants", "Record a grant that runs on the OSPool, and report what the team used.", "admins"),
     Guide("share-with-ospool", "Send OSPool the projects you choose, as a PDF.", "admins"),
+    Guide(
+        "compute-runbook",
+        "The stop switch, and what to do about each compute alert: spend, unknown charges, credit, storage.",
+        "admins",
+    ),
 )
 _BY_SLUG = {guide.slug: guide for guide in GUIDES}
 _GUIDE_LINK = re.compile(r"(?P<slug>[a-z0-9-]+)\.md(?P<fragment>#[\w-]*)?")

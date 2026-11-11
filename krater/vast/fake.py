@@ -165,6 +165,8 @@ class FakeVast:
         self.gpu_taken: dict[int, bool] = _ById()
         #: SSH keys on the account (Krater keeps none).
         self.account_ssh_keys: list[dict[str, Any]] = []
+        #: The account's credit in dollars, as `GET /users/current/` reports it.
+        self.account_credit: float = 250.0
         # Ids from the clock, so a dev worker that restarts (and so builds a new fake) never reuses one: Krater keeps
         # instance ids unique, as Vast's are. Tests that need fixed ids set `self._ids` themselves.
         self._ids = itertools.count(55_000_001 + (int(time.time()) % 1_000_000) * 100)
@@ -294,6 +296,8 @@ class FakeVast:
                 return self._charges(request)
             case ("GET", ["api", "v0", "ssh"]):
                 return httpx.Response(200, json=list(self.account_ssh_keys))
+            case ("GET", ["api", "v0", "users", "current"]):
+                return httpx.Response(200, json={"id": 1, "credit": self.account_credit, "can_pay": True})
         return httpx.Response(404, json={"success": False, "error": "not_found", "msg": path})
 
     # -- Endpoints -------------------------------------------------------------------------------------

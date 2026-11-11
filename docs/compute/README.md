@@ -21,7 +21,16 @@ optional pinning to it, and the admin images page. See [images.md](images.md).
 **Settings** (`/admin/compute`). Every policy number is a global default with per-project overrides, changed with a
 reason and an audit event: reliability floor, bid margin, pause grace, move after, box idle, destroy after, data
 transfer price cap, data transfer warning, reconcile alert, runner start deadline, heartbeat timeout, storage quota,
-box sync deadline, box resume timeout.
+box sync deadline, box resume timeout, machines at once, idle GPU warning.
+
+**Guards** (`krater/services/compute_halt.py`, `compute_watch.py`). An admin stop switch and organization-wide daily
+and monthly spending caps (off by default) halt everything within a pass (see [scheduler.md](scheduler.md#a-pass)).
+The worker reads the Vast account's credit every reconcile and counts Krater's storage every hour, by project; the
+alerts channel hears about a halt, unknown Vast charges, credit under the low credit alert (off by default) and the
+store 80% full (`KRATER_COMPUTE_STORE_CAPACITY_GB`). A completed or withdrawn project's compute files are deleted
+`finished_files_days` after it ends (30 by default, 0 keeps them); the date is posted in its channel.
+`/admin/compute/overview` shows spend by project and period, machines, queue, storage, caps and credit. What to do
+about each alert: [docs/guides/compute-runbook.md](../guides/compute-runbook.md).
 
 **Price history** (`/pricing/history`). Every hour, whenever it has a Vast key, the worker samples 18 GPU models, bid and on demand: min, p10
 and median full hourly cost of 1-GPU offers with 32 GB of disk. Members pick targets from the chart. A run stops when less than

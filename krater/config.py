@@ -84,6 +84,9 @@ class Settings(BaseSettings):
     compute_pin_image_digest: bool = False
     # The runner binary the portal serves and the worker checksums (built by the Dockerfile's runner stage).
     compute_runner_binary_path: str = "/app/runner/dist/krater-runner-linux-amd64"
+    # How big Krater's object store is, in GB (infra sets it from SeaweedFS's volume limit), for the admin overview
+    # and the "storage nearly full" alert. 0 = unknown: no alert.
+    compute_store_capacity_gb: int = 0
     # The bucket for job checkpoints and outputs, on the same S3 storage as screenshots. Machines only ever get
     # presigned URLs for their own job's keys in it.
     compute_s3_bucket: str = "krater-compute"

@@ -7,7 +7,9 @@ scheduler went unseen until someone read the logs. Two kinds of problem open an 
 - **A task that keeps failing**: the worker counts each failure (`record_failure`). An alert opens once a task has
   failed `threshold` times with no gap longer than its `window`, and clears after a whole window without a failure.
 - **A condition** the periodic `ops_watch` task checks (`check`): Quilt's outbox backing up, prices not refreshed,
-  background jobs ending in error. It opens while the condition holds and clears when it doesn't.
+  background jobs ending in error, compute stopped (by the switch or a spending cap), charges for machines Krater
+  never rented, the provider's credit running low, storage nearly full. It opens while the condition holds and
+  clears when it doesn't.
 
 `deliver` posts what changed. A dead worker can't report itself: `/healthz/worker` answers 503 when its heartbeat is
 stale, for an uptime check outside Krater to watch (`docs/dev/production.md`).
@@ -26,6 +28,8 @@ from sqlalchemy.orm import Session
 
 from krater.config import Settings
 from krater.models import (
+    AuditEvent,
+    ComputeSettings,
     GpuPrice,
     OpsAlert,
     QuiltOutbox,
@@ -48,6 +52,10 @@ QUILT_BACKLOG_AGE = timedelta(minutes=30)
 PRICES_STALE = timedelta(hours=48)
 #: Background jobs that ended in an error (an exception a task didn't catch) within this window open an alert.
 FAILED_JOBS_WINDOW = timedelta(hours=1)
+#: Charges for machines Krater never rented (`krater.compute.reconcile`) keep their alert open this long.
+UNKNOWN_CHARGES_WINDOW = timedelta(hours=24)
+#: The audit action the reconciliation writes for them (`krater.compute.reconcile.AUDIT_UNKNOWN_CHARGES`).
+AUDIT_UNKNOWN_CHARGES = "compute_unknown_charges"
 
 
 @dataclass(frozen=True)
@@ -78,6 +86,10 @@ CONDITION_TITLES = {
     "stash_backlog": "Archive requests to Stash are backing up",
     "prices_stale": "GPU prices aren't being refreshed",
     "failed_jobs": "Background jobs are ending in errors",
+    "compute_halted": "Krater Compute is stopped",
+    "unknown_charges": "Vast charged for machines Krater never rented",
+    "low_credit": "The Vast account's credit is low",
+    "store_full": "Krater's storage is nearly full",
 }
 
 
@@ -174,6 +186,64 @@ def _failed_jobs(session: Session, now: datetime) -> str | None:
     return "In the last hour: " + ", ".join(f"{name} ×{count}" for name, count in rows) + ". See the worker's log."
 
 
+def _compute_halted(session: Session) -> str | None:
+    row = session.get(ComputeSettings, 1)
+    if row is None:
+        return None
+    if row.paused_at is not None:
+        return (
+            f"An admin stopped all compute at {row.paused_at:%Y-%m-%d %H:%M} UTC: {row.paused_reason}. Turn it back on "
+            "from /admin/compute."
+        )
+    if row.halt_reason is not None:
+        return f"{row.halt_reason[:1].upper()}{row.halt_reason[1:]}. See /admin/compute/overview."
+    return None
+
+
+def _unknown_charges(session: Session, now: datetime) -> str | None:
+    events = session.scalars(
+        sa.select(AuditEvent).where(
+            AuditEvent.action == AUDIT_UNKNOWN_CHARGES, AuditEvent.created_at >= now - UNKNOWN_CHARGES_WINDOW
+        )
+    ).all()
+    sources = sorted({source for event in events for source in (event.payload or {}).get("sources", [])})
+    if not sources:
+        return None
+    return (
+        f"Vast billed {', '.join(sources[:10])}{' and more' if len(sources) > 10 else ''}, labelled as Krater's, "
+        "which Krater has no record of renting. The scheduler destroys any it still sees; check the Vast account for "
+        "a leaked key or someone renting by hand. See the runbook on /admin/compute."
+    )
+
+
+def _low_credit(session: Session) -> str | None:
+    from krater.services import compute_settings, compute_watch
+
+    threshold = compute_settings.org_limits(session).credit_alert_cents
+    latest = compute_watch.latest_credit(session)
+    if threshold <= 0 or latest is None or latest.credit_microusd >= threshold * 10_000:
+        return None
+    return (
+        f"${latest.credit_microusd / 1_000_000:,.2f} left as of {latest.observed_at:%Y-%m-%d %H:%M} UTC, under the "
+        f"${threshold / 100:,.2f} alert. Vast stops every machine when the credit runs out. Add credit on Vast."
+    )
+
+
+def _store_full(session: Session, settings: Settings) -> str | None:
+    from krater.services import compute_watch
+
+    capacity = settings.compute_store_capacity_gb * 1024**3
+    if capacity <= 0:
+        return None
+    used, _, observed = compute_watch.storage_totals(session)
+    if observed is None or used * 100 < capacity * compute_watch.STORE_ALERT_PERCENT:
+        return None
+    return (
+        f"{used / 1024**3:,.1f} GB stored of {settings.compute_store_capacity_gb} GB, as of {observed:%H:%M} UTC. "
+        "Uploads fail for every project once it's full. See which projects use most on /admin/compute/overview."
+    )
+
+
 def check(session: Session, settings: Settings, *, now: datetime) -> None:
     """Open or clear every condition, and clear task alerts that have gone a whole window without a failure. The
     caller commits."""
@@ -181,6 +251,10 @@ def check(session: Session, settings: Settings, *, now: datetime) -> None:
     _set_condition(session, "stash_backlog", _stash_backlog(session, settings, now), now=now)
     _set_condition(session, "prices_stale", _prices_stale(session, now), now=now)
     _set_condition(session, "failed_jobs", _failed_jobs(session, now), now=now)
+    _set_condition(session, "compute_halted", _compute_halted(session), now=now)
+    _set_condition(session, "unknown_charges", _unknown_charges(session, now), now=now)
+    _set_condition(session, "low_credit", _low_credit(session), now=now)
+    _set_condition(session, "store_full", _store_full(session, settings), now=now)
     for key, rule in FAILURE_RULES.items():
         row = session.get(OpsAlert, key, with_for_update=True)
         if row is not None and row.last_failed_at is not None and now - row.last_failed_at > rule.window:

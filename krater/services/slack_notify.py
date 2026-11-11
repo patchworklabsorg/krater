@@ -35,13 +35,15 @@ from krater.models import (
     SlackNotification,
     User,
 )
-from krater.services import funding_holds, grants, ospool_grants, teams
+from krater.services import compute_watch, funding_holds, grants, ospool_grants, teams
 from krater.services.actor import GROUP_REVIEWER
 from krater.services.budget_alerts import AUDIT_BUDGET_TEARDOWN, AUDIT_BUDGET_WARNING
 from krater.services.compute_jobs import (
     AUDIT_BOX_DESTROY_SOON,
     AUDIT_BOX_DESTROYED,
     AUDIT_BOX_STOPPED,
+    AUDIT_JOB_ENDED,
+    AUDIT_JOB_IDLE,
     AUDIT_TRANSFER_WARNING,
 )
 from krater.services.grants import AUDIT_GRANT_HELD, AUDIT_GRANT_RELEASED
@@ -518,6 +520,13 @@ def announce_archive(session: Session, slack_client: SlackClient, *, project: Pr
         f"This project is {finished}. Krater archives this channel on {when}: it stays readable and searchable, "
         "but nobody can post in it after that."
     )
+    files_on = project.files_delete_on
+    if files_on is not None and compute_watch.has_compute_files(session, project):
+        text += (
+            f" Krater deletes the project's checkpoints and outputs on {files_on:%B} {files_on.day}, {files_on:%Y}, "
+            "and keeps no copy: download what you want to keep before then (`krater download`, or each job's "
+            "page)."
+        )
     blocks = [{"type": "section", "text": {"type": "mrkdwn", "text": text}}]
     channels = [
         (project.slack_channel_id, project.slack_channel_archived),
@@ -719,7 +728,20 @@ def sync_budget_notifications(session: Session, slack_client: SlackClient) -> No
 
 
 #: Notices about one member's job or box, posted to its project's channel mentioning its owner.
-BOX_NOTICES = (AUDIT_BOX_STOPPED, AUDIT_BOX_DESTROY_SOON, AUDIT_BOX_DESTROYED, AUDIT_TRANSFER_WARNING)
+BOX_NOTICES = (
+    AUDIT_BOX_STOPPED,
+    AUDIT_BOX_DESTROY_SOON,
+    AUDIT_BOX_DESTROYED,
+    AUDIT_TRANSFER_WARNING,
+    AUDIT_JOB_ENDED,
+    AUDIT_JOB_IDLE,
+)
+#: How each ended state reads in a job-ended notice.
+_ENDED = {
+    "succeeded": (":white_check_mark:", "Job finished"),
+    "failed": (":x:", "Job failed"),
+    "cancelled": (":heavy_minus_sign:", "Job cancelled"),
+}
 
 
 def _box_message(session: Session, slack_client: SlackClient, event: AuditEvent, project: Project):
@@ -727,11 +749,29 @@ def _box_message(session: Session, slack_client: SlackClient, event: AuditEvent,
     owner = session.get(User, uuid.UUID(payload["owner_id"])) if payload.get("owner_id") else None
     slack_id = slack_id_for(session, slack_client, owner) if owner is not None else None
     # Without a Slack id there is no name to fall back on: Krater stores none (docs/weave-integration.md).
-    who = f"<@{slack_id}>" if slack_id else "Box owner"
+    owner_label = "Box owner" if event.action.startswith("compute_box_") else "Job owner"
+    who = f"<@{slack_id}>" if slack_id else owner_label
     name = _escape_mrkdwn(payload.get("job_name", "a box"))
     link = f"{get_settings().base_url.rstrip('/')}/projects/{project.id}/compute/{payload.get('job_id', '')}"
     hours = payload.get("destroy_after_hours")
-    if event.action == AUDIT_TRANSFER_WARNING:
+    if event.action == AUDIT_JOB_ENDED:
+        icon, title = _ENDED.get(payload.get("state", ""), (":information_source:", "Job ended"))
+        reason = (payload.get("reason") or "").strip()
+        spent = _format_cents(payload.get("spend_cents") or 0)
+        text = (
+            f"{icon} *{title}*: {who}, *{name}*"
+            + (f": {_escape_mrkdwn(reason)}" if reason and payload.get("state") != "succeeded" else ".")
+            + f" It cost about {spent}. <{link}|See its results and log>."
+        )
+    elif event.action == AUDIT_JOB_IDLE:
+        hourly = payload.get("hourly_microusd") or 0
+        text = (
+            f":hourglass: *GPU idle*: {who}, *{name}*'s GPU has been under 5% use for "
+            f"{payload.get('minutes', 0)} minutes while the machine bills "
+            f"${hourly / 1_000_000:.2f}/h. It may not be using the GPU, or it may be stuck. <{link}|Check its log>, "
+            "and cancel it if it isn't doing what you expect."
+        )
+    elif event.action == AUDIT_TRANSFER_WARNING:
         text = (
             f":warning: *Data transfer cost*: {who}, data in and out of *{name}*'s machine has cost "
             f"{_format_cents(payload.get('transfer_cents', 0))} so far, {payload.get('percent', 0)}% of this "

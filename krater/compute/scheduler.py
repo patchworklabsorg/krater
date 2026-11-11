@@ -12,6 +12,10 @@ Each pass, in order:
 4. **Watch** each live instance: pulling -> running, running -> paused (outbid), and the pause policy (wait the
    grace, raise the bid in steps up to the job's max, then move the job to another machine). It enforces the
    max runtime and destroys the instances of finished jobs.
+While compute is halted (an admin's stop switch, or an organization spending cap: `krater.services.compute_halt`),
+step 4 stops every machine instead (a batch job's is destroyed and the job requeued; a running box saves /workspace
+and stops) and step 5 starts and searches for nothing.
+
 5. **Start** queued jobs, oldest first: search offers for the job's shape, choose the cheapest at or under its
    target (or its max, after `max_wait_minutes`, as the member chose), hold its budget under the project's row
    lock, then rent. Searches are paced (`krater.compute.search_pacing`): Vast's daily quota of search rows is small,
@@ -61,7 +65,16 @@ from krater.providers import (
     ProviderUnavailableError,
 )
 from krater.registry import Registry, RegistryError, parse_reference
-from krater.services import audit, budget, budget_alerts, clearance, compute_jobs, compute_settings, funding_holds
+from krater.services import (
+    audit,
+    budget,
+    budget_alerts,
+    clearance,
+    compute_halt,
+    compute_jobs,
+    compute_settings,
+    funding_holds,
+)
 from krater.services.compute_settings import ComputePolicy
 from krater.services.launch_rules import LAUNCHABLE_STATUSES, hourly_cap_cents
 from krater.vast import Instance, Offer, OfferQuery, RentalType, microusd_to_usd, usd_to_microusd
@@ -91,6 +104,11 @@ DESTROY_WARNING = timedelta(hours=1)
 WATCH_GAP = timedelta(minutes=5)
 #: `destroy_reason` of a box the member asked to start again elsewhere.
 MOVED_BY_MEMBER = "moved by member"
+#: `destroy_reason` of a machine Krater destroyed because compute was halted. Its job goes back in the queue.
+HALTED = "compute stopped"
+#: A batch job that ended longer ago than this when the scheduler first sees it gets no channel notice (a worker
+#: that was down for a day shouldn't post a backlog).
+END_NOTICE_WINDOW = timedelta(hours=1)
 #: Rows a scheduler search asks for, cheapest first: plenty to choose from, and each row counts against Vast's daily
 #: search quota.
 SEARCH_LIMIT = 64
@@ -197,6 +215,8 @@ class Scheduler:
         self._rented_from: set[str] = set()
         # One search per query per pass, shared by held jobs looking for a way out and queued jobs starting.
         self._searches: dict[str, list[Offer]] = {}
+        # Why compute is halted this pass (`krater.services.compute_halt`), as members read it; `None` while it runs.
+        self.halt: str | None = None
 
     # -- Entry point -----------------------------------------------------------------------------------
 
@@ -206,6 +226,9 @@ class Scheduler:
         spend.record_snapshots(self.session, changed, now=self.now)
         self.session.commit()
         self._enforce_budgets()
+        self.halt = compute_halt.halt_reason(self.session, self.now)
+        compute_halt.record(self.session, self.halt, now=self.now)
+        self.session.commit()
 
         listing = {i.id: i for i in self.client.list_instances(label_prefix=self.prefix)}
         by_label = {i.label: i for i in listing.values() if i.label}
@@ -213,7 +236,10 @@ class Scheduler:
         self._sweep(listing)
         self._watch(listing)
         self._requeue_orphans()
-        if self.runner_sha256 is None:
+        self._notify_endings()
+        if self.halt is not None:
+            self._hold_queue()
+        elif self.runner_sha256 is None:
             logger.error(
                 "krater.compute: no runner binary at %s; not renting anything", self.settings.compute_runner_binary_path
             )
@@ -444,7 +470,7 @@ class Scheduler:
                     instance=row,
                     provider_instance_id=row.provider_instance_id,
                 )
-                if job.state is ComputeJobState.PAUSED or row.destroy_reason == MOVED_BY_MEMBER:
+                if job.state is ComputeJobState.PAUSED or row.destroy_reason in (MOVED_BY_MEMBER, HALTED):
                     self._requeue_moved(job)
             elif job.is_active:
                 _event(
@@ -473,7 +499,7 @@ class Scheduler:
         self._record_ssh(row, seen)
 
         if row.destroy_requested_at is not None:
-            moving = job.state is ComputeJobState.PAUSED or row.destroy_reason == MOVED_BY_MEMBER
+            moving = job.state is ComputeJobState.PAUSED or row.destroy_reason in (MOVED_BY_MEMBER, HALTED)
             if self._destroy(row, row.destroy_reason or "requested") and moving:
                 self._requeue_moved(job)
             return
@@ -495,6 +521,9 @@ class Scheduler:
             return
 
         policy = self._policy(job.project)
+        if self.halt is not None:
+            self._halt_one(row, job, policy)
+            return
         if row.state is ComputeInstanceState.STOPPED:
             self._watch_stopped(row, job, seen, policy, previously_seen=previously_seen)
             return
@@ -560,6 +589,8 @@ class Scheduler:
             self._check_runner(row, job, policy)
             if job.kind is ComputeJobKind.BOX and job.state is ComputeJobState.RUNNING:
                 self._check_idle(row, job, policy)
+            elif job.kind is ComputeJobKind.JOB and job.state is ComputeJobState.RUNNING:
+                self._check_job_idle(row, job, policy)
             return
 
         if row.state is ComputeInstanceState.RUNNING and self._stopped_itself(row, seen, policy):
@@ -609,6 +640,111 @@ class Scheduler:
                     self._requeue_moved(job)
             elif paused_for >= timedelta(minutes=policy.pause_grace_minutes) and row.interruptible:
                 self._raise_bid(row, job, policy)
+
+    def _halt_one(self, row: ComputeInstance, job: ComputeJob, policy: ComputePolicy) -> None:
+        """Compute is halted: stop this machine. A batch job's machine is destroyed and the job requeued (it resumes
+        from its last checkpoint in storage). A box that has run saves /workspace and stops, as an idle box does; one
+        still starting is destroyed and requeued, having nothing on its disk. A stopped box stays stopped, and a
+        resume asked for before the halt is taken back."""
+        reason = f"{HALTED}: {self.halt}"
+        if job.kind is ComputeJobKind.BOX:
+            if row.state is ComputeInstanceState.STOPPED:
+                if row.start_requested_at is not None:
+                    self.client.stop_instance(row.provider_instance_id)
+                    row.start_requested_at = None
+                    job.state_reason = f"Not resumed: {self.halt}. Resume it once compute is back on."
+                    _event(self.session, job, "resume_blocked", job.state_reason, now=self.now, instance=row)
+                return
+            if row.state is ComputeInstanceState.RUNNING:
+                if row.stop_requested_at is None:
+                    self.request_stop(row, job, reason)
+                self._finish_stopping(row, job, policy)
+                return
+            if row.runner_starts > 0:
+                self._stop_box(row, job, reason)
+                return
+        _event(self.session, job, "halted", f"Stopping the machine: {self.halt}.", now=self.now, instance=row)
+        if self._destroy(row, HALTED):
+            self._requeue_moved(job)
+
+    def _hold_queue(self) -> None:
+        """Compute is halted: queued jobs wait, without searching, and say why."""
+        reason = f"Waiting: {self.halt}."
+        stmt = sa.select(ComputeJob).where(ComputeJob.state == ComputeJobState.QUEUED)
+        for job in list(self.session.scalars(stmt)):
+            if job.state_reason != reason:
+                job.state_reason = reason
+        self.session.commit()
+
+    def _check_job_idle(self, row: ComputeInstance, job: ComputeJob, policy: ComputePolicy) -> None:
+        """Warn a batch job's team once when its GPU has stayed under `IDLE_GPU_PERCENT` for the policy's idle warning
+        time, from the runner's own samples. The job keeps running: some jobs have long stretches without the GPU.
+        After the GPU is busy again, a new idle stretch can warn again."""
+        minutes = policy.job_idle_warn_minutes
+        beat = row.last_heartbeat or {}
+        if minutes <= 0 or "gpu_util" not in beat or row.runner_starts < row.runner_starts_needed:
+            return  # off, nothing to judge by, or a heartbeat from before the container restarted
+        if beat["gpu_util"] >= IDLE_GPU_PERCENT:
+            row.idle_since = None
+            row.idle_warned_at = None
+            return
+        if row.idle_since is None:
+            row.idle_since = self.now
+            return
+        if row.idle_warned_at is not None or self.now - row.idle_since < timedelta(minutes=minutes):
+            return
+        row.idle_warned_at = self.now
+        message = (
+            f"The GPU has been under {IDLE_GPU_PERCENT}% use for {_span(minutes)}. The job keeps running and billing; "
+            "check its log."
+        )
+        _event(self.session, job, "idle_warning", message, now=self.now, instance=row, gpu_util=beat["gpu_util"])
+        audit.record(
+            self.session,
+            None,
+            compute_jobs.AUDIT_JOB_IDLE,
+            project=job.project,
+            payload={
+                "job_id": str(job.id),
+                "job_name": job.name,
+                "owner_id": str(job.submitter_id),
+                "minutes": minutes,
+                "gpu_util": beat["gpu_util"],
+                "hourly_microusd": row.gpu_microusd + row.disk_microusd,
+            },
+        )
+
+    def _notify_endings(self) -> None:
+        """Write the channel notice for each batch job that ended since the last pass (`AUDIT_JOB_ENDED`; the Slack
+        sync posts it, mentioning whoever submitted it). None for a member's own cancel, or for a job that ended more
+        than `END_NOTICE_WINDOW` before Krater saw it."""
+        stmt = sa.select(ComputeJob).where(
+            ComputeJob.kind == ComputeJobKind.JOB,
+            ComputeJob.state.in_(FINISHED_JOB_STATES),
+            ComputeJob.end_notified_at.is_(None),
+        )
+        for job in list(self.session.scalars(stmt)):
+            job.end_notified_at = self.now
+            if job.ended_at is None or self.now - job.ended_at > END_NOTICE_WINDOW:
+                continue
+            if job.state_reason == compute_jobs.MEMBER_CANCEL_REASON:
+                continue
+            audit.record(
+                self.session,
+                None,
+                compute_jobs.AUDIT_JOB_ENDED,
+                project=job.project,
+                payload={
+                    "job_id": str(job.id),
+                    "job_name": job.name,
+                    "owner_id": str(job.submitter_id),
+                    "state": job.state.value,
+                    "reason": job.state_reason or "",
+                    "exit_code": job.exit_code,
+                    "spend_cents": job.spend_cents,
+                },
+            )
+        self.session.commit()
 
     def _failed_machines(self, job: ComputeJob) -> set[str]:
         """The machines whose container never started for `job`."""
@@ -1100,6 +1236,14 @@ class Scheduler:
         if held is not None:
             job.state_reason = held
             return False  # it stays queued and starts once Weave clears the team
+        limit_machines = self._policy(project).max_machines
+        in_use = compute_jobs.machines_in_use(self.session, project)
+        if in_use >= limit_machines:
+            # Before any search: a job that can't rent spends none of the provider's search quota.
+            job.state_reason = (
+                f"Waiting: the project has {in_use} machines at once, its limit. It starts when one of them ends."
+            )
+            return False
         plan = self._plan(job)
         if plan is None:
             _finish(

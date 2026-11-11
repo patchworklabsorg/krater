@@ -15,6 +15,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 
+import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from krater import providers
@@ -22,6 +23,8 @@ from krater.config import get_settings
 from krater.models import (
     ComputeEscalation,
     ComputeEvent,
+    ComputeInstance,
+    ComputeInstanceState,
     ComputeJob,
     ComputeJobKind,
     ComputeJobState,
@@ -29,7 +32,7 @@ from krater.models import (
     Project,
 )
 from krater.models.compute_job import FINISHED_JOB_STATES
-from krater.services import budget, clearance, compute_settings, funding_holds, teams
+from krater.services import budget, clearance, compute_halt, compute_settings, funding_holds, teams
 from krater.services.actor import Actor
 from krater.services.errors import ConfirmationRequired, InvalidState, NotAllowed, ValidationFailed
 from krater.services.launch_rules import LAUNCHABLE_STATUSES
@@ -44,6 +47,19 @@ AUDIT_BOX_DESTROY_SOON = "compute_box_destroy_soon"
 AUDIT_BOX_DESTROYED = "compute_box_destroyed"
 #: `actor=None`: a job's data transfer has cost a large share of its project's budget (`krater.compute.reconcile`).
 AUDIT_TRANSFER_WARNING = "compute_transfer_warning"
+#: A batch job ended (succeeded, failed, or was stopped by Krater or an admin): a notice in its project's channel.
+AUDIT_JOB_ENDED = "compute_job_ended"
+#: A batch job's GPU sat nearly unused for the policy's idle warning time.
+AUDIT_JOB_IDLE = "compute_job_idle"
+#: How a member's own cancel reads (`cancel_job`): no channel notice for it, they know.
+MEMBER_CANCEL_REASON = "Cancelled by a team member."
+#: Machines that hold a place under a project's "machines at once" limit (`max_machines`): all but a stopped box.
+LIMITED_STATES = (
+    ComputeInstanceState.CREATING,
+    ComputeInstanceState.PROVISIONING,
+    ComputeInstanceState.RUNNING,
+    ComputeInstanceState.PAUSED,
+)
 _IMAGE_RE = re.compile(r"^[a-z0-9][a-z0-9._\-/:@]*$")
 #: The most data a job may say it moves each way, in GB (100 TB).
 MAX_DATA_GB = 100_000
@@ -281,6 +297,16 @@ def cancel_job(session: Session, actor: Actor, *, job: ComputeJob, now: datetime
 # -- Boxes ---------------------------------------------------------------------------------------------------
 
 
+def machines_in_use(session: Session, project: Project) -> int:
+    """How many of `project`'s machines count against its "machines at once" limit."""
+    return session.scalar(
+        sa.select(sa.func.count())
+        .select_from(ComputeInstance)
+        .join(ComputeJob, ComputeJob.id == ComputeInstance.job_id)
+        .where(ComputeJob.project_id == project.id, ComputeInstance.state.in_(LIMITED_STATES))
+    )
+
+
 def _live_instance(job: ComputeJob):
     live = [row for row in job.instances if row.is_live]
     return live[-1] if live else None
@@ -325,6 +351,12 @@ def resume_box(session: Session, actor: Actor, *, job: ComputeJob, now: datetime
     if job.project.status not in LAUNCHABLE_STATUSES:
         raise InvalidState(f"A {job.project.status.value} project can't run boxes.")
     funding_holds.require_not_held(job.project)
+    compute_halt.require_running(session)
+    limit = compute_settings.effective_policy(session, job.project).max_machines
+    if machines_in_use(session, job.project) >= limit:
+        raise InvalidState(
+            f"The project already has {limit} machines at once, its limit. Resume this box once one of them ends."
+        )
     clearance.require_team_cleared(session, weave_client, job.project)
     row.start_requested_at = now
     job.state_reason = "Resuming on the same machine."

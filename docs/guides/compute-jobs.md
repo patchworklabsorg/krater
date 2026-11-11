@@ -323,7 +323,7 @@ when Krater moves it to another machine.
 
 | State | Meaning |
 | --- | --- |
-| **queued** | Waiting for a machine at your price, for budget, or for the team's verification. The reason shows under the name |
+| **queued** | Waiting for a machine at your price, for budget, for the team's verification, for a free place under the project's machine limit, or while an admin has stopped compute. The reason shows under the name |
 | **starting** | A machine is rented and pulling your image. The disk bills from now; the GPU from when it runs |
 | **running** | Your command is running |
 | **paused** | The interruptible machine was outbid. See [Choosing a price](#choosing-a-price) for what happens next |
@@ -357,6 +357,17 @@ want its last outputs.
 - **If Krater itself is down** for a long time (3 hours by default), your machine stops itself, keeping its disk, so
   nothing bills unwatched. When Krater is back it starts the machine again and your job carries on from the
   checkpoints on its disk.
+- **When a job ends**, Krater posts in your project's Slack channel: finished, failed (with why), or stopped by Krater
+  or an admin, with what it cost, mentioning whoever submitted it. Your own cancels aren't posted.
+- **A GPU that sits idle** (under 5% use for 30 minutes by default) gets one warning in the channel. The job keeps
+  running and billing: often the code isn't using the GPU, or it's stuck waiting for something. Check its output.
+- **Machines at once.** A project can have 4 machines running, starting or outbid at once by default (an admin can
+  change it for your project). More jobs wait in the queue until one ends. A stopped box doesn't count, but resuming
+  one needs a free place.
+- **If an admin stops all compute** (something looks wrong with spend or with Vast), your job's machine is
+  destroyed and the job goes back in the queue, saying why. It carries on from its last checkpoint in storage once
+  compute is back on, and the time it was stopped doesn't count against its max wait. A running box saves /workspace
+  and stops; resume it later.
 
 ## Getting your results
 
@@ -368,7 +379,12 @@ want its last outputs.
 
 Who can see them: everyone on the team, and admins. Reviewers see the job but not its files or output.
 
-Files stay in Krater's storage and count against the project's storage quota. Download what you need to keep.
+Files stay in Krater's storage and count against the project's storage quota. Krater keeps no backup of them, so
+download what you need to keep.
+
+**After the project ends** (completed or withdrawn), its checkpoints, outputs, logs and workspaces are deleted 30 days
+later by default. The exact date is posted in the project's channel when it finishes. Download everything you want to
+keep before then: `krater download <job> results/` for each job.
 
 ## Boxes: working interactively
 

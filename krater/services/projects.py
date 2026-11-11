@@ -44,7 +44,16 @@ from krater.models import (
     RevisionKind,
     RevisionOutcome,
 )
-from krater.services import approval_policy, audit, budget, grants, quilt_events, stash_archives, teams
+from krater.services import (
+    approval_policy,
+    audit,
+    budget,
+    compute_watch,
+    grants,
+    quilt_events,
+    stash_archives,
+    teams,
+)
 from krater.services.actor import Actor
 from krater.services.errors import InvalidState, NotAllowed, NotFound, ValidationFailed
 from krater.weave import WeaveClient
@@ -813,6 +822,7 @@ def _apply_approve(
     if stage is ApprovalStage.COMPLETION:
         project.status = ProjectStatus.COMPLETED
         project.finished_at = datetime.now(UTC)
+        compute_watch.schedule_file_deletion(session, project, finished_at=project.finished_at)
         grants.cancel_pending(
             session, project, actor=actor, reason="The project was completed before its team was verified."
         )
@@ -1191,6 +1201,7 @@ def withdraw(session: Session, actor: Actor, *, project: Project, reason: str | 
 
     project.status = ProjectStatus.WITHDRAWN
     project.finished_at = datetime.now(UTC)
+    compute_watch.schedule_file_deletion(session, project, finished_at=project.finished_at)
     grants.cancel_pending(session, project, actor=actor, reason=reason or "The project was withdrawn.")
     _supersede_pending_revisions(session, project)
 

@@ -27,6 +27,8 @@ FORM = {
     "storage_quota_gb": "50",
     "transfer_cap_microusd_per_gb": "20",
     "transfer_warn_percent": "10",
+    "max_machines": "4",
+    "job_idle_warn_minutes": "30",
 }
 
 
