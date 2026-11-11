@@ -6,6 +6,14 @@ minute (`compute_schedule`), under a procrastinate lock so passes never overlap,
 
 ## A pass
 
+Before anything else the pass enforces budgets and decides whether compute is **halted**
+(`krater/services/compute_halt.py`): an admin's stop switch, or the organization's daily or monthly spending cap
+(Krater's spend across all projects since 00:00 UTC or the 1st, from `SpendSnapshot`; a cap of 0 is off). The reason
+is kept on `compute_settings` (`halted_since`, `halt_reason`) and raised as an ops alert. While halted, step 4 destroys
+every batch job's machine and requeues the job ("compute stopped", attempt + 1), stops every running box after its
+workspace sync, and step 5 starts and searches for nothing: queued jobs say why. When the halt ends, every queued job's
+`queued_at` moves forward by the time it lasted (never past now), so the halt doesn't count against `max_wait_minutes`.
+
 1. **List** the account's instances that carry Krater's label prefix (`KRATER_COMPUTE_LABEL_PREFIX`, default
    `krater-job-`).
 2. **Settle lost creates.** Each rental's `compute_instances` row is committed, with a unique label
@@ -31,11 +39,20 @@ minute (`compute_schedule`), under a procrastinate lock so passes never overlap,
      job's machine is started again (then the pause rules apply), a box becomes `stopped` for its member to resume;
    - not looked at for 5 minutes or more (Krater was down) → its runner deadlines count from now;
    - gone from Vast unexpectedly → job requeued;
-   - job finished (cancelled, failed, succeeded) → machine destroyed.
-5. **Start** queued jobs, oldest first. A job whose team Weave hasn't cleared (ID verification, and a verified
+   - job finished (cancelled, failed, succeeded) → machine destroyed;
+   - a running batch job whose runner reports GPU use under 5% for `job_idle_warn_minutes` (per project, default 30;
+     0 is off) → one `compute_job_idle` audit event, posted in the project's channel. Warn only: nothing stops. It
+     warns again only after the GPU has been busy in between.
+5. **Notify endings.** Every batch job that finished since the last pass gets one `compute_job_ended` audit event
+   (state, reason, exit code, spend), posted in the project's channel by `sync_box_notifications`. Cancels by a team
+   member aren't posted; a job that ended over an hour ago (a backlog after downtime) is marked and skipped.
+   `compute_jobs.end_notified_at` keeps it to once.
+6. **Start** queued jobs, oldest first. A job whose team Weave hasn't cleared (ID verification, and a verified
    guardian for a member under 18; `krater.services.clearance`, docs/SPEC.md "Verification before funding") waits
    with the reason on its page and isn't searched for. Weave is asked once per project per pass, fresh; Weave down
-   holds it too. Running machines aren't stopped for it. For each other job, search offers for its shape (GPU models or minimum VRAM, GPU
+   holds it too. Running machines aren't stopped for it. A project already at its `max_machines` (per project, default
+   4: machines creating, provisioning, running or outbid; a stopped box doesn't count, and resuming one needs a free
+   place) waits too, with no search. For each other job, search offers for its shape (GPU models or minimum VRAM, GPU
    count, disk, the reliability floor), price every offer at full hourly cost (the bid, min bid plus the margin, or
    `dph_base` on demand, plus disk), and take the cheapest at or under the target (several GPU models: best
    performance per dollar). After `max_wait_minutes` the job does what the member chose: keep waiting, accept up to
