@@ -84,6 +84,10 @@ class ProjectRevision(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     # decision can update it in place rather than posting a new one. Both null until it's posted.
     slack_message_channel_id: Mapped[str | None] = mapped_column(sa.String(64), nullable=True)
     slack_message_ts: Mapped[str | None] = mapped_column(sa.String(32), nullable=True)
+    # When the review message is in the reviewers-only channel: the notice in the team's channel (the project's
+    # `slack_channel_id`) that says it's in review, which the decision updates. Null when the review message is in
+    # the team channel itself (every revision from before reviewer channels).
+    slack_team_message_ts: Mapped[str | None] = mapped_column(sa.String(32), nullable=True)
 
     outcome: Mapped[RevisionOutcome] = mapped_column(
         pg_enum(RevisionOutcome, name="revision_outcome"),

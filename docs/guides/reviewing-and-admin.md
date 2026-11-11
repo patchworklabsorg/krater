@@ -22,9 +22,15 @@ Members' side of all this: [Using Krater](using-krater.md) and [Running jobs and
 
 ### Where to review
 
-- **Slack.** Each submitted project has a private channel with its team and every reviewer. The review message shows
-  the stage, the amount asked for, the one-sentence summary, and **Approve** and **Reject** buttons. Reject asks for
-  a reason in a dialog.
+- **Slack.** Each submitted project has two private channels:
+  - `ganymede-<project>-…`, with its team and every reviewer: talk with the team here. It shows when a revision is in
+    review, and then the decision.
+  - `ganymede-rev-<project>-…`, reviewers only, never anyone on the team: talk among yourselves here. The review
+    message is posted here: the stage, the amount asked for, the one-sentence summary, and **Approve** and **Reject**
+    buttons. Reject asks for a reason in a dialog. If you join or are invited to the team, you're taken out of it.
+
+  Projects submitted before reviewer channels came in keep their review message in the team channel until their next
+  submission.
 - **The web.** The **Review queue** (`/reviews`) lists every submission waiting for your decision. A project's page
   has the whole application, the estimates (flagged when the amount asked for differs a lot from the estimate), the
   Stash archives of its links, the team's verification and US residency, the revision history with every review, and

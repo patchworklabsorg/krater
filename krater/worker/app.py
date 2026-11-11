@@ -465,14 +465,18 @@ def slack_post_admin_override(
 
 @app.task(name="slack_invite_team")
 def slack_invite_team(project_id: str) -> None:
-    """Invite a project's team to its channel after someone joins. A no-op while the project has no channel:
-    submitting creates it and invites the whole team then."""
+    """Invite a project's team to its channel after someone joins, and take a reviewer who joined out of its
+    reviewers-only channel. A no-op while the project has no channel: submitting creates it and invites the whole
+    team then."""
     session = get_sessionmaker()()
     try:
         project = session.get(Project, uuid.UUID(project_id))
         if project is None or project.slack_channel_id is None or project.slack_channel_archived:
             return
-        slack_notify.ensure_channel(session, get_slack_client(), get_weave_client(), project=project)
+        slack_client, weave_client = get_slack_client(), get_weave_client()
+        slack_notify.ensure_channel(session, slack_client, weave_client, project=project)
+        # Someone who joined the team may be a reviewer: they leave its reviewers-only channel now.
+        slack_notify.sync_review_channel(session, slack_client, weave_client, project=project)
         session.commit()
     except SlackError as exc:
         logger.exception("krater.slack_invite_team failed")
