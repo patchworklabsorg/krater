@@ -250,9 +250,10 @@ def _review_message(project: Project, revision: ProjectRevision) -> tuple[list[d
         },
     ]
     if revision.kind is not RevisionKind.COMPLETION:
+        # Above the buttons: they stay the message's last block.
         link = f"{get_settings().base_url.rstrip('/')}/projects/{project.id}"
         note = f"Approve here grants the full amount. To grant less, approve on <{link}|the project page>."
-        blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": note}]})
+        blocks.insert(-1, {"type": "context", "elements": [{"type": "mrkdwn", "text": note}]})
     return blocks, text
 
 
