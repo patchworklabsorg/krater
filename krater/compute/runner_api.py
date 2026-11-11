@@ -181,7 +181,38 @@ _HEARTBEAT_FIELDS = {
     "sessions": int,
     "phase": str,
     "key_updates": bool,
+    # Bytes the container received and sent since its job's first start on this machine (runner/netcount.go).
+    "net_in_bytes": int,
+    "net_out_bytes": int,
 }
+
+#: The link speed assumed when the host's offer gave none, Mbps.
+DEFAULT_LINK_MBPS = 10_000
+#: Headroom over the host's measured speed: Vast's figure is a past measurement, not a hard limit.
+LINK_SLACK = 1.5
+#: The interval a report may cover at least, seconds: a first report covers the start, restores included.
+MIN_REPORT_SECONDS = 120
+
+
+def _bounded(reported: Any, previous: int, mbps: int | None, seconds: float) -> int:
+    """The new total: what the runner reported, never less than before, and never more than the link could have
+    carried since the last report. The runner runs the member's code as root and holds the token, so a report is a
+    claim: it may only raise the estimate, and only by what is physically possible (it can't trip the project's
+    budget stop or the organization's spending caps with an invented terabyte)."""
+    if not isinstance(reported, int) or isinstance(reported, bool) or reported <= previous:
+        return previous
+    allowance = int((mbps or DEFAULT_LINK_MBPS) * 1_000_000 / 8 * max(seconds, MIN_REPORT_SECONDS) * LINK_SLACK)
+    return min(reported, previous + allowance)
+
+
+def _record_net_use(instance: ComputeInstance, kept: dict[str, Any], *, now: datetime) -> None:
+    if "net_in_bytes" not in kept and "net_out_bytes" not in kept:
+        return  # an older runner, or one that can't tell it sees only its own network
+    since = instance.net_reported_at or instance.created_at or now
+    seconds = (now - since).total_seconds()
+    instance.net_in_bytes = _bounded(kept.get("net_in_bytes"), instance.net_in_bytes, instance.link_down_mbps, seconds)
+    instance.net_out_bytes = _bounded(kept.get("net_out_bytes"), instance.net_out_bytes, instance.link_up_mbps, seconds)
+    instance.net_reported_at = now
 
 
 @dataclass(frozen=True)
@@ -200,6 +231,7 @@ def heartbeat(session: Session, instance: ComputeInstance, payload: dict[str, An
         kept["phase"] = kept["phase"][:32]
     instance.last_heartbeat_at = now
     instance.last_heartbeat = kept
+    _record_net_use(instance, kept, now=now)
     session.flush()
     wants_sync = instance.stop_requested_at is not None and (
         instance.last_synced_at is None or instance.last_synced_at < instance.stop_requested_at

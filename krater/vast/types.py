@@ -116,6 +116,9 @@ class Offer:
     disk_space: float | None  # GB free on the host
     geolocation: str | None
     verified: bool
+    # The host's measured network speeds, Mbps (Vast's `inet_down`, `inet_up`).
+    inet_down_mbps: float | None = None
+    inet_up_mbps: float | None = None
 
     @classmethod
     def from_json(cls, raw: dict[str, Any]) -> Offer:
@@ -139,6 +142,8 @@ class Offer:
             disk_space=_float(raw.get("disk_space")),
             geolocation=raw.get("geolocation"),
             verified=raw.get("verification") == "verified" if "verification" in raw else bool(raw.get("verified")),
+            inet_down_mbps=_float(raw.get("inet_down")),
+            inet_up_mbps=_float(raw.get("inet_up")),
         )
 
     @property

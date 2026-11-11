@@ -133,6 +133,7 @@ func runBox(ctx context.Context, api *API, info *StartInfo, workspace *Syncer, g
 		if util, ok := sampler.average(); ok {
 			beat["gpu_util"] = util
 		}
+		addNetUse(beat)
 		reply, err := api.HeartbeatReply(ctx, beat)
 		var denied *ErrDenied
 		if errors.As(err, &denied) {

@@ -72,6 +72,9 @@ class ComputeSettings(Base):
     # A finished (completed or withdrawn) project's checkpoints and outputs are deleted this many days after it
     # finished; the date is fixed when it finishes (`Project.files_delete_on`). 0 = kept.
     finished_files_days: Mapped[int] = mapped_column(sa.Integer, nullable=False, server_default="30")
+    # Krater rents nothing new while the provider account's credit wouldn't cover this many hours of every machine
+    # it holds plus the new one. 0 = off (the default: the credit reading isn't confirmed against Vast yet).
+    credit_reserve_hours: Mapped[int] = mapped_column(sa.Integer, nullable=False, server_default="0")
 
     # The stop switch: set while an admin has stopped all compute (`krater.services.compute_halt`).
     paused_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)

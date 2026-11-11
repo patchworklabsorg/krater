@@ -302,11 +302,18 @@ Vast bills each GB into and out of a machine at the host's own price, **on top o
 includes the image pull and the checkpoints Krater restores, again on every move. Data out includes checkpoints,
 outputs and anything your code uploads elsewhere.
 
-Krater protects your budget three ways:
+Krater protects your budget four ways:
 
 - **A price cap.** Krater never rents a host that charges more than $20 per TB each way (an admin can change this).
+- **It counts as it goes.** Your machine reports what it has downloaded and uploaded every minute, and Krater adds
+  that to your spend at the host's prices straight away, along with the image pull (from the image's size, each
+  time a machine pulls it). Vast's own charges replace the estimate every hour.
 - **Your estimate.** Fill in **Data into the machine** and **Data out of the machine** (in GB) on the form, or pass
-  `--data-in` and `--data-out` to `krater submit`. Krater then prefers hosts where your data is cheap.
+  `--data-in` and `--data-out` to `krater submit`. Leave out the image: Krater knows its size. Krater then prefers
+  hosts where your data is cheap, and holds its cost in your budget with the job's hours. A job needs enough budget
+  for its first hour plus the pull and your data in before it starts.
+- **Fast hosts for big images.** With a big image, Krater prefers a host that downloads it quickly: a slow link can
+  keep a job waiting for its image for most of an hour.
 - **A warning.** If your estimate, at the cap, could cost 10% or more of the project's budget, or more than is left,
   Krater asks you to confirm before queueing. A running job whose transfer passes that share posts a warning to the
   project's Slack channel, mentioning you.
@@ -610,7 +617,8 @@ Only rank 0 should write checkpoints and outputs.
 ## Your budget and compute
 
 - **Spend** is what Krater's machines have cost so far: the GPU while it runs, the disk from the moment it's rented,
-  and data transfer. It's estimated live and corrected every hour from Vast's own charges. The project page shows
+  the image pull, and data transfer as the machine reports it. It's estimated live and corrected every hour from
+  Vast's own charges. The project page shows
   spend and what's left.
 - **A job needs at least an hour of budget to start**, and then holds the cost of its max runtime (or whatever is
   left) while it runs, so two jobs can't spend the same dollars. A short max runtime holds less.

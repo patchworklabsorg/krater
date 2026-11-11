@@ -78,6 +78,9 @@ class ComputeJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # Why the job is where it is, for the member: "waiting for an RTX 4090 bid at or under $0.20/h", ...
     state_reason: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
     queued_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
+    # When it last started waiting for a machine (submitted or requeued), by the wall clock: unlike `queued_at`, never
+    # moved forward for the time compute was stopped. For wait-time data (`ComputeWaitSample`).
+    wait_started_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
     ended_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
     exit_code: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
@@ -156,6 +159,33 @@ class ComputeInstance(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     transfer_in_microusd_per_gb: Mapped[int | None] = mapped_column(sa.BigInteger, nullable=True)
     transfer_out_microusd_per_gb: Mapped[int | None] = mapped_column(sa.BigInteger, nullable=True)
     transfer_charged_microusd: Mapped[int | None] = mapped_column(sa.BigInteger, nullable=True)
+    # The host's network speeds from its offer (Vast's `inet_down`, `inet_up`, Mbps): they bound what the runner may
+    # report it moved, and set how long the image pull takes.
+    link_down_mbps: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
+    link_up_mbps: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
+    # The image's compressed size (`krater.registry`), which the host downloads before the container starts.
+    image_bytes: Mapped[int | None] = mapped_column(sa.BigInteger, nullable=True)
+    # Bytes the container received and sent since its job's first start on this machine, as its runner reports them
+    # (each report bounded by what the link could carry since the last), when it last reported, and how many of
+    # them the live estimate has priced so far (`krater.compute.spend`).
+    net_in_bytes: Mapped[int] = mapped_column(sa.BigInteger, nullable=False, default=0, server_default="0")
+    net_out_bytes: Mapped[int] = mapped_column(sa.BigInteger, nullable=False, default=0, server_default="0")
+    net_reported_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    net_priced_in_bytes: Mapped[int] = mapped_column(sa.BigInteger, nullable=False, default=0, server_default="0")
+    net_priced_out_bytes: Mapped[int] = mapped_column(sa.BigInteger, nullable=False, default=0, server_default="0")
+    # Krater's own estimate split by what it's for, in micro-dollars: kept as estimated even after reconciliation
+    # replaces `accrued_microusd` with Vast's figure, so the two can be compared item by item.
+    est_gpu_microusd: Mapped[int] = mapped_column(sa.BigInteger, nullable=False, default=0, server_default="0")
+    est_disk_microusd: Mapped[int] = mapped_column(sa.BigInteger, nullable=False, default=0, server_default="0")
+    est_image_microusd: Mapped[int] = mapped_column(sa.BigInteger, nullable=False, default=0, server_default="0")
+    est_transfer_in_microusd: Mapped[int] = mapped_column(sa.BigInteger, nullable=False, default=0, server_default="0")
+    est_transfer_out_microusd: Mapped[int] = mapped_column(sa.BigInteger, nullable=False, default=0, server_default="0")
+    # Vast's charges at the last reconciliation by item type (`gpu`, `disk`, `bwd`, `bwu`, ...), in micro-dollars.
+    charged_items: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # For outbid-risk data: the cheapest GPU price the offer allowed when rented (its minimum bid, or `dph_base` on
+    # demand), against `gpu_microusd`, what Krater paid; and how often the machine was outbid.
+    market_gpu_microusd: Mapped[int | None] = mapped_column(sa.BigInteger, nullable=True)
+    outbid_count: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=0, server_default="0")
 
     last_provider_status: Mapped[str | None] = mapped_column(sa.String(64), nullable=True)
     last_seen_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)

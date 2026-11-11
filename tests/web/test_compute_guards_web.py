@@ -14,6 +14,7 @@ LIMITS = {
     "org_monthly_cap_cents": "0",
     "credit_alert_cents": "0",
     "finished_files_days": "30",
+    "credit_reserve_hours": "0",
 }
 
 

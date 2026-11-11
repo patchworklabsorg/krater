@@ -11,9 +11,10 @@ one (finished machines charged less than estimated) as `spend.corrected`. Charge
 answered without confirming are counted against that create's job (found by label). Charges for any other instance
 with Krater's label prefix are logged as an alert: something rented outside the scheduler.
 
-Vast itemizes each charge (`gpu`, `disk`, `bwd` for data into the machine, `bwu` for data out). The transfer items are
-kept per instance, and a job whose transfer has cost the project's transfer warning share of its budget (again at
-each further multiple of it) gets an event on its page and a notice in the project's Slack channel.
+Vast itemizes each charge (`gpu`, `disk`, `bwd` for data into the machine, `bwu` for data out). Every item is kept
+per instance (`charged_items`, against Krater's own split in `est_*_microusd`). The transfer items are also summed,
+and a job whose transfer has cost the project's transfer warning share of its budget (again at each further
+multiple of it) gets an event on its page and a notice in the project's Slack channel.
 """
 
 from __future__ import annotations
@@ -83,6 +84,7 @@ def run(session: Session, client: ComputeProvider, settings: Settings, *, now: d
 
     actual_by_instance: dict[int, int] = {}
     transfer_by_instance: dict[int, int] = {}
+    items_by_instance: dict[int, dict[str, int]] = {}
     labels: dict[int, str | None] = {}
     for charge in charges:
         if charge.instance_id is None:
@@ -93,6 +95,9 @@ def run(session: Session, client: ComputeProvider, settings: Settings, *, now: d
         transfer_by_instance[charge.instance_id] = transfer_by_instance.get(charge.instance_id, 0) + sum(
             usd_to_microusd(item.amount) for item in charge.items if item.type in TRANSFER_ITEM_TYPES
         )
+        items = items_by_instance.setdefault(charge.instance_id, {})
+        for item in charge.items:
+            items[item.type] = items.get(item.type, 0) + usd_to_microusd(item.amount)
         labels[charge.instance_id] = charge.label
     rows.extend(_adopt_unconfirmed(session, labels, ours, provider=_title(settings), now=now))
 
@@ -125,6 +130,7 @@ def run(session: Session, client: ComputeProvider, settings: Settings, *, now: d
         estimate = row.accrued_microusd
         row.charged_microusd = actual
         row.transfer_charged_microusd = transfer_by_instance.get(row.provider_instance_id, 0)
+        row.charged_items = items_by_instance.get(row.provider_instance_id) or None
         row.charged_at = now
         if row.destroyed_at is None:
             # Live: Vast's charges may lag what is running now, so never correct downwards here (a lower

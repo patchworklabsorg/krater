@@ -8,6 +8,8 @@ image's registry for two things, through the Docker Registry HTTP API v2 with an
   launches that exact digest (`docs/compute/images.md`).
 - `inspect`: an image's config for the admin images page: entrypoint, command, user, environment, labels, the build
   history (the Dockerfile steps) and the layer sizes, for the linux/amd64 image Vast runs.
+- `image_size`: the linux/amd64 image's compressed size, from its manifest alone, which a host downloads before the
+  container starts: the scheduler prices the pull and its time (`krater.compute.pull`).
 
 An image reference can name any host, and Krater runs where it can reach internal services, so every request (the
 registry, its token server, and every redirect, such as a blob's to a CDN) goes only over HTTPS to a host whose every
@@ -163,6 +165,8 @@ class Registry(Protocol):
     def resolve_digest(self, image: str) -> str: ...
 
     def inspect(self, image: str) -> ImageDetails: ...
+
+    def image_size(self, image: str) -> int: ...
 
 
 Resolver = Callable[[str], list[str]]
@@ -322,8 +326,8 @@ class LiveRegistry:
         media_type = manifest.get("mediaType") or response.headers.get("content-type", "").split(";")[0]
         return digest, manifest, media_type
 
-    def inspect(self, image: str) -> ImageDetails:
-        ref = parse_reference(image)
+    def _platform_manifest(self, ref: ImageRef) -> tuple[str, str | None, dict]:
+        """(the digest asked for, the linux/amd64 manifest's digest when that differs, that manifest)."""
         digest, manifest, media_type = self._manifest(ref, ref.reference)
         platform_digest = None
         if media_type in _INDEX_TYPES or "manifests" in manifest:
@@ -338,6 +342,16 @@ class LiveRegistry:
             if wanted is None:
                 raise RegistryError("This image has no linux/amd64 version, which is what Vast's machines run.")
             platform_digest, manifest, _ = self._manifest(ref, wanted["digest"])
+        return digest, platform_digest, manifest
+
+    def image_size(self, image: str) -> int:
+        """The linux/amd64 image's compressed size in bytes: the sum of its layers, from the manifest only."""
+        _, _, manifest = self._platform_manifest(parse_reference(image))
+        return _layers_size(manifest)
+
+    def inspect(self, image: str) -> ImageDetails:
+        ref = parse_reference(image)
+        digest, platform_digest, manifest = self._platform_manifest(ref)
         config_digest = (manifest.get("config") or {}).get("digest", "")
         if not _DIGEST_RE.match(config_digest):
             raise RegistryError("The image's manifest names no config Krater can read.")
@@ -349,6 +363,11 @@ class LiveRegistry:
         except ValueError:
             raise RegistryError("The image's config isn't JSON.") from None
         return _details(digest, platform_digest, manifest, config)
+
+
+def _layers_size(manifest: dict) -> int:
+    layers = manifest.get("layers") or []
+    return sum(int(layer.get("size") or 0) for layer in layers if isinstance(layer, dict))
 
 
 def _strings(value) -> list[str]:
@@ -364,7 +383,7 @@ def _details(digest: str, platform_digest: str | None, manifest: dict, config: d
         platform_digest=platform_digest,
         platform=f"{config.get('os', '?')}/{config.get('architecture', '?')}",
         created=config.get("created"),
-        size_bytes=sum(int(layer.get("size") or 0) for layer in layers if isinstance(layer, dict)),
+        size_bytes=_layers_size(manifest),
         layers=len(layers),
         entrypoint=_strings(run.get("Entrypoint")),
         cmd=_strings(run.get("Cmd")),
@@ -417,6 +436,14 @@ class FakeRegistry:
         if image not in self.details:
             raise RegistryError(f"No such image: {image}.")
         return self.details[image]
+
+    def image_size(self, image: str) -> int:
+        self.calls.append(("size", image))
+        if self.fail:
+            raise RegistryError(self.fail)
+        if image not in self.details:
+            raise RegistryError(f"No such image: {image}.")
+        return self.details[image].size_bytes
 
 
 _live: LiveRegistry | None = None

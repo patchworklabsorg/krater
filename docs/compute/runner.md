@@ -33,6 +33,22 @@ The runner then:
    checkpoints and outputs were not saved, before the final log upload so the line reaches the job's log. `/exit`
    carries only the code, so the job still shows as finished.
 
+## Network use
+
+Every heartbeat (jobs and boxes) carries `net_in_bytes` and `net_out_bytes`: what the container has received and
+sent since its job's first start on this machine (`runner/netcount.go`). The runner sums the receive and transmit
+bytes of the container's `ethN` interfaces in `/proc/net/dev`, which count everything the container moves, the member's
+own downloads and uploads included, but not the image pull (the host does that before the container exists; Krater
+prices it from the image's size). Vast restarts the container after an outbid, a self-stop or a box resume, and the
+kernel's counters start again in the new network namespace, so the runner keeps its last reading and the namespace
+(`/proc/self/ns/net`) in `net.json` beside `selfstop.json`; a new namespace, or a counter that went down, adds the last
+reading to a base. If `/proc/net/dev` shows a host interface (`docker*`, `veth*`, `br-*` ...), or no `ethN`, the
+container may be on the host's network and would count other renters' traffic, so it reports nothing.
+
+Krater keeps a report only if it raises the count, and by no more than the host's link could carry since the last
+report ([scheduler.md](scheduler.md#data-transfer)): the member's code runs as root beside the runner and could send
+anything.
+
 ## When Krater is gone: the machine stops itself
 
 Krater ends machines only while it is up. On staging (2026-10-14) Krater went down with a box running, and the box

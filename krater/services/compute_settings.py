@@ -257,6 +257,17 @@ ORG_FIELDS: tuple[PolicyField, ...] = (
         3650,
         30,
     ),
+    PolicyField(
+        "credit_reserve_hours",
+        "Credit reserve",
+        "Krater rents no new machine while the Vast account's credit wouldn't cover this many hours of every machine "
+        "it holds plus the new one, so the account doesn't run dry mid-run. Jobs wait, saying why. Needs a credit "
+        "reading less than 2 hours old; without one Krater rents as usual. 0 = off.",
+        "hours",
+        0,
+        168,
+        0,
+    ),
 )
 ORG_FIELDS_BY_NAME = {f.name: f for f in ORG_FIELDS}
 AUDIT_ORG = "compute_org_limits_update"
@@ -464,6 +475,7 @@ class OrgLimits:
     org_monthly_cap_cents: int
     credit_alert_cents: int
     finished_files_days: int
+    credit_reserve_hours: int
 
     def values(self) -> dict[str, int]:
         return {f.name: getattr(self, f.name) for f in ORG_FIELDS}
