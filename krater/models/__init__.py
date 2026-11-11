@@ -41,7 +41,7 @@ from krater.models.project_secret import ProjectSecret
 from krater.models.quilt_outbox import QuiltOutbox
 from krater.models.review import Review
 from krater.models.site_settings import SiteSettings
-from krater.models.slack_notification import SlackNotification
+from krater.models.slack_notification import SlackDirectMessage, SlackNotification
 from krater.models.spend_snapshot import SpendSnapshot
 from krater.models.ssh_key import UserSshKey
 from krater.models.stash_archive import StashArchive
@@ -93,6 +93,7 @@ __all__ = [
     "RevisionKind",
     "RevisionOutcome",
     "SiteSettings",
+    "SlackDirectMessage",
     "SlackNotification",
     "SpendReconciliation",
     "SpendSnapshot",

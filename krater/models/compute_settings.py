@@ -75,6 +75,8 @@ class ComputeSettings(Base):
     # Krater rents nothing new while the provider account's credit wouldn't cover this many hours of every machine
     # it holds plus the new one. 0 = off (the default: the credit reading isn't confirmed against Vast yet).
     credit_reserve_hours: Mapped[int] = mapped_column(sa.Integer, nullable=False, server_default="0")
+    # Message a job's submitter in Slack when it ends: 0 = never (the default), 1 = when it fails, 2 = always.
+    dm_job_endings: Mapped[int] = mapped_column(sa.Integer, nullable=False, server_default="0")
 
     # The stop switch: set while an admin has stopped all compute (`krater.services.compute_halt`).
     paused_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)

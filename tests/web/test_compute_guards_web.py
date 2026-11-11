@@ -15,6 +15,7 @@ LIMITS = {
     "credit_alert_cents": "0",
     "finished_files_days": "30",
     "credit_reserve_hours": "0",
+    "dm_job_endings": "0",
 }
 
 

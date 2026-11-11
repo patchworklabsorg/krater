@@ -41,6 +41,8 @@ type StartInfo struct {
 	VastAPIURL     string              `json:"vast_api_url"`
 	// The project's secrets, name -> value. Never logged.
 	Secrets map[string]string `json:"secrets"`
+	// The job asked for project inputs: copy them into $KRATER_INPUT_DIR before the command (restoreInputs).
+	Inputs bool `json:"inputs"`
 }
 
 // Reply is Krater's answer to a heartbeat.

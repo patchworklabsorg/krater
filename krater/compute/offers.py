@@ -64,6 +64,8 @@ class Transfer:
     out_gb: int = 0
     runtime_hours: Decimal = Decimal(1)
     image_bytes: int = 0
+    # The project inputs the job copies in (`compute_inputs`): data in, and time before the command starts.
+    inputs_bytes: int = 0
 
     def image_microusd(self, offer: Offer) -> int:
         return bytes_cost_microusd(self.image_bytes, offer.transfer_in_microusd_per_gb)
@@ -74,10 +76,11 @@ class Transfer:
             self.in_gb * offer.transfer_in_microusd_per_gb
             + self.out_gb * offer.transfer_out_microusd_per_gb
             + self.image_microusd(offer)
+            + bytes_cost_microusd(self.inputs_bytes, offer.transfer_in_microusd_per_gb)
         )
 
     def pull_hours(self, offer: Offer) -> Decimal:
-        return pull_hours(self.image_bytes, offer.inet_down_mbps)
+        return pull_hours(self.image_bytes + self.inputs_bytes, offer.inet_down_mbps)
 
     def hourly_microusd(self, choice: Choice) -> int:
         """The data cost and the pull's time at `choice`'s host, spread over the runtime."""

@@ -63,6 +63,33 @@
   {% endif %}
 </section>
 
+<section class="card" id="inputs">
+  <div class="card-head">
+    <h2>Inputs</h2>
+  </div>
+  <p class="muted">
+    Files the team uploads once for jobs to copy in: <code>krater inputs upload {{ project.id | string | truncate(8, True, '') }} data/</code>.
+    A job names the ones it wants and finds them in <code>$KRATER_INPUT_DIR</code>. They count toward the project's storage.
+    <a href="/help/compute-jobs#inputs">How inputs work</a>.
+  </p>
+  {% if inputs is none %}
+    <p class="muted">Storage didn't answer; reload in a minute to see them.</p>
+  {% elif inputs %}
+    <div class="table-scroll">
+      <table class="table">
+        <thead><tr><th scope="col">Name</th><th scope="col" class="num">Size</th></tr></thead>
+        <tbody>
+          {% for file in inputs %}
+            <tr><td><code>{{ file.name }}</code></td><td class="num">{{ file.size_bytes | filesize }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="muted">No inputs yet.</p>
+  {% endif %}
+</section>
+
 <section class="card" id="secrets">
   <div class="card-head">
     <h2>Secrets</h2>

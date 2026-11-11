@@ -268,6 +268,16 @@ ORG_FIELDS: tuple[PolicyField, ...] = (
         168,
         0,
     ),
+    PolicyField(
+        "dm_job_endings",
+        "Message the submitter when a job ends",
+        "0 = never, 1 = when a job fails, 2 = whenever a job ends. The message goes from Krater's Slack app to whoever "
+        "queued the job, as its verification reminders do, on top of the notice in the project's channel.",
+        "",
+        0,
+        2,
+        0,
+    ),
 )
 ORG_FIELDS_BY_NAME = {f.name: f for f in ORG_FIELDS}
 AUDIT_ORG = "compute_org_limits_update"
@@ -476,6 +486,7 @@ class OrgLimits:
     credit_alert_cents: int
     finished_files_days: int
     credit_reserve_hours: int
+    dm_job_endings: int
 
     def values(self) -> dict[str, int]:
         return {f.name: getattr(self, f.name) for f in ORG_FIELDS}

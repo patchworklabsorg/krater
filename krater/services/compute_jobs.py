@@ -32,13 +32,15 @@ from krater.models import (
     Project,
 )
 from krater.models.compute_job import FINISHED_JOB_STATES
-from krater.services import budget, clearance, compute_halt, compute_settings, funding_holds, teams
+from krater.services import budget, clearance, compute_halt, compute_inputs, compute_settings, funding_holds, teams
 from krater.services.actor import Actor
 from krater.services.errors import ConfirmationRequired, InvalidState, NotAllowed, ValidationFailed
 from krater.services.launch_rules import LAUNCHABLE_STATUSES
+from krater.storage import ObjectStore
 from krater.weave import WeaveClient
 
 MICROUSD_PER_CENT = 10_000
+BYTES_PER_GB = 1_000_000_000
 #: How a stop the member asked for is described; a stop Krater decided on (idle, a silent runner) gets a Slack notice.
 MEMBER_STOP_PREFIX = "stopped by "
 #: `actor=None` audit events about a member's box, posted to the project channel by `krater.services.slack_notify`.
@@ -87,6 +89,8 @@ class JobSpec:
     # The member's estimate of the data moved into and out of the machine, in GB; `None` for no estimate.
     data_in_gb: int | None = None
     data_out_gb: int | None = None
+    # Names (or folders ending in /) from the project's inputs to copy onto the machine (`compute_inputs`).
+    inputs: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -127,12 +131,16 @@ class TransferEstimate:
         )
 
 
-def transfer_estimate(session: Session, project: Project, spec: JobSpec) -> TransferEstimate | None:
-    """What `spec`'s estimated data transfer could cost at most, or `None` without an estimate."""
-    if spec.data_in_gb is None and spec.data_out_gb is None:
+def transfer_estimate(
+    session: Session, project: Project, spec: JobSpec, *, inputs_bytes: int = 0
+) -> TransferEstimate | None:
+    """What `spec`'s estimated data transfer (with its inputs, `inputs_bytes`) could cost at most, or `None` without
+    an estimate."""
+    if spec.data_in_gb is None and spec.data_out_gb is None and not inputs_bytes:
         return None
     policy = compute_settings.effective_policy(session, project)
-    in_gb, out_gb = spec.data_in_gb or 0, spec.data_out_gb or 0
+    in_gb = (spec.data_in_gb or 0) + math.ceil(inputs_bytes / BYTES_PER_GB)
+    out_gb = spec.data_out_gb or 0
     cost_microusd = (in_gb + out_gb) * policy.transfer_cap_microusd_per_gb
     return TransferEstimate(
         in_gb=in_gb,
@@ -143,6 +151,15 @@ def transfer_estimate(session: Session, project: Project, spec: JobSpec) -> Tran
         remaining_cents=budget.remaining_cents(session, project),
         warn_percent=policy.transfer_warn_percent,
     )
+
+
+def inputs_size(store: ObjectStore | None, project: Project, spec: JobSpec) -> int:
+    """The total size of the inputs `spec` asks for; raises `ValidationFailed` for one that isn't stored."""
+    if not spec.inputs:
+        return 0
+    if store is None:
+        raise ValidationFailed({"inputs": "Krater's storage isn't set up, so a job can't take inputs."})
+    return compute_inputs.resolve(store, project.id, spec.inputs)
 
 
 def _can_launch_for(actor: Actor, project: Project) -> bool:
@@ -222,6 +239,7 @@ def submit_job(
     now: datetime,
     weave_client: WeaveClient,
     confirm_transfer_cost: bool = False,
+    store: ObjectStore | None = None,
 ) -> ComputeJob:
     """Queue `spec` for `project`. Only the project's team (lead and accepted members) may, only while the project
     can launch, not while it has a funding hold (`funding_holds.require_not_held`), and only once Weave has cleared
@@ -235,7 +253,8 @@ def submit_job(
     _validate(spec, cap_microusd=cap_cents * MICROUSD_PER_CENT)
     funding_holds.require_not_held(project)
     clearance.require_team_cleared(session, weave_client, project)
-    estimate = transfer_estimate(session, project, spec)
+    inputs_bytes = inputs_size(store, project, spec)
+    estimate = transfer_estimate(session, project, spec, inputs_bytes=inputs_bytes)
     if estimate is not None and estimate.needs_confirmation and not confirm_transfer_cost:
         raise ConfirmationRequired(estimate.message())
     job = ComputeJob(
@@ -258,6 +277,8 @@ def submit_job(
         on_outbid=spec.on_outbid,
         data_in_gb=spec.data_in_gb,
         data_out_gb=spec.data_out_gb,
+        input_names=list(spec.inputs),
+        inputs_bytes=inputs_bytes,
         state=ComputeJobState.QUEUED,
         state_reason="Waiting for an offer at or under its "
         + (

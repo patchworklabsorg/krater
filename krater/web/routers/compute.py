@@ -33,6 +33,7 @@ from krater.services import (
     box_access,
     clearance,
     compute_files,
+    compute_inputs,
     compute_jobs,
     compute_settings,
     job_costs,
@@ -149,11 +150,20 @@ def _index_page(request: Request, db_session: Session, actor: Actor, project: Pr
             "secrets_enabled": project_secrets.enabled(get_settings()),
             "can_manage_secrets": actor.is_member and (_is_team(actor, project) or actor.is_admin),
             "max_secrets": project_secrets.MAX_SECRETS_PER_PROJECT,
+            "inputs": _inputs_or_none(project),
             "errors": errors or {},
             "posted": posted or {},
         },
         status_code=422 if errors else 200,
     )
+
+
+def _inputs_or_none(project: Project) -> list | None:
+    """The project's inputs, or None when storage didn't answer (the page still renders)."""
+    try:
+        return compute_inputs.list_inputs(get_compute_store(), project.id)
+    except StorageError:
+        return None
 
 
 @router.post("/projects/{project_id}/compute/secrets", dependencies=[Depends(verify_csrf_token)])
@@ -281,6 +291,7 @@ def _posted_from(job: ComputeJob) -> dict:
         "max_wait_minutes": str(job.max_wait_minutes),
         "on_max_wait": job.on_max_wait.value,
         "max_runtime_minutes": str(job.max_runtime_minutes),
+        "inputs": "\n".join(job.input_names or []),
     }
     if job.interruptible:
         posted["interruptible"] = "on"
@@ -308,6 +319,7 @@ async def submit_job(
         kind = ComputeJobKind.BOX if posted.get("kind") == "box" else ComputeJobKind.JOB
         min_vram = posted.get("min_vram", "").strip()
         data_in, data_out = posted.get("data_in_gb", "").strip(), posted.get("data_out_gb", "").strip()
+        inputs = [line.strip() for line in posted.get("inputs", "").splitlines() if line.strip()]
         if posted.get("order") == "limit":
             target = high = _rate(posted.get("limit", ""), "limit")
             on_outbid = ComputeOutbid.HOLD
@@ -332,7 +344,9 @@ async def submit_job(
             on_outbid=on_outbid,
             data_in_gb=_int(data_in, "data_in_gb", "data into the machine") if data_in else None,
             data_out_gb=_int(data_out, "data_out_gb", "data out of the machine") if data_out else None,
+            inputs=tuple(compute_inputs.check_names(inputs)),
         )
+        store = get_compute_store() if spec.inputs else None
         if posted.get("action") == "estimate":
             # Only the price: nothing is queued, and the form comes back as it was.
             compute_jobs.validate_spec(spec, cap_cents=hourly_cap_cents(project, get_settings()))
@@ -342,6 +356,7 @@ async def submit_job(
                 spec,
                 transfer_cap_microusd_per_gb=policy.transfer_cap_microusd_per_gb,
                 now=datetime.now(UTC),
+                inputs_bytes=compute_jobs.inputs_size(store, project, spec),
             )
             return _form_page(request, db_session, project, weave_client, posted=posted, estimate=estimate)
         job = compute_jobs.submit_job(
@@ -353,6 +368,7 @@ async def submit_job(
             now=datetime.now(UTC),
             weave_client=weave_client,
             confirm_transfer_cost=posted.get("confirm_transfer_cost") == "on",
+            store=store,
         )
     except ConfirmationRequired as exc:
         db_session.rollback()
@@ -368,6 +384,10 @@ async def submit_job(
                 if field in errors:
                     errors.setdefault("limit", errors.pop(field))
         return _form_page(request, db_session, project, weave_client, errors=errors, posted=posted, status_code=422)
+    except StorageError:
+        db_session.rollback()
+        errors = {"inputs": "Krater's storage didn't answer, so the inputs couldn't be checked. Try again in a minute."}
+        return _form_page(request, db_session, project, weave_client, errors=errors, posted=posted, status_code=503)
     except InvalidState as exc:
         db_session.rollback()
         flash(request, str(exc), "error")

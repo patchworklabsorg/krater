@@ -15,6 +15,7 @@ getting your results back, and working interactively in a box. Everything here w
 - [Submitting a job on the web](#submitting-a-job-on-the-web)
 - [Choosing a price](#choosing-a-price)
 - [Data transfer](#data-transfer)
+- [Inputs](#inputs)
 - [After you queue it](#after-you-queue-it)
 - [Getting your results](#getting-your-results)
 - [Boxes: working interactively](#boxes-working-interactively)
@@ -134,6 +135,7 @@ Krater sets these environment variables for your command:
 | `KRATER_CHECKPOINT_DIR` | Save checkpoints here. Krater restores the latest ones here before your command starts, and uploads changed files every 10 minutes and when the command exits |
 | `KRATER_RESUMED` | `1` when this run is a resume: a later attempt after a move, or a restart after a pause. Load your latest checkpoint |
 | `KRATER_OUTPUT_DIR` | Put your results here. Uploaded when the command exits |
+| `KRATER_INPUT_DIR` | The project [inputs](#inputs) the job asked for, copied in before your command starts (`/krater/inputs`) |
 | `KRATER_JOB_ID`, `KRATER_ATTEMPT` | The job's id and which attempt this is (1, 2, ...), for your own logs |
 | Your project's secrets | Such as `HF_TOKEN`, set on the project's Compute page |
 
@@ -327,6 +329,28 @@ Krater protects your budget four ways:
   project's Slack channel, mentioning you.
 
 Download big datasets once per machine, not once per step. Keep checkpoints small.
+
+## Inputs
+
+Inputs are files the team uploads to the project once, for any job to copy in: a dataset, a tokenizer, starting
+weights. Upload them from a terminal (a folder keeps its name, and files already there at the same size are skipped,
+so running it again finishes an interrupted upload):
+
+```bash
+krater inputs upload vision data/          # data/train.csv, data/val.csv, ...
+krater inputs upload vision weights.pt --as base/weights.pt
+krater inputs list vision
+krater inputs rm vision data/              # a folder ends in /
+```
+
+A job names the ones it wants: `--input data/ --input base/weights.pt` (or **Inputs from this project** on the form,
+one per line). The runner copies them into `$KRATER_INPUT_DIR` before your command starts, on every attempt, so
+`$KRATER_INPUT_DIR/data/train.csv` is there from the first line. If they can't be copied (deleted since you queued
+it, say) the job fails to start instead of running without them. A name that doesn't exist is refused when you queue.
+
+Inputs count toward the project's storage quota. Their size counts as data into the machine: in the estimate, when
+choosing a host, and in the budget hold, without adding it to `--data-in`. They come from Krater's storage, so the
+download is as fast as the host's link allows.
 
 ## After you queue it
 
@@ -562,6 +586,7 @@ job is its name or the start of its id. If that matches more than one, the CLI l
 | `--data-in GB`, `--data-out GB` | Your data transfer estimate |
 | `--confirm-transfer-cost` | Queue without asking, even if transfer could cost a large share of the budget |
 | `--estimate` | Say what the job may cost and queue nothing |
+| `--input NAME` | Copy a project [input](#inputs) (a folder ends in /) into `$KRATER_INPUT_DIR` first; repeatable |
 | `-f job.toml` | Read the options from a file; the project and options typed here win ([how](#keep-a-jobs-options-in-a-file)) |
 | `--sweep NAME=V1,V2`, `--count N` | Queue one job per value (and N of each), with `$NAME` and `$KRATER_SWEEP_INDEX` set ([how](#a-hyperparameter-sweep)) |
 
@@ -574,6 +599,7 @@ queues nothing.
 | --- | --- |
 | `krater show <job>` | State, machine and recent events |
 | `krater rerun <job>` | Queues it again with the same settings (`--name` for a new name) |
+| `krater inputs list\|upload\|rm <project>` | The project's [inputs](#inputs) |
 | `krater logs <job>` | The end of the output. `-f` follows it; `--attempt 1` shows an earlier attempt |
 | `krater wait <job>` | Blocks until the job is finished. Exits 0 if it succeeded, the command's own code if it failed with one, 124 on `--timeout` |
 | `krater cancel <job>` | Cancels it; the machine is destroyed |

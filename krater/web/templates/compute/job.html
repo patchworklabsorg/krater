@@ -35,6 +35,7 @@
       {% endif %}
     </dd>
     {% if job.command %}<dt>Command</dt><dd><code>{{ job.command }}</code></dd>{% endif %}
+    {% if job.input_names %}<dt>Inputs</dt><dd>{% for name in job.input_names %}<code>{{ name }}</code>{% if not loop.last %}, {% endif %}{% endfor %} ({{ job.inputs_bytes | filesize }}), in <code>$KRATER_INPUT_DIR</code></dd>{% endif %}
     <dt>GPU</dt>
     <dd>
       {{ job.num_gpus }} &times;

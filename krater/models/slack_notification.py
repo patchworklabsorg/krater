@@ -32,3 +32,14 @@ class SlackNotification(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
 
     def __repr__(self) -> str:
         return f"<SlackNotification audit_event_id={self.audit_event_id}>"
+
+
+class SlackDirectMessage(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
+    """A job-ended message sent to the job's submitter (`slack_notify.sync_job_ending_messages`), so it goes once.
+    Kept apart from `SlackNotification` so the channel notice and the message don't hold each other up."""
+
+    __tablename__ = "slack_direct_messages"
+
+    audit_event_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), sa.ForeignKey("audit_events.id"), nullable=False, unique=True, index=True
+    )

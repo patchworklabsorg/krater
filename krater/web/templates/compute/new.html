@@ -124,6 +124,12 @@
           {% if errors.data_out_gb %}<p class="field-error">{{ errors.data_out_gb }}</p>{% endif %}
         </div>
       </div>
+      <div class="field">
+        <label for="job-inputs">Inputs from this project (optional)</label>
+        <textarea id="job-inputs" name="inputs" rows="2" placeholder="data/train.tar">{{ posted.inputs or '' }}</textarea>
+        <p class="field-hint">One per line: a file from the project's <a href="/projects/{{ project.id }}/compute#inputs">inputs</a>, or a folder ending in /. Copied into <code>$KRATER_INPUT_DIR</code> before the command starts, and counted as data in.</p>
+        {% if errors.inputs %}<p class="field-error">{{ errors.inputs }}</p>{% endif %}
+      </div>
     </fieldset>
 
     <fieldset class="form-fieldset">

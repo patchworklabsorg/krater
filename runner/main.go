@@ -46,6 +46,7 @@ type Config struct {
 	Token         string
 	CheckpointDir string
 	OutputDir     string
+	InputDir      string
 	WorkspaceDir  string
 	Home          string
 	ProcNet       string
@@ -63,6 +64,7 @@ func configFromEnv() (Config, error) {
 		Token:          os.Getenv("KRATER_JOB_TOKEN"),
 		CheckpointDir:  envOr("KRATER_CHECKPOINT_DIR", "/krater/checkpoints"),
 		OutputDir:      envOr("KRATER_OUTPUT_DIR", "/krater/outputs"),
+		InputDir:       envOr("KRATER_INPUT_DIR", "/krater/inputs"),
 		WorkspaceDir:   envOr("KRATER_WORKSPACE_DIR", "/workspace"),
 		Home:           envOr("HOME", "/root"),
 		ProcNet:        "/proc/net",
@@ -175,6 +177,12 @@ func Run(ctx context.Context, cfg Config, apiHTTP, storageHTTP *http.Client, gpu
 	} else if n > 0 {
 		logf("restored %d checkpoint files", n)
 	}
+	if info.Inputs {
+		// The job asked for project inputs: without them it would run (and bill) for nothing, so it fails instead.
+		if code, err := restoreInputs(ctx, api, &cfg, storageHTTP); err != nil {
+			return code, err
+		}
+	}
 
 	if info.Kind == "box" {
 		if cfg.SecretsProfile != "" {
@@ -236,6 +244,7 @@ func Run(ctx context.Context, cfg Config, apiHTTP, storageHTTP *http.Client, gpu
 		"KRATER_RESUMED="+boolEnv(info.Resumed),
 		"KRATER_CHECKPOINT_DIR="+cfg.CheckpointDir,
 		"KRATER_OUTPUT_DIR="+cfg.OutputDir,
+		"KRATER_INPUT_DIR="+cfg.InputDir,
 	)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
@@ -411,4 +420,22 @@ func seconds(n, fallback int) time.Duration {
 		n = fallback
 	}
 	return time.Duration(n) * time.Second
+}
+
+// restoreInputs copies the project inputs the job asked for into cfg.InputDir. On failure it tells Krater the job
+// couldn't start and returns SetupFailed.
+func restoreInputs(ctx context.Context, api *API, cfg *Config, storage *http.Client) (int, error) {
+	dir, err := usableDir(cfg.InputDir, os.TempDir())
+	if err == nil {
+		cfg.InputDir = dir
+		var n int
+		n, err = NewSyncer(api, "inputs", cfg.InputDir, storage).Restore(ctx)
+		if err == nil {
+			logf("copied %d input files into %s", n, cfg.InputDir)
+			return 0, nil
+		}
+	}
+	logf("copying the job's inputs failed: %v", err)
+	_ = api.Exit(ctx, SetupFailed)
+	return SetupFailed, fmt.Errorf("copying inputs: %w", err)
 }
