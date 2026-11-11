@@ -6,7 +6,7 @@ small separate package in `cli/` (Python 3.10+, httpx only) that talks to Krater
 
 ## For members
 
-Install it (once it's published, or from a checkout):
+Install it from GitHub (it is not on PyPI), with uv or pip:
 
 ```bash
 uv tool install "git+https://github.com/patchworklabsorg/krater#subdirectory=cli"

@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+
+{% block title %}{{ rendered.title }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <p class="eyebrow"><a href="/help">Help</a></p>
+    <h1>{{ rendered.title }}</h1>
+  </div>
+  <div class="page-actions">
+    <a class="button" href="/help">All guides</a>
+  </div>
+</div>
+
+<article class="card prose help-guide">
+  {{ rendered.html }}
+</article>
+{% endblock %}

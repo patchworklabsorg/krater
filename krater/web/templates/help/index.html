@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block title %}Help{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Help</h1>
+    <p class="page-subtitle">How Krater works, from applying to running compute and publishing your results.</p>
+  </div>
+</div>
+
+<section class="card">
+  <h2>For members</h2>
+  <ul class="help-list">
+    {% for item in members %}
+      <li>
+        <a class="help-list__title" href="/help/{{ item.guide.slug }}">{{ item.title }}</a>
+        <p>{{ item.guide.summary }}</p>
+      </li>
+    {% endfor %}
+  </ul>
+</section>
+
+<section class="card">
+  <h2>For reviewers and admins</h2>
+  <ul class="help-list">
+    {% for item in admins %}
+      <li>
+        <a class="help-list__title" href="/help/{{ item.guide.slug }}">{{ item.title }}</a>
+        <p>{{ item.guide.summary }}</p>
+      </li>
+    {% endfor %}
+  </ul>
+</section>
+
+<p class="help-more">
+  Still stuck? Ask in your project's Slack channel, where reviewers and admins can see it.
+</p>
+{% endblock %}
