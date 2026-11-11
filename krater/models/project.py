@@ -56,6 +56,13 @@ class Project(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     slack_channel_archived: Mapped[bool] = mapped_column(
         sa.Boolean, nullable=False, default=False, server_default=sa.false()
     )
+    # The reviewers-only channel (`ganymede-rev-...`): the review message with its buttons, and reviewers' own talk.
+    # The team is never in it. Null for a project not submitted since it came in; its review messages are in
+    # `slack_channel_id`. Kept after archiving, like `slack_channel_id`.
+    slack_review_channel_id: Mapped[str | None] = mapped_column(sa.String(64), nullable=True)
+    slack_review_channel_archived: Mapped[bool] = mapped_column(
+        sa.Boolean, nullable=False, default=False, server_default=sa.false()
+    )
     # This project's own hourly price cap per rented machine, set by an admin
     # (`krater.services.projects.set_hourly_cost_cap`). `None` means the global default,
     # `Settings.compute_max_hourly_cost_cents`; see `krater.services.launch_rules.hourly_cap_cents`.

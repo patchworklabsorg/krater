@@ -249,8 +249,9 @@ is asked again on every submission, and when it was ticked is kept on the revisi
 2. **Submit.** Krater runs the Slack membership check and the demographics gate, freezes the draft into revision N, sets `pending_review`, creates
    the project's private Slack channel if it doesn't exist yet, invites the submitter and all current reviewers
    (every active user Weave's directory lists with the `reviewer` role), posts the review message with Approve/Reject
-   buttons, and posts a line in the master feed channel.
-3. **Review.** Reviewers discuss freely in the channel. Decisions come in through the buttons, or through the web UI as a
+   buttons in the project's reviewers-only channel (created the same way), tells the team's channel it's in review,
+   and posts a line in the master feed channel.
+3. **Review.** Reviewers discuss with the team in the project channel, and among themselves in the reviewers-only one. Decisions come in through the buttons, or through the web UI as a
    fallback. For every decision, Krater:
    - finds the clicker's Krater user by stored Slack id (from Weave's `slack_id`), then checks their roles with Weave's
      directory by `sub` right now (not from anything cached);
@@ -294,6 +295,14 @@ join), and all reviewers. When someone gets the `reviewer` role in
 Weave, a periodic job invites them to open project channels. Someone who leaves the team, or is removed from it, is
 removed from the channel (`conversations.kick`), unless they're a reviewer, who belong in every open channel. The
 channel is archived when the project ends up `completed` or `withdrawn`.
+
+**Per-project reviewers-only channel** (`ganymede-rev-<slug>-<id>`): created with the first review message posted
+after it came in (never for older projects all at once) and reused after that. Members are every current reviewer
+**except** anyone the project's lead or has invited to its team, accepted or not: they may never review it. The review
+message and its buttons are posted here; the team's channel gets a notice that the revision is in review, which the
+decision then updates with the outcome and any reason. The periodic job invites new reviewers and takes out a reviewer
+who has joined or been invited to the team (accepting an invitation does it at once). It's archived with the project
+channel. A revision whose review message was posted before this keeps it in the team channel, and is decided there.
 If the job that posts a submission's review message fails (Slack down, a bad bot token), the periodic job posts it
 later, with the channel, the invites and the feed line. It waits 10 minutes after the submission, so it doesn't race
 the submission's own job.

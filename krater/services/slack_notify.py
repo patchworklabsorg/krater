@@ -77,6 +77,13 @@ def channel_name_for(project: Project) -> str:
     return f"ganymede-{slug}-{short_id}"
 
 
+def review_channel_name_for(project: Project) -> str:
+    """The reviewers-only channel's name: `ganymede-rev-<slug>-<short id>`, beside the team's `channel_name_for`."""
+    short_id = project.id.hex[:8]
+    slug = _slugify(project.title)[: _MAX_CHANNEL_NAME_LENGTH - len("ganymede-rev--") - len(short_id)]
+    return f"ganymede-rev-{slug}-{short_id}"
+
+
 def _escape_mrkdwn(text: str) -> str:
     """Escape the three characters Slack's mrkdwn parser treats specially, so a project title,
     write-up, reject reason or Weave display name containing `<!channel>`, `<!here>`, a user/channel
@@ -183,6 +190,54 @@ def remove_from_channel(
     return True
 
 
+def _conflict_slack_ids(session: Session, slack_client: SlackClient, project: Project) -> set[str]:
+    """Slack ids of the project's lead and everyone invited to its team, accepted or not: never in its reviewer
+    channel, as they may never review it (`teams.conflict_user_ids`)."""
+    people = list(session.scalars(sa.select(User).where(User.id.in_(teams.conflict_user_ids(project)))))
+    return _slack_ids(session, slack_client, people)
+
+
+def _sync_review_channel_members(
+    session: Session, slack_client: SlackClient, project: Project, reviewer_ids: set[str]
+) -> None:
+    """Invite every current reviewer who isn't on `project`'s team to its reviewer channel, and take out any reviewer
+    who has since joined, or been invited to, the team. Krater only ever invites reviewers, so they're the only team
+    members who could be in it."""
+    conflicts = _conflict_slack_ids(session, slack_client, project)
+    invite = sorted(reviewer_ids - conflicts)
+    if invite:
+        slack_client.invite_users(project.slack_review_channel_id, invite)
+    for slack_id in sorted(reviewer_ids & conflicts):
+        slack_client.remove_user(project.slack_review_channel_id, slack_id)
+
+
+def ensure_review_channel(
+    session: Session, slack_client: SlackClient, weave_client: WeaveClient, *, project: Project
+) -> str:
+    """Ensure `project` has its reviewers-only channel, with every current reviewer not on its team, and return its
+    id. Idempotent: created only if `project.slack_review_channel_id` is unset.
+
+    Only `notify_revision_submitted` calls this, when it posts a review message: a project's reviewer channel comes
+    with its first submission after reviewer channels came in, never all at once for older projects."""
+    if project.slack_review_channel_id is None:
+        project.slack_review_channel_id = slack_client.create_channel(review_channel_name_for(project))
+        session.flush()
+    reviewer_ids = _reviewer_slack_ids(session, slack_client, weave_client)
+    _sync_review_channel_members(session, slack_client, project, reviewer_ids)
+    return project.slack_review_channel_id
+
+
+def sync_review_channel(
+    session: Session, slack_client: SlackClient, weave_client: WeaveClient, *, project: Project
+) -> None:
+    """Bring `project`'s open reviewer channel up to date after its team changed: a reviewer who joined the team leaves
+    it. A no-op for a project without one (it's created with a review message, never here)."""
+    if project.slack_review_channel_id is None or project.slack_review_channel_archived:
+        return
+    reviewer_ids = _reviewer_slack_ids(session, slack_client, weave_client)
+    _sync_review_channel_members(session, slack_client, project, reviewer_ids)
+
+
 def _stage_label(revision: ProjectRevision) -> str:
     if revision.kind is RevisionKind.COMPLETION:
         return "Completion review"
@@ -210,8 +265,8 @@ def _budget_fields(revision: ProjectRevision) -> list[dict]:
 
 
 def _review_message(project: Project, revision: ProjectRevision) -> tuple[list[dict], str]:
-    """The Approve/Reject review message for `revision`. The buttons' `value` carries the revision id,
-    per `docs/SPEC.md`, so `/slack/interactions` knows which revision a click is about."""
+    """The Approve/Reject review message for `revision`, posted in the reviewers-only channel. The buttons' `value`
+    carries the revision id, per `docs/SPEC.md`, so `/slack/interactions` knows which revision a click is about."""
     stage = _stage_label(revision)
     header = f"*{stage}: {_escape_mrkdwn(project.title)}* (revision {revision.number})"
     # The message's top-level `text` (notification/preview fallback) isn't parsed as mrkdwn, so the raw
@@ -254,7 +309,22 @@ def _review_message(project: Project, revision: ProjectRevision) -> tuple[list[d
         link = f"{get_settings().base_url.rstrip('/')}/projects/{project.id}"
         note = f"Approve here grants the full amount. To grant less, approve on <{link}|the project page>."
         blocks.insert(-1, {"type": "context", "elements": [{"type": "mrkdwn", "text": note}]})
+    if project.slack_channel_id:
+        note = f"Only reviewers are in this channel. Talk with the team in <#{project.slack_channel_id}>."
+        blocks.insert(-1, {"type": "context", "elements": [{"type": "mrkdwn", "text": note}]})
     return blocks, text
+
+
+def _team_notice(project: Project, revision: ProjectRevision) -> tuple[list[dict], str]:
+    """The team channel's line saying `revision` is in review. `notify_decision` later replaces it with the outcome."""
+    stage = _stage_label(revision)
+    header = f"*{stage}: {_escape_mrkdwn(project.title)}* (revision {revision.number})"
+    status = "Submitted. Reviewers are reading it and will ask any questions here. Their decision shows here too."
+    blocks = [
+        {"type": "section", "text": {"type": "mrkdwn", "text": header}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": status}},
+    ]
+    return blocks, f"{stage}: {project.title} (revision {revision.number}) is submitted for review."
 
 
 def notify_revision_submitted(
@@ -281,11 +351,22 @@ def notify_revision_submitted(
     if revision.slack_message_ts is not None:
         return
 
+    # The review message, with its buttons, goes to the reviewers-only channel; the team's channel gets a notice.
+    review_channel_id = ensure_review_channel(session, slack_client, weave_client, project=project)
     blocks, text = _review_message(project, revision)
-    ts = slack_client.post_message(channel_id, blocks=blocks, text=text)
-    revision.slack_message_channel_id = channel_id
+    ts = slack_client.post_message(review_channel_id, blocks=blocks, text=text)
+    revision.slack_message_channel_id = review_channel_id
     revision.slack_message_ts = ts
     session.flush()
+
+    notice_blocks, notice_text = _team_notice(project, revision)
+    try:
+        revision.slack_team_message_ts = slack_client.post_message(channel_id, blocks=notice_blocks, text=notice_text)
+        session.flush()
+    except SlackError:
+        # As for the feed line below: raising would roll back the review message's ts, and a retry would post it
+        # again. The team still sees the review on the project page.
+        logger.exception("krater.slack team notice for revision %s failed; not retried", revision.id)
 
     if feed_channel_id and revision.kind is RevisionKind.PROPOSAL and revision.number == 1:
         feed_block_text = f"New Ganymede proposal: *{_escape_mrkdwn(project.title)}*"
@@ -380,6 +461,9 @@ def notify_decision(session: Session, slack_client: SlackClient, *, revision: Pr
         text = f"{text}. {granted}"
 
     slack_client.update_message(revision.slack_message_channel_id, revision.slack_message_ts, blocks=blocks, text=text)
+    if revision.slack_team_message_ts is not None and project.slack_channel_id is not None:
+        # The review message is in the reviewers-only channel: the team's notice shows the same outcome and reason.
+        slack_client.update_message(project.slack_channel_id, revision.slack_team_message_ts, blocks=blocks, text=text)
 
 
 def post_admin_override(
@@ -412,16 +496,20 @@ def post_admin_override(
 
 
 def archive_project_channel(session: Session, slack_client: SlackClient, *, project: Project) -> None:
-    """Archive `project`'s channel once it's `completed`/`withdrawn`. Idempotent: a no-op if the project
-    isn't actually terminal, has no channel, or is already marked archived -- so this is safe to defer
-    unconditionally after every decision/withdrawal, and to re-run from the periodic reconcile."""
+    """Archive `project`'s channels (the team's and the reviewers') once it's `completed`/`withdrawn`. Idempotent: a
+    no-op for a project that isn't actually terminal, and for a channel it doesn't have or that's already archived,
+    so this is safe to defer unconditionally after every decision/withdrawal, and to re-run from the periodic
+    reconcile."""
     if project.status not in (ProjectStatus.COMPLETED, ProjectStatus.WITHDRAWN):
         return
-    if project.slack_channel_id is None or project.slack_channel_archived:
-        return
-    slack_client.archive_channel(project.slack_channel_id)
-    project.slack_channel_archived = True
-    session.flush()
+    if project.slack_channel_id is not None and not project.slack_channel_archived:
+        slack_client.archive_channel(project.slack_channel_id)
+        project.slack_channel_archived = True
+        session.flush()
+    if project.slack_review_channel_id is not None and not project.slack_review_channel_archived:
+        slack_client.archive_channel(project.slack_review_channel_id)
+        project.slack_review_channel_archived = True
+        session.flush()
 
 
 # --------------------------------------------------------------------------------------------------
@@ -431,7 +519,8 @@ def archive_project_channel(session: Session, slack_client: SlackClient, *, proj
 
 
 def sync_reviewer_invites(session: Session, slack_client: SlackClient, weave_client: WeaveClient) -> None:
-    """Invite every current Ganymede reviewer to every open (non-archived) project channel.
+    """Invite every current Ganymede reviewer to every open (non-archived) project channel, and keep each open
+    reviewer channel to the reviewers who aren't on its team (`_sync_review_channel_members`).
 
     `docs/SPEC.md`: "When someone gets the reviewer role in Weave, they get invited to open project
     channels by a periodic job". Reviewers are the active users Weave's directory lists with the role.
@@ -449,6 +538,16 @@ def sync_reviewer_invites(session: Session, slack_client: SlackClient, weave_cli
             slack_client.invite_users(project.slack_channel_id, sorted(reviewer_ids))
         except SlackRequestFailedError:
             logger.exception("krater.slack reviewer invite failed for project %s; continuing", project.id)
+
+    # Reviewer channels: every reviewer not on the team in, and a reviewer who has joined the team out.
+    stmt = sa.select(Project).where(
+        Project.slack_review_channel_id.is_not(None), Project.slack_review_channel_archived.is_(False)
+    )
+    for project in session.scalars(stmt):
+        try:
+            _sync_review_channel_members(session, slack_client, project, reviewer_ids)
+        except SlackRequestFailedError:
+            logger.exception("krater.slack reviewer channel sync failed for project %s; continuing", project.id)
 
 
 def _budget_event_message(event: AuditEvent) -> tuple[list[dict], str]:
@@ -652,8 +751,10 @@ def sync_missed_archives(session: Session, slack_client: SlackClient) -> None:
     finished projects that were missed"."""
     stmt = sa.select(Project).where(
         Project.status.in_((ProjectStatus.COMPLETED, ProjectStatus.WITHDRAWN)),
-        Project.slack_channel_id.is_not(None),
-        Project.slack_channel_archived.is_(False),
+        sa.or_(
+            sa.and_(Project.slack_channel_id.is_not(None), Project.slack_channel_archived.is_(False)),
+            sa.and_(Project.slack_review_channel_id.is_not(None), Project.slack_review_channel_archived.is_(False)),
+        ),
     )
     for project in session.scalars(stmt):
         archive_project_channel(session, slack_client, project=project)
@@ -746,6 +847,9 @@ def reconcile(
 
 
 __all__ = [
+    "ensure_review_channel",
+    "review_channel_name_for",
+    "sync_review_channel",
     "AUDIT_BUDGET_TEARDOWN",
     "AUDIT_BUDGET_WARNING",
     "archive_project_channel",

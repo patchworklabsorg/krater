@@ -242,10 +242,11 @@ Stash stops archiving its links.
 
 | Channel | What's in it |
 | --- | --- |
-| Your project's private channel | Your team and every reviewer. The review message, the decision, discussion, budget held and released, budget warnings, box notices, data transfer warnings and admin overrides |
+| Your project's private channel | Your team and every reviewer. A notice when you submit, then the decision; discussion with reviewers, budget held and released, budget warnings, box notices, data transfer warnings and admin overrides |
 | The Ganymede feed | One line for each new proposal. No decisions |
 | Direct messages from the Krater app | When your approved budget is waiting on your own verification |
 
+Reviewers also have a reviewers-only channel for each project, where they decide; nobody on your team is ever in it.
 New reviewers are invited to open project channels automatically. If you leave or are removed from a team, you're
 taken out of its channel.
 

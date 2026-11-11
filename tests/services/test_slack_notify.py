@@ -82,8 +82,8 @@ def test_notify_revision_submitted_is_idempotent(
     slack_notify.notify_revision_submitted(db_session, slack_client, weave, revision=revision, feed_channel_id="C_FEED")
     slack_notify.notify_revision_submitted(db_session, slack_client, weave, revision=revision, feed_channel_id="C_FEED")
 
-    assert len(slack_client.channels) == 1
-    assert len(slack_client.messages) == 2  # the review message + the one feed line, not doubled
+    assert len(slack_client.channels) == 2  # the team's channel and the reviewers'
+    assert len(slack_client.messages) == 3  # the review message, the team's notice and the feed line, not doubled
 
 
 def test_no_feed_line_for_a_resubmission_after_rejection(
@@ -679,7 +679,7 @@ def test_sync_missed_review_messages_doesnt_post_twice(
     slack_notify.sync_missed_review_messages(db_session, slack_client, weave, feed_channel_id=None)
     slack_notify.sync_missed_review_messages(db_session, slack_client, weave, feed_channel_id=None)
 
-    assert len(slack_client.messages) == 1
+    assert len(slack_client.messages) == 2  # the review message and the team's notice
 
 
 def test_sync_missed_review_messages_skips_decided_revisions(
@@ -712,8 +712,8 @@ def test_sync_missed_review_messages_carries_on_past_a_revision_slack_refuses(
 ) -> None:
     slack_client = _BrokenChannelSlack()
     broken = _submitted_minutes_ago(db_session, member, 60, title="Kicked")
-    broken.project.slack_channel_id = slack_client.create_channel("ganymede-kicked")
-    slack_client.broken_channel_id = broken.project.slack_channel_id
+    broken.project.slack_review_channel_id = slack_client.create_channel("ganymede-rev-kicked")
+    slack_client.broken_channel_id = broken.project.slack_review_channel_id
     fine = _submitted_minutes_ago(db_session, member, 30, title="Fine")
     db_session.commit()
 
@@ -736,7 +736,7 @@ def test_a_failed_feed_line_keeps_the_review_message_and_doesnt_post_it_twice(
     slack_notify.sync_missed_review_messages(db_session, slack_client, weave, feed_channel_id="C_FEED")
 
     assert revision.slack_message_ts is not None
-    assert len(slack_client.messages) == 1
+    assert len(slack_client.messages) == 2  # the review message and the team's notice
 
 
 def test_reconcile_posts_a_missed_review_message(
