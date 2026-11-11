@@ -207,6 +207,18 @@ class VastClient:
         keys = data.get("keys") if isinstance(data, dict) else None
         return keys if isinstance(keys, list) else []
 
+    def account_credit(self) -> Decimal | None:
+        """Credit left on the account, in dollars: `credit` from `GET /api/v0/users/current/`. `None` if the answer
+        has none."""
+        data = self._request("GET", "/api/v0/users/current/")
+        raw = data.get("credit") if isinstance(data, dict) else None
+        if raw is None:
+            return None
+        try:
+            return Decimal(str(raw))
+        except ArithmeticError:
+            return None
+
     # -- Billing ---------------------------------------------------------------------------------------
 
     def charges(self, since: datetime, until: datetime) -> list[Charge]:

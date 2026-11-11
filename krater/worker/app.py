@@ -27,6 +27,7 @@ from krater.quilt import sender as quilt_sender
 from krater.registry import get_registry
 from krater.services import (
     box_access,
+    compute_watch,
     grants,
     ops_alerts,
     ospool_grants,
@@ -38,7 +39,7 @@ from krater.services import (
 from krater.services.pricing import refresh_prices
 from krater.slack import SlackError, get_slack_client
 from krater.stash import sender as stash_sender
-from krater.storage import StorageError, get_compute_store
+from krater.storage import StorageError, get_compute_store, get_object_store
 from krater.vast import get_vast_client
 from krater.weave import WeaveUnavailableError, get_weave_client
 
@@ -276,6 +277,14 @@ def compute_reconcile(timestamp: int) -> None:
         logger.exception("krater.compute_reconcile failed")
         session.rollback()
         _report_failure("compute_reconcile", _failure(exc))
+    try:
+        # The account's credit, for the low credit alert and the admin overview. Its own step: a failure here
+        # mustn't count as a failed reconciliation, and the last reading stays on the page.
+        compute_watch.record_credit(session, provider.name, client.account_credit(), now=datetime.now(UTC))
+        session.commit()
+    except Exception:
+        logger.exception("krater.compute_reconcile: reading the account's credit failed")
+        session.rollback()
     finally:
         session.close()
 
@@ -283,18 +292,26 @@ def compute_reconcile(timestamp: int) -> None:
 @app.periodic(cron="37 * * * *")
 @app.task(name="compute_storage_cleanup")
 def compute_storage_cleanup(timestamp: int) -> None:
-    """Hourly: abort unfinished multipart uploads of jobs that have ended (`krater.compute.storage_cleanup`)."""
-    if providers.active(get_settings()) is None:
-        return
+    """Hourly: delete the files of finished projects whose date has come, count what's stored per project
+    (`krater.services.compute_watch`), and, with compute on, abort unfinished multipart uploads of jobs that have
+    ended (`krater.compute.storage_cleanup`). The first two run with compute off too: finished projects keep files
+    from when it was on, and the images share the store."""
+    now = datetime.fromtimestamp(timestamp, tz=UTC)
     session = get_sessionmaker()()
     try:
-        aborted = compute_storage.abort_abandoned_uploads(
-            session, get_compute_store(), now=datetime.fromtimestamp(timestamp, tz=UTC)
-        )
-        if aborted:
-            logger.info("krater compute_storage_cleanup: aborted %d unfinished uploads", aborted)
+        store = get_compute_store()
+        deleted = compute_watch.delete_due_files(session, store, now=now)
+        if deleted:
+            logger.info("krater compute_storage_cleanup: deleted the files of %d finished projects", len(deleted))
+        if providers.active(get_settings()) is not None:
+            aborted = compute_storage.abort_abandoned_uploads(session, store, now=now)
+            if aborted:
+                logger.info("krater compute_storage_cleanup: aborted %d unfinished uploads", aborted)
+        compute_watch.record_storage(session, store, get_object_store(), now=now)
+        session.commit()
     except StorageError as exc:
         logger.exception("krater.compute_storage_cleanup failed")
+        session.rollback()
         _report_failure("compute_storage_cleanup", _failure(exc))
     finally:
         session.close()

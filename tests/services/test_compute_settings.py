@@ -30,6 +30,9 @@ APPROVED = {
     # 2026-11-04: $20 per TB each way, from a read-only search of verified hosts (median $3.91/TB).
     "transfer_cap_microusd_per_gb": 20_000,
     "transfer_warn_percent": 10,
+    # 2026-11-11, before compute was turned on for members.
+    "max_machines": 4,
+    "job_idle_warn_minutes": 30,
 }
 
 
