@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+
+{% block title %}Compute spend and storage{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <a class="back-link" href="/admin/compute">&larr; Compute settings</a>
+    <h1>Compute spend and storage</h1>
+    <p class="page-subtitle">
+      What every project has spent, what it runs now, and what it keeps in Krater's storage. Spend is Krater's
+      estimate, corrected to Vast's own charges every hour.
+    </p>
+  </div>
+</div>
+
+{% if switch.paused_at or switch.halt_reason %}
+  <p class="budget-banner" role="status">
+    <strong>Compute is stopped:</strong>
+    {% if switch.paused_at %}an admin stopped it at {{ switch.paused_at.strftime("%Y-%m-%d %H:%M UTC") }} ({{ switch.paused_reason }}).{% else %}{{ switch.halt_reason }}.{% endif %}
+    <a href="/admin/compute#stop-switch">Stop switch</a>
+  </p>
+{% endif %}
+
+<nav class="page-actions" aria-label="Period">
+  {% for each in periods %}
+    <a class="button{% if each.key == period.key %} button--primary{% endif %}" href="?period={{ each.key }}"{% if each.key == period.key %} aria-current="page"{% endif %}>{{ each.label }}</a>
+  {% endfor %}
+</nav>
+
+<dl class="stats stats--compact">
+  <div class="stat"><dt>Spent, {{ period.label | lower }}</dt><dd>{{ period_total_cents | dollars }}</dd></div>
+  {% for cap in caps %}
+    <div class="stat{% if cap.reached %} stat--bad{% endif %}">
+      <dt>{{ cap.label | capitalize }} cap</dt>
+      <dd>{% if cap.cap_cents %}{{ cap.spent_cents | dollars }} of {{ cap.cap_cents | dollars }}{% else %}Off{% endif %}</dd>
+    </div>
+  {% endfor %}
+  <div class="stat{% if credit and credit_alert_cents and credit.credit_microusd < credit_alert_cents * 10000 %} stat--bad{% endif %}">
+    <dt>Vast credit</dt>
+    <dd>{% if credit %}${{ "{:,.2f}".format(credit.credit_microusd / 1000000) }}{% else %}Not read yet{% endif %}</dd>
+  </div>
+  <div class="stat"><dt>Machines now</dt><dd>{{ machines_total }}</dd></div>
+  <div class="stat"><dt>Jobs queued</dt><dd>{{ queued_total }}</dd></div>
+  {% set store_bad = capacity_bytes and stored_bytes * 100 >= capacity_bytes * store_alert_percent %}
+  <div class="stat{% if store_bad %} stat--bad{% endif %}">
+    <dt>Storage used</dt>
+    <dd>{{ stored_bytes | filesize }}{% if capacity_bytes %} of {{ capacity_bytes | filesize }}{% endif %}</dd>
+  </div>
+</dl>
+
+<section aria-labelledby="by-project">
+  <div class="section-head">
+    <h2 id="by-project">By project</h2>
+    <p>
+      Every project that has spent on compute, runs or waits for a machine, or keeps files. Most spent
+      {{ period.label | lower }} first.
+    </p>
+  </div>
+  {% if rows %}
+    <div class="table-scroll">
+      <table class="table">
+        <thead>
+          <tr>
+            <th scope="col">Project</th>
+            <th scope="col" class="num">Spent, {{ period.label | lower }}</th>
+            <th scope="col" class="num">Spent in all</th>
+            <th scope="col" class="num">Budget left</th>
+            <th scope="col" class="num">Machines</th>
+            <th scope="col" class="num">Queued</th>
+            <th scope="col" class="num">Storage</th>
+            <th scope="col">Last check with Vast</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+            {% set project = row.project %}
+            <tr>
+              <td class="cell-title">
+                <a href="/projects/{{ project.id }}">{{ project.title or "Untitled proposal" }}</a>
+                <div class="muted">
+                  {{ project.status.value.replace('_', ' ') }}
+                  {% if project.files_deleted_at %}· files deleted {{ project.files_deleted_at.strftime("%Y-%m-%d") }}
+                  {% elif project.files_delete_on %}· files deleted {{ project.files_delete_on.strftime("%Y-%m-%d") }}{% endif %}
+                  · <a href="/admin/compute/projects/{{ project.id }}">settings</a>
+                </div>
+              </td>
+              <td class="num">{{ row.period_cents | dollars }}</td>
+              <td class="num">{{ row.total_cents | dollars }}</td>
+              <td class="num">{{ row.remaining_cents | dollars }}<div class="muted">of {{ row.ceiling_cents | dollars }}</div></td>
+              <td class="num">{{ row.machines }}<div class="muted">limit {{ row.max_machines }}</div></td>
+              <td class="num">{{ row.queued }}</td>
+              <td class="num">{{ row.storage_bytes | filesize }}<div class="muted">of {{ row.quota_bytes | filesize }}</div></td>
+              <td>
+                {% if row.check %}
+                  Krater ${{ "%.2f" | format(row.check.estimate_microusd / 1000000) }},
+                  Vast ${{ "%.2f" | format(row.check.actual_microusd / 1000000) }}
+                  <div class="muted">{{ row.check.checked_at.strftime("%Y-%m-%d %H:%M UTC") }}{% if row.check.alerted %} · didn't match{% endif %}</div>
+                {% else %}
+                  <span class="muted">None yet</span>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="muted">No project has used compute yet.</p>
+  {% endif %}
+</section>
+
+<section aria-labelledby="checks">
+  <div class="section-head">
+    <h2 id="checks">Krater's estimate against Vast's charges</h2>
+  </div>
+  <p>
+    Each project's last hourly check, added up: Krater estimated
+    <strong>${{ "{:,.2f}".format(checks_estimate_microusd / 1000000) }}</strong> for those machines and Vast charged
+    <strong>${{ "{:,.2f}".format(checks_actual_microusd / 1000000) }}</strong>. Krater then uses Vast's figure. Checks
+    that differed by more than the reconciliation alert are listed on <a href="/admin/compute#mismatches">Compute
+    settings</a>.
+  </p>
+</section>
+
+<section aria-labelledby="storage">
+  <div class="section-head">
+    <h2 id="storage">Storage</h2>
+  </div>
+  {% if counted_at %}
+    <p>
+      {{ stored_bytes | filesize }} stored as of {{ counted_at.strftime("%Y-%m-%d %H:%M UTC") }}, counted every hour:
+      checkpoints, outputs, logs and workspaces by project, plus {{ image_bytes | filesize }} of proposal and gallery
+      images, which share the store.
+      {% if capacity_bytes %}
+        The store holds {{ capacity_bytes | filesize }}; admins are alerted at {{ store_alert_percent }}%.
+      {% else %}
+        Krater doesn't know the store's size (<code>KRATER_COMPUTE_STORE_CAPACITY_GB</code> isn't set), so there's no
+        "nearly full" alert.
+      {% endif %}
+    </p>
+  {% else %}
+    <p class="muted">Not counted yet: the worker counts it every hour.</p>
+  {% endif %}
+  <p>
+    The default quota is {{ default_quota_gb }} GB per project{% if capacity_bytes and default_quota_gb * 1024**3 >= capacity_bytes %}, as much as
+    the whole store: a few busy projects can fill it before any reaches its quota. Lower it on
+    <a href="/admin/compute">Compute settings</a>, or per project{% endif %}. Disk use on the server is higher than
+    what's counted here: the store frees a deleted file's space only when it compacts.
+  </p>
+</section>
+{% endblock %}

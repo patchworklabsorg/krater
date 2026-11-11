@@ -12,7 +12,95 @@
       project's compute settings. Members choose their own target and max prices, within their project's hourly cap.
     </p>
   </div>
+  <div class="page-actions">
+    <a class="button" href="/admin/compute/overview">Spend and storage</a>
+    <a class="button" href="/admin/live">Live compute</a>
+    <a class="button" href="/help/compute-runbook">Runbook</a>
+  </div>
 </div>
+
+<section class="card" id="stop-switch" aria-labelledby="stop-switch-title">
+  <h2 id="stop-switch-title">Stop switch</h2>
+  {% if switch.paused_at %}
+    <p class="budget-banner" role="status">
+      <strong>Compute is stopped</strong> by an admin since {{ switch.paused_at.strftime("%Y-%m-%d %H:%M UTC") }}:
+      {{ switch.paused_reason }}
+    </p>
+    <p>
+      Krater starts nothing and has stopped every running machine. Queued jobs wait and get this time back on their
+      max wait. Stopped boxes stay stopped, and are still destroyed after the box destroy time.
+    </p>
+    <form method="post" action="/admin/compute/start" class="form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="field">
+        <label for="switch-reason">Reason for turning it back on (required)</label>
+        <textarea id="switch-reason" name="reason" rows="2">{{ switch_reason }}</textarea>
+        {% if switch_errors.reason %}<p class="field-error">{{ switch_errors.reason }}</p>{% endif %}
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="button button--primary">Turn compute back on</button>
+      </div>
+    </form>
+  {% else %}
+    {% if switch.halt_reason %}
+      <p class="budget-banner" role="status">
+        <strong>Compute is stopped</strong> since {{ switch.halted_since.strftime("%Y-%m-%d %H:%M UTC") }}:
+        {{ switch.halt_reason }}.
+      </p>
+    {% elif not switch.compute_on %}
+      <p class="muted">Compute is off on this server (<code>KRATER_COMPUTE_MODE=off</code>), so nothing runs either way.</p>
+    {% endif %}
+    <p>
+      Stops all of Krater Compute within a minute: no new machines, no searches, and every running machine stopped.
+      A batch job's machine is destroyed and the job goes back in the queue; it carries on from its last checkpoint
+      in storage when compute is back on. A running box saves /workspace and stops. Use it when spend looks wrong,
+      Vast misbehaves, or anything else needs everything to stop now.
+    </p>
+    <form method="post" action="/admin/compute/stop" class="form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="field">
+        <label for="switch-reason">Reason (required; posted to the alerts channel)</label>
+        <textarea id="switch-reason" name="reason" rows="2">{{ switch_reason }}</textarea>
+        {% if switch_errors.reason %}<p class="field-error">{{ switch_errors.reason }}</p>{% endif %}
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="button button--danger">Stop all compute</button>
+      </div>
+    </form>
+  {% endif %}
+</section>
+
+<section class="card form-card" id="limits" aria-labelledby="limits-title">
+  <h2 id="limits-title">Organization limits</h2>
+  <p>
+    One value for all of Krater. The spending caps and the low credit alert are off (0) until you set them.
+    {% for cap in caps if cap.cap_cents %}
+      {% if loop.first %}So far:{% endif %}
+      {{ cap.spent_cents | dollars }} of the {{ cap.label }} {{ cap.cap_cents | dollars }}{{ "," if not loop.last else "." }}
+    {% endfor %}
+  </p>
+  <form method="post" action="/admin/compute/limits" class="form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="form-grid">
+      {% for row in org_rows %}
+        <div class="field">
+          <label for="org-{{ row.field.name }}">{{ row.field.label }}{% if row.field.unit %} ({{ row.field.unit }}){% endif %}</label>
+          <input type="text" inputmode="decimal" id="org-{{ row.field.name }}" name="{{ row.field.name }}" value="{{ row.value }}">
+          <p class="field-hint">{{ row.field.help }}</p>
+          {% if org_errors[row.field.name] %}<p class="field-error">{{ org_errors[row.field.name] }}</p>{% endif %}
+        </div>
+      {% endfor %}
+    </div>
+    <div class="field">
+      <label for="org-reason">Reason (required)</label>
+      <textarea id="org-reason" name="reason" rows="2">{{ org_reason }}</textarea>
+      {% if org_errors.reason %}<p class="field-error">{{ org_errors.reason }}</p>{% endif %}
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="button button--primary">Save limits</button>
+    </div>
+  </form>
+</section>
 
 <section class="card" id="search-quota">
   <h2>Vast search quota</h2>

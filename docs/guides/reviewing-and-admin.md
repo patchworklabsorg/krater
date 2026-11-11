@@ -170,12 +170,33 @@ project's Admin card, **Compute settings for this project**). Each change needs 
 | Heartbeat timeout | 30 minutes | A machine whose runner goes silent is destroyed and its job failed |
 | Self-stop without Krater | 3 hours | A machine that can't reach Krater stops itself |
 | Storage quota | 50 GB | Checkpoints and outputs per project |
+| Machines at once | 4 | The most machines one project may have running, starting or outbid; a stopped box doesn't count |
+| Idle GPU warning | 30 minutes | A batch job whose GPU stays under 5% this long gets one warning in its channel (0 = off) |
+
+Below the defaults are the **organization limits**, one value for all of Krater:
+
+| Limit | Default | What it does |
+| --- | --- | --- |
+| Daily spending cap | Off | Compute spend across every project in a UTC day. At the cap Krater stops everything, as the stop switch does, until midnight UTC or until an admin raises it |
+| Monthly spending cap | Off | The same for the calendar month (UTC) |
+| Low credit alert | Off | The alerts channel hears when the Vast account's credit falls under this |
+| Delete finished projects' files after | 30 days | A completed or withdrawn project's checkpoints and outputs are deleted this long after it finishes. The date is fixed then and posted in its channel; 0 keeps them |
+
+The spending caps use Krater's own estimate, which trails Vast's charges by up to an hour, so leave a margin.
+
+At the top is the **stop switch**: **Stop all compute**, with a reason. Within a minute Krater starts nothing,
+searches for nothing, destroys every batch job's machine (the jobs go back in the queue and carry on from their last
+checkpoint later) and stops every running box after it saves /workspace. **Turn compute back on** undoes it; queued
+jobs get the stopped time back on their max wait. See the [compute runbook](compute-runbook.md) for when to use it.
 
 The page also shows Vast's daily search quota and any hourly spend check that didn't match Vast's charges.
 
 ## Watching compute
 
 - **Live compute** (`/admin/live`) lists every queued job and every machine Krater holds, on every project.
+- **Spend and storage** (`/admin/compute/overview`) shows, for the last 7 or 30 days, this month or all time, what
+  each project spent, its budget left, its machines and queue, its storage against its quota, and its last check
+  against Vast's charges; and across Krater, the spending caps, the Vast account's credit and how full storage is.
 - **A job's page** is open to admins, with its output and files, so you can help a member debug.
 - **Boxes:** every admin's SSH keys are on every box, next to the owner's (add yours under **SSH keys**). The box's
   page names the admins whose keys are on it. Logging in lets you read the project's secrets, and your open session
@@ -203,7 +224,13 @@ while it lasts, and when it clears. It covers:
 - Quilt's outbox backing up;
 - Stash archive requests backing up;
 - prices not refreshed;
-- background jobs ending in errors (worker tasks, not members' compute jobs).
+- background jobs ending in errors (worker tasks, not members' compute jobs);
+- compute stopped, by an admin's stop switch or a spending cap;
+- Vast charging for machines labelled as Krater's that Krater never rented;
+- the Vast account's credit under the low credit alert;
+- storage 80% full (when the server knows the store's size).
+
+What to do about each is in the [compute runbook](compute-runbook.md).
 
 A dead worker can't post, so an outside uptime check watches `/healthz/worker`, which fails once the worker has been
 silent for 5 minutes.

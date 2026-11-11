@@ -17,6 +17,7 @@ For reviewers and admins:
   compute settings and alerts.
 - [Record and report an OSPool grant](ospool-grants.md)
 - [Share proposals with OSPool](share-with-ospool.md)
+- [Compute runbook](compute-runbook.md): the stop switch, and what to do about each compute alert.
 
 To add a guide to Help, list it in `GUIDES` in `krater/web/help_docs.py`. Link between guides by file name
 (`compute-jobs.md#secrets`); Krater turns those into Help links, and links to other docs here into GitHub links.
