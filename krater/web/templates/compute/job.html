@@ -211,10 +211,13 @@
     </section>
   {% endif %}
 
-  {% if can_stop or can_resume or can_cancel %}
+  {% if can_stop or can_resume or can_cancel or can_rerun %}
     <section class="card">
       <h2>Actions</h2>
       <div class="action-row">
+        {% if can_rerun %}
+          <a class="button" href="/projects/{{ project.id }}/compute/new?from={{ job.id }}">Run again</a>
+        {% endif %}
         {% if can_stop %}
           <form method="post" action="/projects/{{ project.id }}/compute/{{ job.id }}/stop">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

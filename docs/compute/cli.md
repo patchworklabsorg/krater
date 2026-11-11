@@ -84,6 +84,18 @@ queues nothing. A queued job prints the same line, and `krater show <job>` split
 with Vast's figure for each where it has one. `POST /api/v1/projects/{id}/jobs/estimate` takes the same body as a
 submit.
 
+### Job files, sweeps and reruns
+
+- `krater submit -f job.toml` reads `project` and any option, by its long name (`max-runtime = 120` or
+  `max_runtime`), from a TOML file, plus a `[sweep]` table. An option typed on the command line wins over the file,
+  so `submit`'s defaults are applied only after the file is read. Python 3.10 reads TOML with `tomli`, 3.11+ with
+  the standard library.
+- `--sweep NAME=V1,V2` (repeatable) and `--count N` expand on the member's side into up to 100 ordinary jobs, named
+  `<name>-<index>`, each command prefixed with `export KRATER_SWEEP_INDEX=<index> NAME=<value>;` (values shell-quoted).
+  Krater sees separate jobs; there is no sweep object. If Krater refuses one part-way, the CLI says which were queued.
+- `krater rerun <job>` posts the job's `spec` from `GET /api/v1/jobs/{id}` (the submit body it was queued with) to
+  the submit endpoint, so the budget, verification and transfer checks run again.
+
 ### Data transfer
 
 Vast bills data into and out of the machine per GB on top of the hourly price. `--data-in 400 --data-out 100` (GB)

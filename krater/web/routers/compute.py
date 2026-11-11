@@ -12,7 +12,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Annotated
 
 import sqlalchemy as sa
-from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
@@ -48,7 +48,7 @@ from krater.services.compute_jobs import JobSpec
 from krater.services.errors import ConfirmationRequired, InvalidState, NotAllowed, NotFound, ValidationFailed
 from krater.services.launch_rules import LAUNCHABLE_STATUSES, hourly_cap_cents
 from krater.storage import StorageError, get_compute_store
-from krater.vast import usd_to_microusd
+from krater.vast import microusd_to_usd, usd_to_microusd
 from krater.weave import WeaveClient, get_weave_client
 from krater.weave import links as weave_links
 from krater.web.charts import PricePoint, price_chart_svg
@@ -211,6 +211,7 @@ def _form_page(
     status_code=200,
     transfer_warning: str | None = None,
     estimate=None,
+    source: ComputeJob | None = None,
 ):
     settings = get_settings()
     policy = compute_settings.effective_policy(db_session, project)
@@ -227,6 +228,7 @@ def _form_page(
             ),
             "transfer_warning": transfer_warning,
             "estimate": estimate,
+            "source": source,
             "escalations": ESCALATION_LABELS,
             "errors": errors or {},
             "posted": posted or {},
@@ -246,12 +248,47 @@ def new_job(
     db_session: Annotated[Session, Depends(get_session)],
     actor: Annotated[Actor, Depends(session_actor)],
     weave_client: Annotated[WeaveClient, Depends(get_weave_client)],
+    from_job: Annotated[uuid.UUID | None, Query(alias="from")] = None,
 ):
     _require_compute()
     project = _project(db_session, actor, project_id)
     if not _is_team(actor, project):
         raise NotAllowed("Only the project's team can run jobs on its budget.")
-    return _form_page(request, db_session, project, weave_client)
+    if from_job is None:
+        return _form_page(request, db_session, project, weave_client)
+    # "Run again": the same job's fields, to queue as they are or change first. Only a job of this project.
+    source = _job(db_session, project, from_job)
+    return _form_page(request, db_session, project, weave_client, posted=_posted_from(source), source=source)
+
+
+def _rate_text(microusd: int) -> str:
+    return format(microusd_to_usd(microusd).normalize(), "f")
+
+
+def _posted_from(job: ComputeJob) -> dict:
+    """A job's fields as the form posts them, so the form comes back filled in."""
+    posted = {
+        "name": job.name,
+        "kind": job.kind.value,
+        "image": job.image,
+        "command": job.command or "",
+        "gpu": list(job.gpu_names),
+        "min_vram": str(job.min_gpu_ram_gb) if job.min_gpu_ram_gb else "",
+        "num_gpus": str(job.num_gpus),
+        "disk_gb": str(job.disk_gb),
+        "data_in_gb": "" if job.data_in_gb is None else str(job.data_in_gb),
+        "data_out_gb": "" if job.data_out_gb is None else str(job.data_out_gb),
+        "max_wait_minutes": str(job.max_wait_minutes),
+        "on_max_wait": job.on_max_wait.value,
+        "max_runtime_minutes": str(job.max_runtime_minutes),
+    }
+    if job.interruptible:
+        posted["interruptible"] = "on"
+    if job.is_limit_order:
+        posted.update(order="limit", limit=_rate_text(job.target_microusd))
+    else:
+        posted.update(order="range", target=_rate_text(job.target_microusd), max=_rate_text(job.max_microusd))
+    return posted
 
 
 @router.post("/projects/{project_id}/compute", dependencies=[Depends(verify_csrf_token)])
@@ -389,6 +426,7 @@ def job_page(
             "estimate": estimate,
             "costs": job_costs.breakdown(job),
             "can_cancel": (is_team or actor.is_admin) and (job.is_active or job.state is ComputeJobState.QUEUED),
+            "can_rerun": is_team and actor.is_member,
             "can_stop": is_team and job.kind is ComputeJobKind.BOX and job.state is ComputeJobState.RUNNING,
             "can_resume": is_team and job.kind is ComputeJobKind.BOX and job.state is ComputeJobState.STOPPED,
             "escalations": ESCALATION_LABELS,

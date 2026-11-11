@@ -360,7 +360,8 @@ Open the job from your project's **Compute** page. It shows:
 - **Files**: checkpoints, outputs and logs, to download;
 - **What happened**: every step, with times: queued, rented, started, outbid, bid raised, moved, finished;
 - **Machine**: the GPU and price it was rented at, and for a box, how to connect;
-- **Actions**: **Cancel** (and for a box: **Stop**, **Resume**, **Start it elsewhere**).
+- **Actions**: **Run again** (the form, filled in from this job), **Cancel** (and for a box: **Stop**, **Resume**,
+  **Start it elsewhere**).
 
 **Cancel** destroys the machine within a minute or so. Anything not yet uploaded is lost, so let a job finish if you
 want its last outputs.
@@ -561,6 +562,8 @@ job is its name or the start of its id. If that matches more than one, the CLI l
 | `--data-in GB`, `--data-out GB` | Your data transfer estimate |
 | `--confirm-transfer-cost` | Queue without asking, even if transfer could cost a large share of the budget |
 | `--estimate` | Say what the job may cost and queue nothing |
+| `-f job.toml` | Read the options from a file; the project and options typed here win ([how](#keep-a-jobs-options-in-a-file)) |
+| `--sweep NAME=V1,V2`, `--count N` | Queue one job per value (and N of each), with `$NAME` and `$KRATER_SWEEP_INDEX` set ([how](#a-hyperparameter-sweep)) |
 
 Leave the price out, and `krater submit` shows current prices for the GPUs you named, explains the options, and
 queues nothing.
@@ -570,6 +573,7 @@ queues nothing.
 | Command | What it does |
 | --- | --- |
 | `krater show <job>` | State, machine and recent events |
+| `krater rerun <job>` | Queues it again with the same settings (`--name` for a new name) |
 | `krater logs <job>` | The end of the output. `-f` follows it; `--attempt 1` shows an earlier attempt |
 | `krater wait <job>` | Blocks until the job is finished. Exits 0 if it succeeded, the command's own code if it failed with one, 124 on `--timeout` |
 | `krater cancel <job>` | Cancels it; the machine is destroyed |
@@ -586,18 +590,49 @@ Every command takes `--json` for scripts. More detail is in [compute/cli.md](../
 
 ### A hyperparameter sweep
 
-Each run is its own job, all on the project's budget:
+`--sweep NAME=V1,V2` queues one job per value, and the command sees the value as `$NAME`. Give `--sweep` more than
+once for every combination; `--count N` queues N copies of each (for seeds). Every job also gets
+`$KRATER_SWEEP_INDEX` (0, 1, ...) and a name ending in `-<index>`:
 
 ```bash
-for lr in 1e-4 3e-4 1e-3; do
-  krater submit vision --name "sweep-lr$lr" --image ghcr.io/you/train:v1 \
-    --command "cd /app && python train.py --lr $lr" \
-    --gpu "RTX 4090" --limit 0.35 --max-runtime 120
-done
+krater submit vision --name sweep --image ghcr.io/you/train:v1 \
+  --command 'cd /app && python train.py --lr $lr --seed $KRATER_SWEEP_INDEX' \
+  --gpu "RTX 4090" --limit 0.35 --max-runtime 120 --sweep lr=1e-4,3e-4,1e-3
 krater jobs vision
 ```
 
-Each job holds its expected cost while it runs (see below), so a big sweep can wait for budget. Start small.
+Use single quotes around the command so your own shell leaves `$lr` alone. Each job's command starts with
+`export KRATER_SWEEP_INDEX=0 lr=1e-4;`, so its page shows exactly what it ran with. One submit queues at most 100
+jobs, a sweep asks about a costly data transfer once for all of them, and `--estimate` shows the total. Each job holds
+its expected cost while it runs (see below), so a big sweep can wait for budget. Start small.
+
+### Keep a job's options in a file
+
+`krater submit -f job.toml` reads the options from a TOML file, under their long names. Anything you also type on the
+command line wins, so one file can serve several runs:
+
+```toml
+project = "vision"
+name = "train"
+image = "ghcr.io/you/train:v1"
+command = "cd /app && python train.py --lr $lr"
+gpu = ["RTX 4090", "RTX 3090"]
+limit = 0.35
+max-runtime = 120
+data-out = 20
+
+[sweep]
+lr = [1e-4, 3e-4]
+```
+
+```bash
+krater submit -f job.toml --max-runtime 30 --name smoke-test
+```
+
+### Run a job again
+
+**Run again** on a job's page opens the form filled in from it, to queue as it is or change first.
+`krater rerun <job>` queues it again with the same settings straight away; `--name` gives the new one another name.
 
 ### Run a script and act on the result
 
