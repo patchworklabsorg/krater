@@ -182,6 +182,7 @@ def price_history_record(timestamp: int) -> None:
             pause_seconds=PRICE_HISTORY_SEARCH_PAUSE_SECONDS,
         )
         compute_search_quota.record(session, client.search_quota, now=datetime.now(UTC))
+        price_history.prune_observations(session, now=datetime.now(UTC))
         session.commit()
         logger.info(
             "krater price_history_record: %d samples, %d failed%s",

@@ -20,13 +20,13 @@ import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from krater.compute.offers import within_transfer_cap
-from krater.models import GpuPriceSample
+from krater.models import GpuOfferObservation, GpuPriceSample
 from krater.providers import ComputeProvider, ProviderError, ProviderRateLimitedError
 from krater.services import compute_settings
 from krater.vast import Offer, OfferQuery, RentalType, usd_to_microusd
@@ -36,6 +36,10 @@ logger = logging.getLogger(__name__)
 
 RENTAL_TYPES: tuple[RentalType, ...] = ("bid", "ondemand")
 #: The share of Vast's daily search quota price history leaves for the scheduler.
+#: How many of each sample's cheapest offers are kept as `GpuOfferObservation` rows (outbid-risk data), and for how
+#: long: 18 models x 2 rental types x 24 a day is about 35,000 rows a day.
+OBSERVED_OFFERS = 24
+OBSERVATION_DAYS = 60
 QUOTA_RESERVE = 0.5
 
 
@@ -143,9 +147,42 @@ def record(
                 median_microusd=summary.median_microusd,
             )
         )
+        _observe(session, offers, gpu_name, rental_type, disk_gb=disk_gb, now=now)
         written += 1
     session.flush()
     return RecordResult(written, failed, stopped_early=False)
+
+
+def _observe(
+    session: Session, offers: list[Offer], gpu_name: str, rental_type: RentalType, *, disk_gb: int, now: datetime
+) -> None:
+    """Keep the cheapest offers' hosts and prices: following a machine from sample to sample shows how its minimum
+    bid moves, which is what outbids a running interruptible machine."""
+    priced = sorted(
+        ((usd_to_microusd(o.full_hourly(rental_type, disk_gb)), o) for o in offers if o.num_gpus == 1),
+        key=lambda pair: pair[0],
+    )
+    for full, offer in priced[:OBSERVED_OFFERS]:
+        session.add(
+            GpuOfferObservation(
+                sampled_at=now,
+                gpu_name=gpu_name,
+                rental_type=rental_type,
+                machine_id=offer.machine_id,
+                offer_id=offer.id,
+                gpu_microusd=usd_to_microusd(offer.gpu_price(rental_type)),
+                full_microusd=full,
+                reliability=offer.reliability,
+            )
+        )
+
+
+def prune_observations(session: Session, *, now: datetime) -> int:
+    """Delete offer observations older than `OBSERVATION_DAYS`. The caller commits."""
+    result = session.execute(
+        sa.delete(GpuOfferObservation).where(GpuOfferObservation.sampled_at < now - timedelta(days=OBSERVATION_DAYS))
+    )
+    return result.rowcount or 0
 
 
 def series(

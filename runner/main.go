@@ -5,8 +5,8 @@
 //  1. tells Krater it started (POST /runner/v1/start) and learns the command and whether this is a resume;
 //  2. restores the job's checkpoints into $KRATER_CHECKPOINT_DIR;
 //  3. runs the member's command with `sh -c`;
-//  4. sends a heartbeat every minute with the GPU use it samples from nvidia-smi, and stops the command when Krater
-//     says so;
+//  4. sends a heartbeat every minute with the GPU use it samples from nvidia-smi and the container's network use
+//     (netcount.go), and stops the command when Krater says so;
 //  5. uploads changed checkpoints on a timer, and checkpoints and outputs when the command exits; the command's
 //     output (and the runner's own lines) go to the job's log, uploaded every minute, which its team reads in Krater;
 //  6. reports the exit code. Krater then destroys the machine.
@@ -122,6 +122,12 @@ func main() {
 		}
 	}
 	go cfg.SelfStop.Run(context.Background(), time.Minute)
+	net := &NetCounter{Path: "/proc/net/dev", NSPath: "/proc/self/ns/net"}
+	if cfg.SelfStop.StatePath != "" {
+		net.StatePath = filepath.Join(filepath.Dir(cfg.SelfStop.StatePath), "net.json")
+		net.Load()
+	}
+	netSample = net.Sample
 	code, err := Run(context.Background(), cfg, &http.Client{Timeout: 60 * time.Second}, &http.Client{}, nvidiaSMI)
 	if err != nil {
 		logf("%v", err)
@@ -336,6 +342,7 @@ func heartbeatLoop(ctx context.Context, api *API, every time.Duration, gpu func(
 		if util, ok := sampler.average(); ok {
 			beat["gpu_util"] = util
 		}
+		addNetUse(beat)
 		shouldStop, err := api.Heartbeat(ctx, beat)
 		var denied *ErrDenied
 		switch {

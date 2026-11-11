@@ -261,6 +261,7 @@ def submit_job(
             else "target price."
         ),
         queued_at=now,
+        wait_started_at=now,
     )
     session.add(job)
     session.flush()

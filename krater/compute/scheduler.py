@@ -41,7 +41,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from krater import providers
-from krater.compute import launch, offers, runner_api, search_quota, spend
+from krater.compute import launch, market, offers, runner_api, search_quota, spend
 from krater.compute.search_pacing import SearchPacer
 from krater.config import Settings
 from krater.models import (
@@ -73,6 +73,7 @@ from krater.services import (
     compute_halt,
     compute_jobs,
     compute_settings,
+    compute_watch,
     funding_holds,
 )
 from krater.services.compute_settings import ComputePolicy
@@ -139,13 +140,23 @@ def _dollars(microusd: int) -> str:
     return f"${microusd_to_usd(microusd).quantize(Decimal('0.0001'))}/h"
 
 
-def _transfer(job: ComputeJob) -> offers.Transfer:
-    """The data the member expects `job` to move, spread over its max runtime, for ranking hosts."""
+def _transfer(job: ComputeJob, image_bytes: int | None = None) -> offers.Transfer:
+    """The data the member expects `job` to move and its image's size, spread over its max runtime, for ranking
+    hosts and holding budget."""
     return offers.Transfer(
         in_gb=job.data_in_gb or 0,
         out_gb=job.data_out_gb or 0,
         runtime_hours=Decimal(job.max_runtime_minutes) / 60,
+        image_bytes=image_bytes or 0,
     )
+
+
+#: A credit reading older than this doesn't hold anything back.
+CREDIT_FRESH = timedelta(hours=2)
+
+
+def _mbps(value: float | None) -> int | None:
+    return int(value) if value and value > 0 else None
 
 
 def _span(minutes: int) -> str:
@@ -159,6 +170,7 @@ def _requeue(session: Session, job: ComputeJob, reason: str, *, now: datetime) -
     job.state = ComputeJobState.QUEUED
     job.state_reason = reason
     job.queued_at = now
+    job.wait_started_at = now
     job.hold_cents = 0
 
 
@@ -217,6 +229,7 @@ class Scheduler:
         self._searches: dict[str, list[Offer]] = {}
         # Why compute is halted this pass (`krater.services.compute_halt`), as members read it; `None` while it runs.
         self.halt: str | None = None
+        self._org: compute_settings.OrgLimits | None = None
 
     # -- Entry point -----------------------------------------------------------------------------------
 
@@ -600,6 +613,7 @@ class Scheduler:
             # It was running and isn't now, without Krater stopping it: outbid (or the host went away).
             row.state = ComputeInstanceState.PAUSED
             row.paused_since = self.now
+            row.outbid_count += 1
             # A pause kills the container's processes and Vast restarts it on resume: the runner must start again.
             row.runner_starts_needed = row.runner_starts + 1
             job.state = ComputeJobState.PAUSED
@@ -1246,6 +1260,14 @@ class Scheduler:
             return False
         plan = self._plan(job)
         if plan is None:
+            market.record_wait(
+                self.session,
+                job,
+                now=self.now,
+                outcome="cancelled",
+                rental_type="bid" if job.interruptible else "ondemand",
+                limit_microusd=job.max_microusd,
+            )
             _finish(
                 job,
                 ComputeJobState.CANCELLED,
@@ -1266,6 +1288,8 @@ class Scheduler:
         failed = self._failed_machines(job)
         if failed:
             found = [offer for offer in found if offer.machine_id not in failed]
+        digest, _ = self._image_for(job)
+        transfer = _transfer(job, market.image_bytes(self.session, self.registry, job.image, digest, now=self.now))
         choice = offers.choose(
             found,
             rental_type=rental_type,
@@ -1276,7 +1300,7 @@ class Scheduler:
             several_models=len(job.gpu_names) != 1,
             exclude=taken,
             transfer_cap_microusd_per_gb=policy.transfer_cap_microusd_per_gb,
-            transfer=_transfer(job),
+            transfer=transfer,
         )
         if choice is None:
             low = offers.cheapest(
@@ -1292,19 +1316,68 @@ class Scheduler:
             )
             return False
 
+        short = self._credit_short(choice)
+        if short is not None:
+            job.state_reason = short
+            return False
+
         # Budget: under the project's row lock, so two jobs can't hold the same dollars.
         self.session.execute(sa.select(Project.id).where(Project.id == project.id).with_for_update())
         available = budget.remaining_cents(self.session, project) - self._held_cents(project, exclude=job)
-        hour_cents = spend.ceil_div(choice.full_microusd, MICROUSD_PER_CENT)
+        # Before the first hour: the image pull and the data the member expects to bring in, both at this host's price.
+        upfront_microusd = (
+            transfer.image_microusd(choice.offer) + transfer.in_gb * choice.offer.transfer_in_microusd_per_gb
+        )
+        hour_cents = spend.ceil_div(choice.full_microusd + upfront_microusd, MICROUSD_PER_CENT)
         if available < hour_cents:
+            data = (
+                f" plus ${spend.ceil_div(upfront_microusd, MICROUSD_PER_CENT) / 100:.2f} of data"
+                if upfront_microusd
+                else ""
+            )
             job.state_reason = (
-                f"Waiting for budget: one hour at {_dollars(choice.full_microusd)} needs ${hour_cents / 100:.2f}, "
-                f"${max(available, 0) / 100:.2f} is free."
+                f"Waiting for budget: one hour at {_dollars(choice.full_microusd)}{data} needs "
+                f"${hour_cents / 100:.2f}, ${max(available, 0) / 100:.2f} is free."
             )
             return False
-        run_cents = spend.ceil_div(choice.full_microusd * job.max_runtime_minutes, 60 * MICROUSD_PER_CENT)
+        run_cents = spend.ceil_div(
+            choice.full_microusd * job.max_runtime_minutes + 60 * transfer.cost_microusd(choice.offer),
+            60 * MICROUSD_PER_CENT,
+        )
         self._rented_from.add(pace_key)
-        return self._rent(job, choice, hold_cents=min(run_cents, available), taken=taken)
+        return self._rent(
+            job,
+            choice,
+            hold_cents=min(run_cents, available),
+            taken=taken,
+            image_bytes=transfer.image_bytes or None,
+            limit_microusd=limit,
+        )
+
+    def _org_limits(self) -> compute_settings.OrgLimits:
+        if self._org is None:
+            self._org = compute_settings.org_limits(self.session)
+        return self._org
+
+    def _credit_short(self, choice: offers.Choice) -> str | None:
+        """Why renting `choice` would eat into the credit reserve, or `None`. Off (0 hours) by default, and without a
+        fresh credit reading it never holds anything back: a missing or wrong reading mustn't stop all compute."""
+        hours = self._org_limits().credit_reserve_hours
+        if hours <= 0:
+            return None
+        credit = compute_watch.latest_credit(self.session)
+        if credit is None or self.now - credit.observed_at > CREDIT_FRESH:
+            return None
+        running = self.session.scalars(
+            sa.select(ComputeInstance).where(self._ours(), ComputeInstance.state.in_(spend.BILLING_STATES))
+        )
+        hourly = sum(spend.hourly_rate_microusd(row) for row in running) + choice.full_microusd
+        if credit.credit_microusd >= hourly * hours:
+            return None
+        return (
+            f"Waiting: the {self.provider.title} account's credit (${credit.credit_microusd / 1_000_000:,.2f}) "
+            f"wouldn't cover {hours} hours of Krater's machines with this one. An admin needs to add credit."
+        )
 
     def _offers_for(
         self, job: ComputeJob, *, rental_type: RentalType, limit: int, policy: ComputePolicy
@@ -1365,7 +1438,16 @@ class Scheduler:
             return digest, job.image
         return digest, parse_reference(job.image).pinned(digest)
 
-    def _rent(self, job: ComputeJob, choice: offers.Choice, *, hold_cents: int, taken: set[str]) -> bool:
+    def _rent(
+        self,
+        job: ComputeJob,
+        choice: offers.Choice,
+        *,
+        hold_cents: int,
+        taken: set[str],
+        image_bytes: int | None = None,
+        limit_microusd: int | None = None,
+    ) -> bool:
         if job.kind is ComputeJobKind.BOX and self._account_has_ssh_keys():
             job.state_reason = (
                 f"Krater doesn't start boxes while the {self.provider.title} account has SSH keys: they may reach "
@@ -1376,6 +1458,15 @@ class Scheduler:
         attempt = job.attempts + 1
         digest, image = self._image_for(job)
         token, token_hash = runner_api.new_token()
+        market.record_wait(
+            self.session,
+            job,
+            now=self.now,
+            outcome="rented",
+            rental_type=choice.rental_type,
+            limit_microusd=limit_microusd,
+            rented_microusd=choice.full_microusd,
+        )
         label = f"{self.prefix}{job.id.hex[:12]}-{attempt}"
         row = ComputeInstance(
             job_id=job.id,
@@ -1391,6 +1482,10 @@ class Scheduler:
             disk_microusd=choice.disk_microusd,
             transfer_in_microusd_per_gb=choice.offer.transfer_in_microusd_per_gb,
             transfer_out_microusd_per_gb=choice.offer.transfer_out_microusd_per_gb,
+            link_down_mbps=_mbps(choice.offer.inet_down_mbps),
+            link_up_mbps=_mbps(choice.offer.inet_up_mbps),
+            image_bytes=image_bytes,
+            market_gpu_microusd=usd_to_microusd(choice.offer.gpu_price(choice.rental_type)),
             runner_token_hash=token_hash,
             image_digest=digest,
             image_pinned=image != job.image,
@@ -1455,9 +1550,10 @@ class Scheduler:
                 )
                 return True
             row.state = ComputeInstanceState.CREATE_FAILED
-            queued_at = job.queued_at
+            queued_at, wait_started_at = job.queued_at, job.wait_started_at
             _requeue(self.session, job, "The offer was taken before Krater could rent it; trying again.", now=self.now)
-            job.queued_at = queued_at  # keep its place in the queue and its wait: it never ran
+            # Keep its place in the queue and its wait: it never ran.
+            job.queued_at, job.wait_started_at = queued_at, wait_started_at
             _event(
                 self.session,
                 job,

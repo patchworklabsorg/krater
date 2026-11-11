@@ -4,8 +4,10 @@ Full hourly cost is the GPU price (the bid for an interruptible rental, `dph_bas
 the host's storage price. It is what the target, the max price and the project's hourly cap are all compared with.
 
 Data transfer is billed per GB on top of it, at the host's own prices. No host above the transfer price cap is ever
-chosen, and when the member estimated the data their job moves, the ranking adds what that would cost at each host,
-spread over the job's max runtime.
+chosen. The ranking adds, at each host, what the job's data would cost (the member's estimate, plus the image pull
+when Krater knows the image's size), and the time the pull takes at the host's download speed, counted at the
+machine's full hourly price: a pull delays the job as much as that much running would. Both are spread over the
+job's max runtime.
 """
 
 from __future__ import annotations
@@ -32,21 +34,55 @@ class Choice:
         return self.gpu_microusd + self.disk_microusd
 
 
+#: Bytes in a GB as Vast bills data (decimal).
+BYTES_PER_GB = 1_000_000_000
+#: A host's download speed when its offer doesn't say, Mbps.
+DEFAULT_DOWN_MBPS = 100.0
+
+
+def pull_hours(image_bytes: int, down_mbps: float | None) -> Decimal:
+    """How long a host takes to download an image of `image_bytes`, in hours."""
+    if image_bytes <= 0:
+        return Decimal(0)
+    mbps = down_mbps if down_mbps and down_mbps > 0 else DEFAULT_DOWN_MBPS
+    return Decimal(image_bytes * 8) / Decimal(str(mbps * 1_000_000)) / 3600
+
+
+def bytes_cost_microusd(n_bytes: int, microusd_per_gb: int | None) -> int:
+    """What `n_bytes` cost at a per-GB price, rounded up."""
+    if n_bytes <= 0 or not microusd_per_gb:
+        return 0
+    return -(-n_bytes * microusd_per_gb // BYTES_PER_GB)
+
+
 @dataclass(frozen=True)
 class Transfer:
-    """The data a job is expected to move, for ranking hosts by what it would cost there. Zero GB both ways
-    (no estimate) ranks by the hourly cost alone, with transfer prices only breaking ties."""
+    """The data a job is expected to move and its image's size, for ranking hosts by what they would cost there.
+    With neither, hosts rank by the hourly cost alone, with transfer prices only breaking ties."""
 
     in_gb: int = 0
     out_gb: int = 0
     runtime_hours: Decimal = Decimal(1)
+    image_bytes: int = 0
+
+    def image_microusd(self, offer: Offer) -> int:
+        return bytes_cost_microusd(self.image_bytes, offer.transfer_in_microusd_per_gb)
 
     def cost_microusd(self, offer: Offer) -> int:
-        return self.in_gb * offer.transfer_in_microusd_per_gb + self.out_gb * offer.transfer_out_microusd_per_gb
+        """The member's data estimate and one image pull at `offer`'s prices."""
+        return (
+            self.in_gb * offer.transfer_in_microusd_per_gb
+            + self.out_gb * offer.transfer_out_microusd_per_gb
+            + self.image_microusd(offer)
+        )
 
-    def hourly_microusd(self, offer: Offer) -> int:
-        """The estimated transfer cost at `offer`, spread over the runtime."""
-        return int(Decimal(self.cost_microusd(offer)) / max(self.runtime_hours, Decimal("0.01")))
+    def pull_hours(self, offer: Offer) -> Decimal:
+        return pull_hours(self.image_bytes, offer.inet_down_mbps)
+
+    def hourly_microusd(self, choice: Choice) -> int:
+        """The data cost and the pull's time at `choice`'s host, spread over the runtime."""
+        extra = Decimal(self.cost_microusd(choice.offer)) + self.pull_hours(choice.offer) * choice.full_microusd
+        return int(extra / max(self.runtime_hours, Decimal("0.01")))
 
 
 NO_TRANSFER = Transfer()
@@ -107,7 +143,7 @@ def _perf_per_dollar(choice: Choice, transfer: Transfer) -> float:
     # Vast reports deep-learning performance per dollar of its own dph_total; turn it back into performance and
     # divide by what Krater would actually pay, the expected transfer included.
     offer = choice.offer
-    paid = choice.full_microusd + transfer.hourly_microusd(offer)
+    paid = choice.full_microusd + transfer.hourly_microusd(choice)
     if not offer.dlperf_per_dphtotal or paid <= 0:
         return 0.0
     dlperf = offer.dlperf_per_dphtotal * float(offer.dph_total)
@@ -157,7 +193,12 @@ def choose(
         )
     return min(
         candidates,
-        key=lambda c: (c.full_microusd + transfer.hourly_microusd(c.offer), _transfer_tiebreak(c.offer), c.offer.id),
+        key=lambda c: (
+            c.full_microusd + transfer.hourly_microusd(c),
+            transfer.pull_hours(c.offer),
+            _transfer_tiebreak(c.offer),
+            c.offer.id,
+        ),
     )
 
 

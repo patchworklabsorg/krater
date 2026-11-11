@@ -84,10 +84,24 @@ spent half a budget on it renting directly. So:
 - **A price cap.** The setting "Data transfer price cap" (default $20/TB, stored as micro-dollars per GB; it kept
   four in five offers on 2026-11-04) goes into every search and is checked again on each offer, for the scheduler
   and the price history alike. Krater rents no host above it, either way.
-- **The member's estimate.** A job may say how many GB it moves in and out (`data_in_gb`, `data_out_gb`; the form,
-  the API and `krater submit --data-in --data-out`). The scheduler adds the estimate's cost, spread over the max
-  runtime, to each offer's hourly price when ranking, and breaks ties on transfer price, so it prefers hosts where
-  the data is cheap. The instance records the prices it was rented at.
+- **The member's estimate and the image.** A job may say how many GB it moves in and out (`data_in_gb`,
+  `data_out_gb`; the form, the API and `krater submit --data-in --data-out`). The scheduler also knows the image's
+  compressed size (`krater.registry.image_size`, from the manifest, cached by digest in `image_sizes`; unknown when
+  the registry can't say). Ranking adds, per offer, the estimate's and one pull's cost at that host's prices, and the
+  pull's time at its download speed (Vast's `inet_down`, 100 Mbps when missing) counted at the offer's full hourly
+  price, all spread over the max runtime (`krater.compute.offers.Transfer`). Ties break on pull time, then transfer
+  price. The instance records the prices, link speeds and image size it was rented with.
+- **Budget for it.** A job starts only when the free budget covers its first hour plus the pull and its expected
+  data in, and holds its max runtime plus all of its expected data and the pull.
+- **Counted live.** The runner reports the container's received and sent bytes every heartbeat
+  ([runner.md](runner.md#network-use)). Krater keeps each report only if it is higher, and only by what the host's
+  link (1.5 times its measured speed, 10 Gbps when unknown) could carry since the last: the runner runs as root next
+  to the member's code, and a made-up report mustn't trip the budget stop or the organization's caps. Each pass
+  prices the new bytes at the host's prices and adds them to the estimate (`krater.compute.spend`); the pull is
+  priced once when the provider has the machine. Only increases are added, so after reconciliation replaces the
+  estimate with Vast's figure nothing is counted twice. Each part is kept apart too (`est_gpu_microusd`,
+  `est_disk_microusd`, `est_image_microusd`, `est_transfer_in_microusd`, `est_transfer_out_microusd`), next to Vast's
+  items (`charged_items`).
 - **A warning before queuing.** If the estimate at the cap would cost the setting "Data transfer warning" (default
   10%) of the project's budget, or more than is left, submit refuses with `ConfirmationRequired`: the form shows the
   cost with a checkbox, the API answers 409 with `"confirm": "confirm_transfer_cost"`, and the CLI asks (or takes
@@ -99,6 +113,23 @@ spent half a budget on it renting directly. So:
 
 Every destroy is confirmed with `show_instance(...) is None`. Until it is, the row keeps `destroy_requested_at` and
 the next pass tries again.
+
+### Credit reserve
+
+Off by default. With the organization limit "Credit reserve" above 0 hours, a job doesn't rent while the provider
+account's credit, read in the last 2 hours, wouldn't cover that many hours of every machine Krater holds plus the new
+one. With no fresh reading nothing is held back: a wrong or missing reading mustn't stop all compute.
+
+### Data collected for later
+
+Not used for any decision yet; kept so wait-time forecasts and outbid-adjusted prices can be built on real data:
+
+- `compute_wait_samples`: each wait for a machine (from submit or requeue, by `wait_started_at`, which a halt doesn't
+  move), with the shape, the prices and the outcome (`rented`, or `cancelled` at the max wait).
+- On each instance, the offer's own GPU price when rented (`market_gpu_microusd`, the minimum bid or `dph_base`)
+  against what Krater paid, and how often it was outbid (`outbid_count`).
+- `gpu_offer_observations`: at each hourly price sample, the 24 cheapest hosts per model and rental type with their
+  machine id and price, kept 60 days. A machine's minimum bid from hour to hour shows how often bids on it rise.
 
 ## States
 

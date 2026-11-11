@@ -68,7 +68,8 @@ The alert stays up for 24 hours after the last such charge.
 The Vast account's prepaid credit is under the **Low credit alert** set on `/admin/compute`. When it runs out, Vast
 can stop the account's machines and refuse new ones; Krater then sees jobs as outbid and waits, so they stall rather
 than fail. Add credit on Vast. Keep the balance limited and turn off auto top-up: the balance is the last limit on spend if
-everything else fails.
+everything else fails. With a **Credit reserve** set, jobs that would eat into it wait (saying the credit is low)
+until credit is added.
 
 ## "Krater's storage is nearly full"
 

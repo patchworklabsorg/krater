@@ -51,6 +51,8 @@ def _offer(
     direct_port_count: int = 20,
     inet_up_cost: float = 0.002,
     inet_down_cost: float = 0.002,
+    inet_down: float = 800.0,
+    inet_up: float = 400.0,
 ) -> dict[str, Any]:
     return {
         "id": offer_id,
@@ -64,6 +66,8 @@ def _offer(
         "storage_cost": storage_cost,
         "inet_up_cost": inet_up_cost,
         "inet_down_cost": inet_down_cost,
+        "inet_down": inet_down,
+        "inet_up": inet_up,
         "reliability": reliability,
         "dlperf_per_dphtotal": 100.0,
         "cuda_max_good": 12.4,

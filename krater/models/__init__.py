@@ -6,6 +6,7 @@ from krater.models.audit_event import AuditEvent
 from krater.models.box_admin import BoxAdmin
 from krater.models.budget_entry import BudgetEntry
 from krater.models.compute_job import ComputeEvent, ComputeInstance, ComputeJob, SpendReconciliation
+from krater.models.compute_market import ComputeWaitSample, GpuOfferObservation, ImageSize
 from krater.models.compute_settings import ComputeSettings, ProjectComputeSettings
 from krater.models.compute_watch import ProviderAccount, StorageUsage
 from krater.models.enums import (
@@ -79,6 +80,9 @@ __all__ = [
     "ProjectRevision",
     "ProjectSecret",
     "ProviderAccount",
+    "ComputeWaitSample",
+    "GpuOfferObservation",
+    "ImageSize",
     "ProjectStatus",
     "QuiltOutbox",
     "QuiltOutboxState",
