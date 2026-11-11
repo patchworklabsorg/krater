@@ -45,7 +45,13 @@ def _registry(size_bytes: int = 4 * GB) -> FakeRegistry:
 
 def _pass(db_session, client, now=NOW, registry=None):
     return scheduler.run_pass(
-        db_session, client, SETTINGS, now=now, runner_sha256=RUNNER_SHA, weave_client=current_weave[0], registry=registry
+        db_session,
+        client,
+        SETTINGS,
+        now=now,
+        runner_sha256=RUNNER_SHA,
+        weave_client=current_weave[0],
+        registry=registry,
     )
 
 
@@ -96,7 +102,9 @@ def test_only_new_bytes_are_priced_each_pass(db_session, member, project, client
     assert row.net_priced_in_bytes == 2 * GB
 
 
-def test_a_report_can_only_raise_the_count_and_only_as_fast_as_the_link(db_session, member, project, client, fake) -> None:  # noqa: F811
+def test_a_report_can_only_raise_the_count_and_only_as_fast_as_the_link(
+    db_session, member, project, client, fake
+) -> None:  # noqa: F811
     _, row = _running(db_session, member, project, client, fake)
     assert row.link_down_mbps == 800 and row.link_up_mbps == 400
     _beat(db_session, row, 2, net_in_bytes=GB, net_out_bytes=GB)
@@ -288,7 +296,9 @@ def test_a_stale_or_missing_credit_reading_never_holds_anything(db_session, memb
 # -- Data for later: waits, outbids, hosts' prices -----------------------------------------------------------------
 
 
-def test_a_rental_records_how_long_the_job_waited_by_the_wall_clock(db_session, member, admin, project, client, fake) -> None:  # noqa: F811
+def test_a_rental_records_how_long_the_job_waited_by_the_wall_clock(
+    db_session, member, admin, project, client, fake
+) -> None:  # noqa: F811
     job = _submit(db_session, member, project, max_wait_minutes=600)
     compute_halt.pause(db_session, admin, reason="r", now=NOW)
     _pass(db_session, client, NOW)
