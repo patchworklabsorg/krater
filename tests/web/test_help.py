@@ -7,7 +7,7 @@ import re
 from fastapi.testclient import TestClient
 
 from krater.web import help_docs
-from tests.conftest import MEMBER_SUB
+from tests.conftest import MEMBER_SUB, REVIEWER_SUB
 
 _HREF = re.compile(r'href="([^"]+)"')
 _ID = re.compile(r'id="([^"]+)"')
@@ -70,3 +70,21 @@ def test_the_top_bar_links_to_help(client: TestClient, login_as):
     assert 'href="/help"' in client.get("/gallery").text
     login_as(MEMBER_SUB)
     assert 'href="/help"' in client.get("/").text
+
+
+def test_the_project_page_says_what_to_do_next(
+    client: TestClient, login_as, create_project, submitted_project, approved_project
+):
+    member = login_as(MEMBER_SUB)
+    draft = create_project(member)
+    page = client.get(f"/projects/{draft.id}").text
+    assert "<strong>Next:</strong>" in page and "Submit for review</strong>" in page
+
+    pending = submitted_project(member)
+    assert "reviewers are deciding" in client.get(f"/projects/{pending.id}").text
+
+    reviewer = login_as(REVIEWER_SUB)
+    approved = approved_project(member, reviewer)
+    login_as(MEMBER_SUB)
+    page = client.get(f"/projects/{approved.id}").text
+    assert "Need more budget?" in page and "Start completion</strong>" in page

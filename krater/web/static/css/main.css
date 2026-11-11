@@ -2456,3 +2456,9 @@ fieldset.choice-list legend {
 .help-guide :is(h2, h3, h4) {
   scroll-margin-top: 5rem;
 }
+
+/* The project page's "Next:" line: what the team does now, for the project's status. */
+.next-step {
+  margin: 0 0 var(--space-3);
+  max-width: 48rem;
+}
