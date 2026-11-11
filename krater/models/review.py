@@ -40,6 +40,9 @@ class Review(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     # an ApprovalPolicy's `required_group`) can't retroactively change whether a past review counts.
     # The funding hold an approving reviewer asked for (web only), applied to the project once the approval counts.
     funding_hold: Mapped[FundingHold | None] = mapped_column(pg_enum(FundingHold, name="funding_hold"), nullable=True)
+    # The amount an approving reviewer chose to grant, when less than the revision asks for (web only). Null is the
+    # full request. The approval grants the lowest amount any approval of the revision chose.
+    budget_cents: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
     reviewer_groups: Mapped[list[str]] = mapped_column(
         ARRAY(sa.String), nullable=False, default=list, server_default="{}"
     )

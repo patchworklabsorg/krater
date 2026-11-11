@@ -600,6 +600,7 @@ def record_review(
     source: ReviewSource,
     weave_client: WeaveClient,
     funding_hold: FundingHold | None = None,
+    budget_cents: int | None = None,
 ) -> Review:
     """Record a reviewer's decision on `revision`, then apply its effect if the decision resolves it.
 
@@ -618,6 +619,10 @@ def record_review(
     `funding_hold` (an approval of a proposal or amendment only) asks for the project to be approved but held
     (`krater.services.funding_holds`). It's kept on the review, so it applies once the approval policy is met even
     if a later approval (from Slack, say) doesn't ask again.
+
+    `budget_cents` (an approval of a proposal or amendment only) grants less than the revision asks for: the proof of
+    concept's budget, or the amendment's new total. `reason` is then required, and the team sees it. `None`, or the
+    full request, grants the request. Kept on the review: the approval grants the lowest amount any approval chose.
     """
     project = revision.project
 
@@ -643,6 +648,7 @@ def record_review(
     if decision is ReviewDecision.REJECT and not (reason and reason.strip()):
         raise ValidationFailed({"reason": "A reason is required to reject."})
     _check_funding_hold(revision, decision, funding_hold)
+    budget_cents = _check_budget(session, revision, decision, budget_cents, reason)
 
     review = Review(
         revision_id=revision.id,
@@ -652,6 +658,7 @@ def record_review(
         source=source,
         reviewer_groups=sorted(actor.groups),
         funding_hold=funding_hold,
+        budget_cents=budget_cents,
     )
     session.add(review)
     try:
@@ -682,6 +689,53 @@ def _check_funding_hold(revision: ProjectRevision, decision: ReviewDecision, hol
         raise ValidationFailed({"funding_hold": "A funding hold goes with an approval."})
     if approval_policy.stage_for(revision) is ApprovalStage.COMPLETION:
         raise ValidationFailed({"funding_hold": "A completion grants no budget, so it can't be held."})
+
+
+def _check_budget(
+    session: Session, revision: ProjectRevision, decision: ReviewDecision, amount: int | None, reason: str | None
+) -> int | None:
+    """Check an approver's choice to grant less than `revision` asks for, and return it as stored: `None` for the full
+    request. Only an approval of a proposal or an amendment that raises the ceiling grants budget, so only those can
+    grant less, and never more than asked. An amendment granted in part still raises the ceiling: approving it for no
+    more than today's is a rejection. Granting less needs a reason, which the team sees."""
+    if amount is None or amount == revision.budget_requested_cents:
+        return None
+    if decision is not ReviewDecision.APPROVE:
+        raise ValidationFailed({"budget_cents": "An amount to grant goes with an approval."})
+    if approval_policy.stage_for(revision) is ApprovalStage.COMPLETION:
+        raise ValidationFailed({"budget_cents": "A completion grants no budget."})
+    if amount <= 0:
+        raise ValidationFailed({"budget_cents": "Enter an amount above zero."})
+    if amount > revision.budget_requested_cents:
+        asked = _dollars(revision.budget_requested_cents)
+        raise ValidationFailed({"budget_cents": f"You can grant up to the {asked} asked for, not more."})
+    if revision.kind is RevisionKind.AMENDMENT:
+        ceiling = budget.ceiling_cents(session, revision.project)
+        if revision.budget_requested_cents <= ceiling:
+            raise ValidationFailed({"budget_cents": "This amendment doesn't add budget, so it's approved as asked."})
+        if amount <= ceiling:
+            now = _dollars(ceiling)
+            raise ValidationFailed(
+                {"budget_cents": f"Enter a new total above the {now} approved now, or reject the amendment."}
+            )
+    if not (reason and reason.strip()):
+        raise ValidationFailed({"reason": "Say why you're granting less than they asked for. The team sees it."})
+    return amount
+
+
+def _granted_cents(session: Session, revision: ProjectRevision, chosen: int | None) -> int:
+    """What approving `revision` funds: the admin override's `chosen` amount, else the lowest amount any approval of
+    the revision chose, else the full request."""
+    if chosen is not None:
+        return chosen
+    lowest = session.scalar(
+        sa.select(sa.func.min(Review.budget_cents)).where(
+            Review.revision_id == revision.id,
+            Review.decision == ReviewDecision.APPROVE,
+            Review.budget_cents.is_not(None),
+        )
+    )
+    return revision.budget_requested_cents if lowest is None else min(lowest, revision.budget_requested_cents)
 
 
 def _requested_hold(session: Session, revision: ProjectRevision) -> FundingHold | None:
@@ -723,6 +777,7 @@ def _apply_approve(
     *,
     weave_client: WeaveClient,
     funding_hold: FundingHold | None = None,
+    budget_cents: int | None = None,
 ) -> None:
     """Apply the effect of a revision being approved (by policy satisfaction or an admin override).
 
@@ -730,6 +785,9 @@ def _apply_approve(
     written now if Weave clears the team, held until it does otherwise. The approval itself goes through either way.
     A completion approval reclaims budget and cancels any held grant. A funding hold (the admin's, or one a reviewer
     asked for) is set before the grant, so the grant is held whatever the team's verification.
+
+    The amount granted is the admin override's `budget_cents`, else the lowest any approval chose, else the request
+    (`_granted_cents`). A lower one is kept on the revision (`budget_approved_cents`) for the pages and Slack.
     """
     project = revision.project
     stage = approval_policy.stage_for(revision)
@@ -742,6 +800,13 @@ def _apply_approve(
         hold = funding_hold or _requested_hold(session, revision)
         if hold is not None:
             project.funding_hold = hold
+        granted = _granted_cents(session, revision, budget_cents)
+        if revision.kind is RevisionKind.AMENDMENT and revision.budget_requested_cents > budget.ceiling_cents(
+            session, project
+        ):
+            # Checked against the ceiling when it was chosen; never let a part-approval cut it.
+            granted = max(granted, budget.ceiling_cents(session, project))
+        revision.budget_approved_cents = granted if granted < revision.budget_requested_cents else None
 
     if stage is ApprovalStage.COMPLETION:
         project.status = ProjectStatus.COMPLETED
@@ -760,7 +825,7 @@ def _apply_approve(
                 revision=revision,
             )
     elif revision.kind is RevisionKind.AMENDMENT:
-        delta = revision.budget_requested_cents - budget.ceiling_cents(session, project)
+        delta = revision.approved_budget_cents - budget.ceiling_cents(session, project)
         project.approved_revision_id = revision.id
         if delta > 0:
             grants.grant(
@@ -790,7 +855,7 @@ def _apply_approve(
             weave_client,
             project=project,
             kind=BudgetEntryKind.INITIAL_APPROVAL,
-            amount_cents=revision.budget_requested_cents,
+            amount_cents=revision.approved_budget_cents,
             actor=actor,
             revision=revision,
         )
@@ -846,6 +911,7 @@ def admin_decide(
     reason: str,
     weave_client: WeaveClient,
     funding_hold: FundingHold | None = None,
+    budget_cents: int | None = None,
 ) -> ProjectRevision:
     """Admin override: decide `revision` directly, bypassing `ApprovalPolicy`.
 
@@ -857,7 +923,8 @@ def admin_decide(
 
     The override bypasses the approval policy, not verification: the budget an approval grants is held until Weave
     clears the team (`krater.services.grants`). `funding_hold` approves it but holds the budget, as for
-    `record_review`.
+    `record_review`, and `budget_cents` grants less than asked for, as for `record_review` (it wins over any amount
+    a reviewer's approval chose).
     """
     if not actor.is_admin:
         raise NotAllowed("Only an admin may override a review decision.")
@@ -878,17 +945,23 @@ def admin_decide(
         raise InvalidState("This revision has already been decided.")
     _require_project_matches_revision_stage(project, revision)
     _check_funding_hold(revision, decision, funding_hold)
+    budget_cents = _check_budget(session, revision, decision, budget_cents, reason)
 
     if decision is ReviewDecision.REJECT:
         _apply_reject(session, revision)
         action = "admin_reject"
     else:
-        _apply_approve(session, actor, revision, weave_client=weave_client, funding_hold=funding_hold)
+        _apply_approve(
+            session, actor, revision, weave_client=weave_client, funding_hold=funding_hold, budget_cents=budget_cents
+        )
         action = "admin_approve"
 
     payload = {"revision_id": str(revision.id), "decision": decision.value}
     if funding_hold is not None:
         payload["funding_hold"] = funding_hold.value
+    if revision.budget_approved_cents is not None:
+        payload["budget_cents"] = revision.budget_approved_cents
+        payload["requested_cents"] = revision.budget_requested_cents
     audit.record(
         session,
         actor,

@@ -249,6 +249,10 @@ def _review_message(project: Project, revision: ProjectRevision) -> tuple[list[d
             ],
         },
     ]
+    if revision.kind is not RevisionKind.COMPLETION:
+        link = f"{get_settings().base_url.rstrip('/')}/projects/{project.id}"
+        note = f"Approve here grants the full amount. To grant less, approve on <{link}|the project page>."
+        blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": note}]})
     return blocks, text
 
 
@@ -315,6 +319,19 @@ def _latest_reject_reason(revision: ProjectRevision) -> str | None:
     return max(rejecting, key=lambda review: review.created_at).reason
 
 
+def _grant_reason(revision: ProjectRevision) -> str | None:
+    """Why the approvers granted less: the reason on the approval that chose the amount granted. An admin override
+    keeps its reason in the audit log and posts it as its own notice, so there is none here then."""
+    choosing = [
+        review
+        for review in revision.reviews
+        if review.decision is ReviewDecision.APPROVE and review.budget_cents == revision.budget_approved_cents
+    ]
+    if not choosing:
+        return None
+    return max(choosing, key=lambda review: review.created_at).reason
+
+
 def notify_decision(session: Session, slack_client: SlackClient, *, revision: ProjectRevision) -> None:
     """Update `revision`'s review message to show its outcome, with the Approve/Reject buttons removed
     (Slack has no per-button disabled state; dropping the `actions` block is the equivalent).
@@ -345,10 +362,21 @@ def notify_decision(session: Session, slack_client: SlackClient, *, revision: Pr
         {"type": "section", "text": {"type": "mrkdwn", "text": f"*Outcome:* {_outcome_label(revision, hold)}"}},
     ]
     reason = _latest_reject_reason(revision)
+    granted = None
+    if revision.outcome is RevisionOutcome.APPROVED and revision.granted_less:
+        what = "a new total of " if revision.kind is RevisionKind.AMENDMENT else ""
+        granted = (
+            f"Approved for {what}{_format_cents(revision.budget_approved_cents)} of the "
+            f"{_format_cents(revision.budget_requested_cents)} asked for."
+        )
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"*Budget:* {granted}"}})
+        reason = _grant_reason(revision)
     if reason:
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"*Reason:* {_escape_mrkdwn(reason)}"}})
     # Top-level fallback text isn't parsed as mrkdwn -- the raw title/reason are fine here.
     text = f"{stage} for {project.title}: {_outcome_label(revision, hold)}"
+    if granted:
+        text = f"{text}. {granted}"
 
     slack_client.update_message(revision.slack_message_channel_id, revision.slack_message_ts, blocks=blocks, text=text)
 

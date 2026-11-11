@@ -15,6 +15,25 @@
   </div>
 {% endmacro %}
 
+{% macro grant_amount_field(field_id, form, with_reason) %}
+  {% set amendment = summary.current_revision.kind.value == "amendment" %}
+  <div class="field">
+    <label for="{{ field_id }}">{{ "New total to approve (USD)" if amendment else "Amount to grant (USD)" }}</label>
+    <input type="text" id="{{ field_id }}" name="budget" inputmode="decimal"
+      value="{{ posted.budget if error_form == form and posted.budget is defined else grant_input }}">
+    <p class="field-hint">They asked for {{ summary.current_revision.budget_requested_cents | dollars }}{% if amendment %} in total{% endif %}.
+      Lower it to fund a smaller first step{% if with_reason %} and say why below{% endif %}; the team sees the amount and the reason.</p>
+    {% if error_form == form and errors.budget_cents %}<p class="field-error">{{ errors.budget_cents }}</p>{% endif %}
+  </div>
+  {% if with_reason %}
+  <div class="field">
+    <label for="{{ field_id }}-reason">Why less (only when granting less)</label>
+    <textarea id="{{ field_id }}-reason" name="reason" rows="2">{{ posted.reason if error_form == form else "" }}</textarea>
+    {% if error_form == form and errors.reason %}<p class="field-error">{{ errors.reason }}</p>{% endif %}
+  </div>
+  {% endif %}
+{% endmacro %}
+
 {% block content %}
 <div class="page-head">
   <div>
@@ -190,6 +209,7 @@
             {%- if rev.kind.value == "amendment" %} new total requested
               {%- if rev is sameas current and amendment_adds_cents is not none %} ({{ "adds" if amendment_adds_cents >= 0 else "cuts" }} {{ amendment_adds_cents | abs | dollars }} to the {{ summary.ceiling_cents | dollars }} approved now){% endif %}.
             {%- else %} requested.{% endif %}
+            {% if rev.granted_less %}<br><strong>Approved for {{ rev.budget_approved_cents | dollars }}</strong>{% if rev.kind.value == "amendment" %} in total{% endif %}.{% endif %}
             {% if rev.budget_estimate %}<br><span class="muted">Estimate: {{ rev.budget_estimate | estimate_summary }}</span>{% endif %}
           </p>
           {% if estimate_mismatch_by_revision.get(rev.id) %}
@@ -269,6 +289,7 @@
       <p class="muted">
         {% if revision.submitted_at %}Submitted {{ revision.submitted_at.strftime("%Y-%m-%d %H:%M UTC") }}{% else %}Draft, not yet submitted{% endif %}
         &middot; Budget requested: {{ revision.budget_requested_cents | dollars }}
+        {%- if revision.granted_less %} &middot; Approved for {{ revision.budget_approved_cents | dollars }}{% endif %}
       </p>
       {% if revision.budget_estimate %}
         <p class="muted">
@@ -284,6 +305,7 @@
             <li>
               <strong>{{ names_by_id.get(review.reviewer_id, "Unknown reviewer") }}</strong>
               {{ macros.decision_badge(review.decision) }}
+              {%- if review.budget_cents is not none %} for {{ review.budget_cents | dollars }}{% endif %}
               {% if review.reason %}<span class="muted"> &mdash; {{ review.reason }}</span>{% endif %}
             </li>
           {% endfor %}
@@ -406,7 +428,8 @@
     <form method="post" action="/projects/{{ project.id }}/review" class="form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="decision" value="approve">
-      {% if can_hold_funding %}{{ funding_hold_field("review-funding-hold", "review") }}{% endif %}
+      {% if can_grant_less %}{{ grant_amount_field("review-budget", "review_approve", true) }}{% endif %}
+      {% if can_hold_funding %}{{ funding_hold_field("review-funding-hold", "review_approve") }}{% endif %}
       <button type="submit" class="button button--primary">Approve</button>
     </form>
   </div>
@@ -447,6 +470,7 @@
         <textarea id="admin-decide-reason" name="reason" rows="2">{{ posted.reason if error_form == "admin_decide" else "" }}</textarea>
         {% if error_form == "admin_decide" and errors.reason %}<p class="field-error">{{ errors.reason }}</p>{% endif %}
       </div>
+      {% if can_grant_less %}{{ grant_amount_field("admin-decide-budget", "admin_decide", false) }}{% endif %}
       {% if can_hold_funding %}{{ funding_hold_field("admin-decide-funding-hold", "admin_decide") }}{% endif %}
       <div class="action-row">
         <button type="submit" name="decision" value="approve" class="button button--primary">Admin approve</button>

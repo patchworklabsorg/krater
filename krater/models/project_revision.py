@@ -51,6 +51,10 @@ class ProjectRevision(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
 
     # What approval funds: the proof of concept for a proposal, the new total for an amendment.
     budget_requested_cents: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    # What the approval granted, when an approver chose less than the request (same meaning: the proof of concept, or
+    # the amendment's new total). Null means the full request, which is every revision approved in full and every one
+    # from before approvers could choose. Read it through `approved_budget_cents`.
+    budget_approved_cents: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
 
     # The estimate behind `budget_requested_cents`: the card, hours and rental the team chose, priced by the server
     # (`krater.services.pricing.estimate_cost`), or at the hourly price the team typed in instead (`rate_source`
@@ -90,6 +94,18 @@ class ProjectRevision(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
 
     project: Mapped[Project] = relationship(foreign_keys=[project_id], back_populates="revisions")
     reviews: Mapped[list[Review]] = relationship(back_populates="revision")
+
+    @property
+    def approved_budget_cents(self) -> int:
+        """What approving this revision funds: the amount the approvers chose, else the full request."""
+        if self.budget_approved_cents is not None:
+            return self.budget_approved_cents
+        return self.budget_requested_cents
+
+    @property
+    def granted_less(self) -> bool:
+        """Whether the approvers granted less than this revision asked for."""
+        return self.budget_approved_cents is not None and self.budget_approved_cents < self.budget_requested_cents
 
     def __repr__(self) -> str:
         return f"<ProjectRevision project_id={self.project_id} number={self.number} kind={self.kind.value}>"
