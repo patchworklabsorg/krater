@@ -97,9 +97,11 @@ HOST_FAILED = "container never started"
 #: Machines a job may lose this way before it fails: by then the fault is more likely the job's own.
 MAX_HOST_FAILURES = 3
 #: `destroy_reason` of a machine the provider created but never started: Vast answered the rental with `success: false`
-#: and an instance id, and left the instance stopped. On staging (2026-11-12) all seven such creates came from the same
-#: three offers, again and again, while other bids at the same price ran within a minute: the host's doing, not the
-#: price or the image. It's dropped at once, and doesn't count towards MAX_HOST_FAILURES.
+#: and an instance id, and left the instance stopped. On staging (2026-11-12) the first seven came from three offers,
+#: again and again, while other bids at the same price ran; later ones came from new offers, bid at the job's limit. The
+#: cause is unknown (the host, or a bid Vast won't start), but it isn't the image. It's dropped at once, and doesn't
+#: count towards MAX_HOST_FAILURES. Kept from every job for BAD_HOST_WINDOW, which may keep a job with a higher limit
+#: off a machine it could have had: cautious, and there are other machines.
 NOT_STARTED = "never started by the provider"
 #: How long a machine that failed one job is kept from every job (a host_failed one is kept from its own job for good).
 BAD_HOST_WINDOW = timedelta(hours=6)
