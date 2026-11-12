@@ -133,6 +133,27 @@ def test_the_breakdown_puts_krater_and_vast_side_by_side() -> None:
     assert costs.part_cents()["GPU"] == 61
 
 
+def test_the_notices_parts_add_up_to_the_jobs_cost() -> None:
+    """Staging, 2026-11-12: a $0.01 job read "GPU $0.01, disk $0.01, data $0.02": each part was rounded up alone."""
+    job = ComputeJob(name="short")
+    job.instances = [
+        _instance(
+            1,
+            accrued_microusd=5_000,
+            est_gpu_microusd=4_000,
+            est_disk_microusd=300,
+            est_image_microusd=1_000,
+            est_transfer_out_microusd=6,
+        )
+    ]
+    costs = job_costs.breakdown(job)
+
+    assert costs.notice_cents(1) == {"gpu": 1, "disk": 0, "data": 0}
+    parts = costs.notice_cents(350)
+    assert sum(parts.values()) == 350 and parts["gpu"] > parts["data"] > parts["disk"]
+    assert costs.notice_cents(0) == {"gpu": 0, "disk": 0, "data": 0}
+
+
 def test_machines_from_before_the_split_say_it_isnt_known() -> None:
     job = ComputeJob(name="old")
     job.instances = [_instance(1, accrued_microusd=500_000)]
