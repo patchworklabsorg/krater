@@ -96,6 +96,12 @@ HOST_START_GRACE = timedelta(minutes=5)
 HOST_FAILED = "container never started"
 #: Machines a job may lose this way before it fails: by then the fault is more likely the job's own.
 MAX_HOST_FAILURES = 3
+#: `destroy_reason` of a machine whose container ran but whose runner didn't report within the runner start deadline.
+#: On staging (2026-11-12) a host's first download of the runner was cut short and the next hung for ten minutes: the
+#: machine's fault, not the job's. So the job is tried on another machine, and this counts towards MAX_HOST_FAILURES
+#: with HOST_FAILED. It isn't kept from other jobs (BAD_HOST_WINDOW): an image without a POSIX shell, or without curl,
+#: wget and Python, fails this way on every machine, and says nothing about the host.
+RUNNER_NOT_STARTED = "runner never started"
 #: `destroy_reason` of a machine the provider created but never started: Vast answered the rental with `success: false`
 #: and an instance id, and left the instance stopped. On staging (2026-11-12) the first seven came from three offers,
 #: again and again, while other bids at the same price ran; later ones came from new offers, bid at the job's limit. The
@@ -833,10 +839,10 @@ class Scheduler:
         self.session.commit()
 
     def _failed_machines(self, job: ComputeJob) -> set[str]:
-        """The machines whose container never started for `job`."""
+        """The machines whose container, or Krater's runner in it, never started for `job`."""
         stmt = sa.select(ComputeInstance.provider_machine_id).where(
             ComputeInstance.job_id == job.id,
-            ComputeInstance.destroy_reason == HOST_FAILED,
+            ComputeInstance.destroy_reason.in_([HOST_FAILED, RUNNER_NOT_STARTED]),
             ComputeInstance.provider_machine_id.is_not(None),
         )
         return set(self.session.scalars(stmt))
@@ -918,6 +924,38 @@ class Scheduler:
                 now=self.now,
             )
 
+    def _runner_missed_start(self, row: ComputeInstance, job: ComputeJob, policy: ComputePolicy) -> None:
+        """The container runs but Krater's runner never reported: try another machine, a few times, like a host that
+        couldn't start the container, rather than fail the job on the first one."""
+        minutes = policy.runner_start_minutes
+        failures = len(self._failed_machines(job) | {row.provider_machine_id or row.provider_instance_id or ""})
+        _event(
+            self.session,
+            job,
+            "runner_not_started",
+            f"Krater's runner didn't start on instance {row.provider_instance_id} within {minutes} minutes.",
+            now=self.now,
+            instance=row,
+        )
+        if failures >= MAX_HOST_FAILURES:
+            _finish(
+                job,
+                ComputeJobState.FAILED,
+                f"Krater's runner didn't start within {minutes} minutes, and {failures} machines in a row have failed "
+                "this job. Check that the image has a POSIX shell and one of curl, wget or Python.",
+                now=self.now,
+            )
+            self._destroy(row, RUNNER_NOT_STARTED)
+            return
+        # Destroyed first, so the requeued job can't be rented back onto it in the same pass.
+        if self._destroy(row, RUNNER_NOT_STARTED) and self._still_active(job):
+            _requeue(
+                self.session,
+                job,
+                f"Krater's runner didn't start on the machine within {minutes} minutes. Waiting for another machine.",
+                now=self.now,
+            )
+
     def _check_runner(self, row: ComputeInstance, job: ComputeJob, policy: ComputePolicy) -> None:
         """A running machine's runner must start within the start deadline of the container (re)starting, and keep
         sending heartbeats. Otherwise the machine is billing for nothing Krater can see or stop cleanly."""
@@ -932,15 +970,7 @@ class Scheduler:
                     # It ran before: its disk may hold work newer than the last sync. Stop it, don't destroy it.
                     self._stop_box(row, job, "the runner didn't start again")
                     return
-                _finish(
-                    job,
-                    ComputeJobState.FAILED,
-                    f"Krater's runner didn't start within {policy.runner_start_minutes} minutes. The machine may not "
-                    "have been able to download it (try again), or the image lacks a POSIX shell and curl, wget or "
-                    "Python.",
-                    now=self.now,
-                )
-                self._destroy(row, "runner never started")
+                self._runner_missed_start(row, job, policy)
             return
         last = row.last_heartbeat_at or row.runner_started_at
         if row.watch_resumed_at is not None:

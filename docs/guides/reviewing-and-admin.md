@@ -166,7 +166,7 @@ project's Admin card, **Compute settings for this project**). Each change needs 
 | Destroy stopped box after | 24 hours | Then its machine and disk are destroyed; its workspace stays in storage |
 | Data transfer price cap | $20 per TB | Krater rents no host above it, each way |
 | Data transfer warning | 10% | Members confirm, and the channel is warned, at this share of the budget |
-| Runner start deadline | 10 minutes | A running machine whose runner hasn't reported is destroyed and its job failed |
+| Runner start deadline | 10 minutes | A running machine whose runner hasn't reported is destroyed and its job tried on another machine; after 3 machines the job fails |
 | Heartbeat timeout | 30 minutes | A machine whose runner goes silent is destroyed and its job failed |
 | Self-stop without Krater | 3 hours | A machine that can't reach Krater stops itself |
 | Storage quota | 50 GB | Checkpoints and outputs per project |

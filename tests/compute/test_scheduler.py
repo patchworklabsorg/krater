@@ -1020,25 +1020,6 @@ def test_bid_rounding_and_clamping() -> None:
 # -- The runner ---------------------------------------------------------------------------------------------
 
 
-def test_a_runner_that_never_starts_fails_the_job(db_session, member, project, client, fake) -> None:  # noqa: F811
-    job = _submit(db_session, member, project)
-    _pass(db_session, client)
-    row = _instance(db_session, job)
-    fake.set_status(row.provider_instance_id, "running")
-    _pass(db_session, client, NOW + timedelta(minutes=5))
-
-    _passes(db_session, client, 6, 14)
-    assert job.state is ComputeJobState.RUNNING
-    _pass(db_session, client, NOW + timedelta(minutes=15))
-
-    assert job.state is ComputeJobState.FAILED
-    assert "curl, wget or Python" in job.state_reason
-    assert fake.instances == {}
-    # Finished, so the orphan check doesn't rent it again: no retry loop on an image that can't run the runner.
-    _pass(db_session, client, NOW + timedelta(minutes=16))
-    assert job.state is ComputeJobState.FAILED and fake.instances == {}
-
-
 def test_a_silent_runner_fails_the_job(db_session, member, project, client, fake) -> None:  # noqa: F811
     job, row = _running_job(db_session, member, project, client, fake)
     _passes(db_session, client, 6, 19)
@@ -1173,7 +1154,65 @@ def test_a_start_from_before_a_pause_does_not_count_after_it(db_session, member,
     _passes(db_session, client, 9, 17)
     assert job.state is ComputeJobState.RUNNING
     _pass(db_session, client, NOW + timedelta(minutes=18))
-    assert job.state is ComputeJobState.FAILED and "didn't start within" in job.state_reason
+    assert row.state is ComputeInstanceState.DESTROYED and row.destroy_reason == scheduler.RUNNER_NOT_STARTED
+    assert "runner_not_started" in _events(db_session, job)
+
+
+def test_a_runner_that_never_starts_is_tried_on_another_machine(db_session, member, project, client, fake) -> None:  # noqa: F811
+    """Staging, 2026-11-12: a host's download of the runner was cut short, then hung past the deadline, and the job
+    failed on its first machine although nothing was wrong with it."""
+    job = _submit(db_session, member, project, target_microusd=100_000)
+    _pass(db_session, client)
+    row = _instance(db_session, job)
+    fake.set_status(row.provider_instance_id, "running")
+    _pass(db_session, client, NOW + timedelta(minutes=1))
+
+    _passes(db_session, client, 2, 10)
+    assert row.state is not ComputeInstanceState.DESTROYED
+    _pass(db_session, client, NOW + timedelta(minutes=11))
+
+    assert row.state is ComputeInstanceState.DESTROYED and row.destroy_reason == scheduler.RUNNER_NOT_STARTED
+    assert row.provider_instance_id not in fake.instances
+    assert "runner_not_started" in _events(db_session, job)
+    new = _instance(db_session, job)
+    assert new.attempt == 2 and new.provider_machine_id != row.provider_machine_id
+    assert job.state is ComputeJobState.STARTING
+
+
+def test_a_runner_that_starts_nowhere_fails_after_three_machines(db_session, member, project, client, fake) -> None:  # noqa: F811
+    job = _submit(db_session, member, project, target_microusd=100_000)  # all three RTX 3060 machines qualify
+    _pass(db_session, client)
+    minute = 0
+    for _ in range(scheduler.MAX_HOST_FAILURES):
+        fake.set_status(_instance(db_session, job).provider_instance_id, "running")
+        _passes(db_session, client, minute + 1, minute + 11)  # a pass a minute: a gap would restart the deadline
+        minute += 11
+
+    assert job.state is ComputeJobState.FAILED
+    assert "3 machines in a row" in job.state_reason and "POSIX shell" in job.state_reason
+    assert fake.instances == {}
+    assert len({row.provider_machine_id for row in job.instances}) == scheduler.MAX_HOST_FAILURES
+
+
+def test_a_machine_whose_runner_didnt_start_is_still_offered_to_other_jobs(
+    db_session,  # noqa: F811
+    member,  # noqa: F811
+    project,  # noqa: F811
+    client,  # noqa: F811
+    fake,  # noqa: F811
+) -> None:
+    """An image without a shell or a downloader fails this way on any machine: that says nothing about the host."""
+    job = _submit(db_session, member, project, target_microusd=100_000)
+    _pass(db_session, client)
+    row = _instance(db_session, job)
+    fake.set_status(row.provider_instance_id, "running")
+    _passes(db_session, client, 1, 11)
+    assert row.destroy_reason == scheduler.RUNNER_NOT_STARTED and row.provider_machine_id == "501"
+
+    other = _submit(db_session, member, project, now=NOW + timedelta(minutes=12), target_microusd=100_000)
+    _pass(db_session, client, NOW + timedelta(minutes=12))
+
+    assert _instance(db_session, other).provider_machine_id == "501"  # still the cheapest, and not held back
 
 
 def test_a_runner_restart_reported_before_the_resume_is_seen_counts(db_session, member, project, client, fake) -> None:  # noqa: F811
