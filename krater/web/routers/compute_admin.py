@@ -29,7 +29,7 @@ from krater.models import (
     SpendReconciliation,
 )
 from krater.models.compute_settings import GLOBAL_ID
-from krater.services import budget, compute_halt, compute_jobs, compute_settings, compute_watch
+from krater.services import budget, compute_halt, compute_jobs, compute_settings, compute_watch, ops_alerts
 from krater.services.actor import Actor
 from krater.services.errors import InvalidState, NotFound, ValidationFailed
 from krater.vast import SearchQuota
@@ -144,6 +144,7 @@ def _global_page(
             "switch_reason": switch_reason,
             "caps": compute_halt.cap_statuses(db_session, datetime.now(UTC)),
             "quota": _quota_view(db_session, datetime.now(UTC)),
+            "problems": ops_alerts.recent(db_session, now=datetime.now(UTC)),
             "overrides": overrides,
             "mismatches": [
                 (check, db_session.get(Project, check.project_id))

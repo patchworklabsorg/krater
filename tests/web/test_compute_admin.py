@@ -200,3 +200,18 @@ def test_the_page_shows_vasts_search_quota(client: TestClient, login_as, db_sess
     page = client.get("/admin/compute").text
     assert "<strong>0 of 20,000</strong> search rows left" in page
     assert "no job or box can start until the reset" in page
+
+
+def test_the_page_shows_the_workers_recent_problems(client: TestClient, login_as, db_session) -> None:
+    from datetime import UTC, datetime
+
+    from krater.services import ops_alerts
+
+    login_as(ADMIN_SUB)
+    assert "problems-title" not in client.get("/admin/compute").text
+
+    ops_alerts.record_failure(db_session, "compute_schedule", "VastError: <401> bad key", now=datetime.now(UTC))
+    db_session.commit()
+
+    page = client.get("/admin/compute").text
+    assert "The compute scheduler keeps failing" in page and "VastError: &lt;401&gt; bad key" in page

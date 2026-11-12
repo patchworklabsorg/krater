@@ -237,3 +237,23 @@ def test_the_worker_heartbeat(db_session: Session) -> None:
 
     assert ops_alerts.worker_alive(db_session, now=NOW + ops_alerts.HEARTBEAT_STALE) == (True, NOW)
     assert ops_alerts.worker_alive(db_session, now=NOW + ops_alerts.HEARTBEAT_STALE + timedelta(seconds=1))[0] is False
+
+
+def test_recent_lists_open_alerts_and_failures_under_the_threshold(db_session: Session) -> None:
+    ops_alerts.record_failure(db_session, "compute_schedule", "VastError: 401 bad key", now=NOW)
+    ops_alerts.record_failure(db_session, "slack", "old", now=NOW - ops_alerts.RECENT_WINDOW - timedelta(minutes=1))
+    db_session.flush()
+
+    (problem,) = ops_alerts.recent(db_session, now=NOW + timedelta(minutes=1))
+    assert problem.key == "compute_schedule" and not problem.open and problem.failures == 1
+    assert problem.title == "The compute scheduler keeps failing" and "401 bad key" in problem.message
+
+    for n in range(1, 5):
+        ops_alerts.record_failure(
+            db_session, "compute_schedule", "VastError: 401 bad key", now=NOW + timedelta(minutes=n)
+        )
+    (problem,) = ops_alerts.recent(db_session, now=NOW + timedelta(minutes=5))
+    assert problem.open and problem.failures == 5
+
+    # An open alert stays listed however old its last failure.
+    assert [p.key for p in ops_alerts.recent(db_session, now=NOW + timedelta(days=3))] == ["compute_schedule"]
