@@ -813,7 +813,7 @@ def test_a_machine_vast_refused_and_left_stopped_is_dropped_at_once(db_session, 
     assert job.queued_at == NOW
 
 
-def _unavailable_on(fake, machine: str):
+def _unavailable_on(fake, machine: str, *, status: int = 410, error: str = "no_such_ask", msg: str = "unavailable"):
     """A client whose creates on `machine` get Vast's answer to a bid sent with `cancel_unavail` that can't start."""
     bodies: list[dict] = []
 
@@ -822,7 +822,7 @@ def _unavailable_on(fake, machine: str):
             bodies.append(json.loads(request.content))
             offer = request.url.path.rstrip("/").rsplit("/", 1)[-1]
             if any(str(key) == offer and str(o["machine_id"]) == machine for key, o in fake.offers.items()):
-                return httpx.Response(410, json={"success": False, "error": "no_such_ask", "msg": "unavailable"})
+                return httpx.Response(status, json={"success": False, "error": error, "msg": msg})
         return fake.handle(request)
 
     refusing = fake.client()
@@ -859,6 +859,17 @@ def test_a_bid_its_machine_cant_start_is_refused_and_that_machine_avoided(
     third = _submit(db_session, member, project, now=NOW + timedelta(hours=2), target_microusd=100_000)
     _pass(db_session, fake.client(), NOW + timedelta(hours=2))
     assert _instance(db_session, third).provider_machine_id == "501"
+
+
+def test_vasts_other_unavailable_answer_avoids_the_machine_too(db_session, member, project, fake) -> None:  # noqa: F811
+    """Vast's reference also gives a 404 `invalid_args` whose message names no_such_ask."""
+    refusing, _ = _unavailable_on(fake, "501", status=404, error="invalid_args", msg="error 404/3603: no_such_ask")
+    job = _submit(db_session, member, project, target_microusd=100_000)
+    _pass(db_session, refusing)
+    assert _instance(db_session, job).destroy_reason == scheduler.UNAVAILABLE
+
+    _pass(db_session, refusing, NOW + timedelta(minutes=1))
+    assert _instance(db_session, job).provider_machine_id not in ("501", None)
 
 
 def test_a_create_refused_but_started_is_kept(db_session, member, project, fake) -> None:  # noqa: F811

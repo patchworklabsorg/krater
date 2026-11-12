@@ -1686,7 +1686,7 @@ class Scheduler:
                 )
                 return True
             row.state = ComputeInstanceState.CREATE_FAILED
-            if exc.error == NO_SUCH_ASK:
+            if _unavailable(exc):
                 row.destroy_reason = UNAVAILABLE  # nothing to destroy: this keeps the machine out of the next search
             queued_at, wait_started_at = job.queued_at, job.wait_started_at
             _requeue(self.session, job, "The offer was taken before Krater could rent it; trying again.", now=self.now)
@@ -1715,6 +1715,13 @@ class Scheduler:
         )
         self.result.rented.append(label)
         return False
+
+
+def _unavailable(exc: ProviderRequestFailedError) -> bool:
+    """Whether a refused create means the offer can't be rented now. Vast's create reference gives this as 410
+    `no_such_ask`, and as 404 `invalid_args` with "no_such_ask" in the message; it hasn't been seen live yet, so any of
+    the three counts. Left unmarked, the machine stays in the search, and the job would ask for it every pass."""
+    return exc.status_code == 410 or exc.error == NO_SUCH_ASK or NO_SUCH_ASK in str(exc)
 
 
 def run_pass(
