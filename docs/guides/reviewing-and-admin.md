@@ -8,7 +8,7 @@ something, so a removed role stops working at once.
 Members' side of all this: [Using Krater](using-krater.md) and [Running jobs and boxes](compute-jobs.md).
 
 - [Reviewing](#reviewing)
-- [Approving for less](#approving-for-less)
+- [Approving for less, or more](#approving-for-less-or-more)
 - [Funding holds](#funding-holds)
 - [Verification before funding](#verification-before-funding)
 - [The admin page](#the-admin-page)
@@ -36,7 +36,7 @@ Members' side of all this: [Using Krater](using-krater.md) and [Running jobs and
   Stash archives of its links, the team's verification and US residency, the revision history with every review, and
   the **Review this proposal** form.
 
-Use the web form when you want to [approve for less](#approving-for-less) or with a
+Use the web form when you want to [approve for less or more](#approving-for-less-or-more) or with a
 [funding hold](#funding-holds): the Slack button always approves the full amount, with no hold.
 
 ### What you're deciding
@@ -62,21 +62,24 @@ team to revise; a rejected amendment just leaves the budget as it was.
 - **Approval doesn't wait for verification.** You can approve a project whose team isn't verified yet. Its budget is
   held until they are (see below).
 
-## Approving for less
+## Approving for less, or more
 
-A team may ask for more than you want to fund at first. On the web **Approve** form (or the admin's **Decide without
-waiting for reviewers**), change **Amount to grant (USD)** from the requested amount to what you want to give, and say
-why in **Why less**. The team sees the amount and your reason.
+A team may ask for more than you want to fund at first, or less than the work needs. On the web **Approve** form (or
+the admin's **Decide without waiting for reviewers**), change **Amount to grant (USD)** from the requested amount to
+what you want to give, and say why in **Why another amount**. The team sees the amount and your reason.
 
-- It must be above zero and no more than they asked for.
+- It must be above zero. It can be less or more than they asked for.
 - For an amendment, it's the **new total**, and must stay above the project's current budget. To add nothing, reject
   the amendment instead. An amendment that cuts the budget is approved as asked.
 - With an approval policy that needs several approvals, the **lowest** amount any approving reviewer chose is
-  granted. An admin override's own amount wins.
-- The project page, the revision history and the Slack decision say "Approved for $50.00 of the $180.00 asked for".
-  The ledger and Quilt only ever see the amount granted.
+  granted, and an approval with no amount (Slack's **Approve** button) chose the request. So more than the request is
+  granted only when every approval chose more. An admin override's own amount wins.
+- An amount above the request counts toward the approval policy's budget sizes: granting $5,000 on a $100 request
+  needs the approvals a $5,000 request would.
+- The project page, the revision history and the Slack decision say "Approved for $50.00 of the $180.00 asked for"
+  (or "Approved for $250.00, more than the $180.00 asked for"). The ledger and Quilt only ever see the amount granted.
 
-The team asks for the rest later with an amendment.
+When you grant less, the team asks for the rest later with an amendment.
 
 ## Funding holds
 
@@ -147,8 +150,8 @@ project's Slack channel so reviewers see it.
 hourly cap or clear its funding hold. Another admin, or the normal review, has to. You can still cut, reclaim or
 withdraw it.
 
-**No size limit.** Krater has no absolute cap on a grant: a reviewer can approve any amount asked for. The approval
-policy can require more approvals above a budget size, and the per-machine hourly cap limits how fast a budget is
+**No size limit.** Krater has no absolute cap on a grant: a reviewer can approve any amount, even more than was asked
+for. The approval policy can require more approvals above a budget size, and the per-machine hourly cap limits how fast a budget is
 spent.
 
 ## Compute settings

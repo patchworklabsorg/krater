@@ -318,7 +318,7 @@ def _review_message(project: Project, revision: ProjectRevision) -> tuple[list[d
     if revision.kind is not RevisionKind.COMPLETION:
         # Above the buttons: they stay the message's last block.
         link = f"{get_settings().base_url.rstrip('/')}/projects/{project.id}"
-        note = f"Approve here grants the full amount. To grant less, approve on <{link}|the project page>."
+        note = f"Approve here grants the amount asked for. To grant less or more, approve on <{link}|the project page>."
         blocks.insert(-1, {"type": "context", "elements": [{"type": "mrkdwn", "text": note}]})
     if project.slack_channel_id:
         note = f"Only reviewers are in this channel. Talk with the team in <#{project.slack_channel_id}>."
@@ -413,8 +413,8 @@ def _latest_reject_reason(revision: ProjectRevision) -> str | None:
 
 
 def _grant_reason(revision: ProjectRevision) -> str | None:
-    """Why the approvers granted less: the reason on the approval that chose the amount granted. An admin override
-    keeps its reason in the audit log and posts it as its own notice, so there is none here then."""
+    """Why the approvers granted another amount: the reason on the approval that chose the amount granted. An admin
+    override keeps its reason in the audit log and posts it as its own notice, so there is none here then."""
     choosing = [
         review
         for review in revision.reviews
@@ -456,10 +456,11 @@ def notify_decision(session: Session, slack_client: SlackClient, *, revision: Pr
     ]
     reason = _latest_reject_reason(revision)
     granted = None
-    if revision.outcome is RevisionOutcome.APPROVED and revision.granted_less:
+    if revision.outcome is RevisionOutcome.APPROVED and revision.granted_other_amount:
         what = "a new total of " if revision.kind is RevisionKind.AMENDMENT else ""
+        of_the = ", more than the" if revision.granted_more else " of the"
         granted = (
-            f"Approved for {what}{_format_cents(revision.budget_approved_cents)} of the "
+            f"Approved for {what}{_format_cents(revision.budget_approved_cents)}{of_the} "
             f"{_format_cents(revision.budget_requested_cents)} asked for."
         )
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"*Budget:* {granted}"}})

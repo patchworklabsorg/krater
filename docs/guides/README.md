@@ -13,7 +13,7 @@ For members:
 
 For reviewers and admins:
 
-- [Reviewing and running Krater](reviewing-and-admin.md): reviewing, granting less, funding holds, overrides,
+- [Reviewing and running Krater](reviewing-and-admin.md): reviewing, granting less or more, funding holds, overrides,
   compute settings and alerts.
 - [Record and report an OSPool grant](ospool-grants.md)
 - [Share proposals with OSPool](share-with-ospool.md)
