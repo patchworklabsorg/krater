@@ -770,6 +770,7 @@ def test_an_image_the_registry_refuses_fails_the_job_at_once(
     job = _submit(db_session, member, project)
     _pass(db_session, client)
     row = _instance(db_session, job)
+    status = dict(status)
     fake.set_status(row.provider_instance_id, status.pop("actual_status"), status_msg=DENIED, **status)
 
     _pass(db_session, client, NOW + timedelta(minutes=1))
@@ -819,6 +820,29 @@ def test_registry_refusals_are_recognised(message) -> None:
 )
 def test_passing_and_host_errors_are_not_refusals(message) -> None:
     assert not scheduler.pull_refused(message)
+
+
+def test_a_refusal_after_the_image_has_run_waits_for_the_host(
+    db_session,  # noqa: F811
+    member,  # noqa: F811
+    project,  # noqa: F811
+    client,  # noqa: F811
+    fake,  # noqa: F811
+) -> None:
+    """The image pulled before, so the registry's refusal now is more likely a passing fault than a wrong name."""
+    job, row = _running_job(db_session, member, project, client, fake)
+    row.state = ComputeInstanceState.DESTROYED
+    fake.instances.pop(row.provider_instance_id)
+    db_session.commit()
+    _pass(db_session, client, NOW + timedelta(minutes=7))
+    second = _instance(db_session, job)
+    assert second.attempt == 2
+    fake.set_status(second.provider_instance_id, "loading", status_msg=DENIED)
+
+    _pass(db_session, client, NOW + timedelta(minutes=8))
+
+    assert job.state is not ComputeJobState.FAILED
+    assert second.state is ComputeInstanceState.PROVISIONING
 
 
 def test_a_passing_pull_error_still_waits_for_the_host(

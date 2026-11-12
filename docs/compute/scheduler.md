@@ -34,7 +34,8 @@ workspace sync, and step 5 starts and searches for nothing: queued jobs say why.
      `PULL_REFUSALS`) before its container ever ran → job failed at once, quoting the message, and the machine
      destroyed (`IMAGE_PULL_FAILED`, not counted against the host). Images are pulled anonymously, so every machine
      would get the same answer; in production (2026-11-12) an image that didn't exist cost a box three A100s and 15
-     minutes before this. Rate limits, timeouts and DNS errors aren't refusals: they wait out the grace below;
+     minutes before this. Rate limits, timeouts and DNS errors aren't refusals, and neither is a refusal once an
+     earlier machine of the job ran the image (a registry's passing fault): they wait out the grace below;
    - rented but stopped or interrupted before its container ever ran, with no word from its runner, for 5 minutes
      (`HOST_START_GRACE`) → the host's fault (on staging a V100 host couldn't give the container its GPU, a CDI
      error): the machine is destroyed and the job requeued, never onto that machine again. After 3 such machines

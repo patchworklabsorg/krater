@@ -104,7 +104,9 @@ MAX_HOST_FAILURES = 3
 #: machine: the job fails at once, and the machine isn't counted against its host.
 IMAGE_PULL_FAILED = "image couldn't be pulled"
 #: What Docker says when a registry refuses an image, rather than failing to reach it: the image or tag doesn't exist,
-#: is private, or isn't a valid name. Matched lowercase in a status message that starts with Docker's
+#: is private, or isn't a valid name. Once an earlier machine of the job ran the image, a refusal is taken for a
+#: registry's passing fault (a token service failing for a moment answers `unauthorized`), and the machine goes the
+#: way of HOST_START_GRACE instead. Matched lowercase in a status message that starts with Docker's
 #: `Error response from daemon`. A host's own faults (a missing GPU runtime: `executable file not found`) and passing
 #: ones (`toomanyrequests`, timeouts, DNS) aren't here, so they still go to another machine.
 PULL_REFUSALS = (
@@ -620,6 +622,7 @@ class Scheduler:
             and seen.phase is not Phase.RUNNING
             and row.runner_starts == 0
             and pull_refused(seen.status_msg)
+            and not any(other.runner_starts for other in job.instances)
         ):
             self._fail_pull(row, job, seen)
             return
