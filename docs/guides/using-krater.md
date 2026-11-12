@@ -161,8 +161,9 @@ Reviewers discuss your proposal in the project's channel. Answer their questions
 for. Decisions are made with the buttons in Slack or on the project page.
 
 - **Approved.** The project becomes **Approved**, and its budget is granted: the amount you asked for, or **less**,
-  if a reviewer chose to fund a smaller first step. In that case the project page, the review list and the Slack
-  decision say "Approved for $50.00 of the $180.00 asked for" and give the reviewer's reason.
+  if a reviewer chose to fund a smaller first step, or now and then **more**, if the work needs it. In that case the
+  project page, the review list and the Slack decision say "Approved for $50.00 of the $180.00 asked for" (or "...,
+  more than the ... asked for") and give the reviewer's reason.
 - **Rejected.** A reason is always given, in Slack and on the project page. The project becomes **Changes requested**,
   and a new draft opens with your previous answers. Edit it and submit again: it's the same project, with a new
   revision.
@@ -201,7 +202,7 @@ the application again with your answers, and:
 
 Tick the Submission Criteria box and submit it. It's reviewed the same way. While it's under review **the project
 stays approved and keeps its current budget**, so your jobs keep running. If it's approved, the difference is added
-(reviewers can approve a lower new total than you asked for). If it's rejected, nothing changes.
+(reviewers can approve a lower or higher new total than you asked for). If it's rejected, nothing changes.
 
 You can't start an amendment while an earlier grant is still held for verification.
 

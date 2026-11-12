@@ -46,7 +46,7 @@ GUIDES: tuple[Guide, ...] = (
     Guide("run-when-cheap", "Make a job wait for a GPU price you choose, so your budget goes further.", "members"),
     Guide(
         "reviewing-and-admin",
-        "Reviewing proposals, granting less, funding holds, overrides, compute settings and alerts.",
+        "Reviewing proposals, granting less or more, funding holds, overrides, compute settings and alerts.",
         "admins",
     ),
     Guide("ospool-grants", "Record a grant that runs on the OSPool, and report what the team used.", "admins"),

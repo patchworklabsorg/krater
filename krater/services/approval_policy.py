@@ -29,7 +29,7 @@ def applicable_policies(session: Session, revision: ProjectRevision) -> list[App
     """The `ApprovalPolicy` rows that apply to `revision`.
 
     A row applies when its `stage` matches and its `min_budget_cents` is either NULL or no greater
-    than the revision's `budget_requested_cents`. **Every** applicable row must be satisfied (see
+    than the revision's size (`_size_cents`). **Every** applicable row must be satisfied (see
     `is_satisfied`) -- rows aren't alternatives, they stack.
     """
     stage = stage_for(revision)
@@ -37,10 +37,25 @@ def applicable_policies(session: Session, revision: ProjectRevision) -> list[App
         ApprovalPolicy.stage == stage,
         sa.or_(
             ApprovalPolicy.min_budget_cents.is_(None),
-            ApprovalPolicy.min_budget_cents <= revision.budget_requested_cents,
+            ApprovalPolicy.min_budget_cents <= _size_cents(session, revision),
         ),
     )
     return list(session.scalars(stmt).all())
+
+
+def _size_cents(session: Session, revision: ProjectRevision) -> int:
+    """The budget size that picks `revision`'s policy rows: its request, or more when a counting approval chose to
+    grant more than that. Otherwise a small request could pass a one-approval tier and one reviewer grant a large
+    amount past a tier that needs two."""
+    largest = session.scalar(
+        sa.select(sa.func.max(Review.budget_cents)).where(
+            Review.revision_id == revision.id,
+            Review.decision == ReviewDecision.APPROVE,
+            Review.budget_cents.is_not(None),
+            Review.reviewer_id.not_in(teams.conflict_user_ids(revision.project)),
+        )
+    )
+    return max(revision.budget_requested_cents, largest or 0)
 
 
 def _approving_review_count(session: Session, revision: ProjectRevision, policy: ApprovalPolicy | None) -> int:

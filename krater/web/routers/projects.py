@@ -107,18 +107,24 @@ _SLACK_PROMOTION_REQUIRED_MESSAGE = (
 )
 
 
+def _granted_note(revision: ProjectRevision) -> str:
+    """The note for an approval of another amount: "Approved for $X of the $Y asked for.", or ", more than the"."""
+    granted = format_cents(revision.budget_approved_cents)
+    asked = format_cents(revision.budget_requested_cents)
+    if revision.granted_more:
+        return f"Approved for {granted}, more than the {asked} asked for."
+    return f"Approved for {granted} of the {asked} asked for."
+
+
 def _decision_message(db_session: Session, project: Project, revision: ProjectRevision, default: str) -> str:
     """The flash after a decision: says so when this approval's budget is held, for a funding hold or for the
     team's verification."""
     if (
-        revision.granted_less
+        revision.granted_other_amount
         and revision.outcome is RevisionOutcome.APPROVED
         and not grants.pending(db_session, project)
     ):
-        return (
-            f"Approved for {format_cents(revision.budget_approved_cents)} of the "
-            f"{format_cents(revision.budget_requested_cents)} asked for."
-        )
+        return _granted_note(revision)
     held = grants.pending(db_session, project)
     if held is not None and held.revision_id == revision.id and project.funding_hold is not None:
         return (
@@ -655,8 +661,8 @@ def _build_detail_context(
         # A proposal or amendment approval may be held for funding (`krater.services.funding_holds`).
         "can_hold_funding": current_is_pending and current.kind is not RevisionKind.COMPLETION,
         "funding_hold_choices": [(hold.value, label) for hold, label in funding_holds.LABELS.items()],
-        # An approver may grant less than a proposal asks for, or approve a lower new total for an amendment that adds
-        # budget (`project_service.record_review`). The field starts at the full request.
+        # An approver may grant less or more than a proposal asks for, or approve another new total for an amendment
+        # that adds budget (`project_service.record_review`). The field starts at the full request.
         "can_grant_less": current_is_pending
         and (
             current.kind is RevisionKind.PROPOSAL
@@ -1141,11 +1147,8 @@ def admin_decide(
     revision_id = revision.id
     action = "admin_approve" if decision_enum is ReviewDecision.APPROVE else "admin_reject"
     notes = []
-    if revision.granted_less:
-        notes.append(
-            f"Approved for {format_cents(revision.budget_approved_cents)} of the "
-            f"{format_cents(revision.budget_requested_cents)} asked for."
-        )
+    if revision.granted_other_amount:
+        notes.append(_granted_note(revision))
     if hold:
         notes.append(f"Approved as {funding_holds.LABELS[hold].lower()}: its budget is held.")
     extra = " ".join(notes) or None

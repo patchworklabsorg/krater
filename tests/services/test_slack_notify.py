@@ -174,7 +174,7 @@ def test_notify_decision_says_when_less_was_granted_and_why(
     slack_client = FakeSlackClient()
     slack_notify.notify_revision_submitted(db_session, slack_client, weave, revision=revision, feed_channel_id=None)
     posted = slack_client.messages[(revision.slack_message_channel_id, revision.slack_message_ts)]
-    assert "To grant less, approve on" in str(posted["blocks"])
+    assert "To grant less or more, approve on" in str(posted["blocks"])
 
     projects.record_review(
         db_session,

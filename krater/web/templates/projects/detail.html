@@ -22,12 +22,12 @@
     <input type="text" id="{{ field_id }}" name="budget" inputmode="decimal"
       value="{{ posted.budget if error_form == form and posted.budget is defined else grant_input }}">
     <p class="field-hint">They asked for {{ summary.current_revision.budget_requested_cents | dollars }}{% if amendment %} in total{% endif %}.
-      Lower it to fund a smaller first step{% if with_reason %} and say why below{% endif %}; the team sees the amount and the reason.</p>
+      Lower it to fund a smaller first step, or raise it to fund more{% if with_reason %}, and say why below{% endif %}; the team sees the amount and the reason.</p>
     {% if error_form == form and errors.budget_cents %}<p class="field-error">{{ errors.budget_cents }}</p>{% endif %}
   </div>
   {% if with_reason %}
   <div class="field">
-    <label for="{{ field_id }}-reason">Why less (only when granting less)</label>
+    <label for="{{ field_id }}-reason">Why another amount (only when granting less or more)</label>
     <textarea id="{{ field_id }}-reason" name="reason" rows="2">{{ posted.reason if error_form == form else "" }}</textarea>
     {% if error_form == form and errors.reason %}<p class="field-error">{{ errors.reason }}</p>{% endif %}
   </div>
@@ -201,7 +201,7 @@
             {%- if rev.kind.value == "amendment" %} new total requested
               {%- if rev is sameas current and amendment_adds_cents is not none %} ({{ "adds" if amendment_adds_cents >= 0 else "cuts" }} {{ amendment_adds_cents | abs | dollars }} to the {{ summary.ceiling_cents | dollars }} approved now){% endif %}.
             {%- else %} requested.{% endif %}
-            {% if rev.granted_less %}<br><strong>Approved for {{ rev.budget_approved_cents | dollars }}</strong>{% if rev.kind.value == "amendment" %} in total{% endif %}.{% endif %}
+            {% if rev.granted_other_amount %}<br><strong>Approved for {{ rev.budget_approved_cents | dollars }}</strong>{% if rev.kind.value == "amendment" %} in total{% endif %}.{% endif %}
             {% if rev.budget_estimate %}<br><span class="muted">Estimate: {{ rev.budget_estimate | estimate_summary }}</span>{% endif %}
           </p>
           {% if estimate_mismatch_by_revision.get(rev.id) %}
@@ -281,7 +281,7 @@
       <p class="muted">
         {% if revision.submitted_at %}Submitted {{ revision.submitted_at.strftime("%Y-%m-%d %H:%M UTC") }}{% else %}Draft, not yet submitted{% endif %}
         &middot; Budget requested: {{ revision.budget_requested_cents | dollars }}
-        {%- if revision.granted_less %} &middot; Approved for {{ revision.budget_approved_cents | dollars }}{% endif %}
+        {%- if revision.granted_other_amount %} &middot; Approved for {{ revision.budget_approved_cents | dollars }}{% endif %}
       </p>
       {% if revision.budget_estimate %}
         <p class="muted">
