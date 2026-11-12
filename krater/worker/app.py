@@ -5,6 +5,7 @@ Run with: `uv run procrastinate --app=krater.worker.app.app worker`
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime
@@ -112,6 +113,44 @@ def ops_watch(timestamp: int) -> None:
         session.rollback()
     finally:
         session.close()
+
+
+#: A running job is orphaned once its worker is gone, or hasn't sent procrastinate's heartbeat (every 10 s) for this
+#: long. A worker killed mid-job (out of memory, or a restart that couldn't wait) leaves the job in `doing` for good,
+#: and its lock with it: one orphaned `compute_schedule` held the scheduler's lock on local staging for almost 4 days,
+#: and every scheduler pass and reconciliation queued behind it while the worker's heartbeat stayed healthy.
+STALLED_WORKER_SECONDS = 120
+STALLED_SWEEP_LOCK = "stalled_jobs_sweep"
+
+
+async def fail_stalled_jobs(job_manager: procrastinate.manager.JobManager) -> list[str]:
+    """End every orphaned job as failed, which frees its lock, and name them ("task #id")."""
+    ended = []
+    for job in await job_manager.get_stalled_jobs(seconds_since_heartbeat=STALLED_WORKER_SECONDS):
+        try:
+            await job_manager.finish_job_by_id_async(job.id, status=procrastinate.jobs.Status.FAILED, delete_job=False)
+        except procrastinate.exceptions.ConnectorException:
+            logger.warning("krater: job %s (%s) ended before it could be marked failed", job.id, job.task_name)
+            continue
+        logger.warning("krater: ended job %s (%s) as failed: its worker stopped while it ran", job.id, job.task_name)
+        ended.append(f"{job.task_name} #{job.id}")
+    return ended
+
+
+@app.periodic(cron="* * * * *")
+@app.task(name="stalled_jobs_sweep", queueing_lock=STALLED_SWEEP_LOCK, pass_context=True)
+async def stalled_jobs_sweep(context: procrastinate.JobContext, timestamp: int) -> None:
+    """Every minute: end the jobs whose worker died as failed (`fail_stalled_jobs`). They aren't run again, since one
+    cut off halfway may not be safe to repeat: every periodic task runs again on its next tick anyway, and the Slack,
+    Quilt and Stash tasks have periodic runs that catch up. Opens the "stalled_jobs" admin alert."""
+    try:
+        ended = await fail_stalled_jobs(context.app.job_manager)
+    except Exception:
+        logger.exception("krater.stalled_jobs_sweep failed")
+        return
+    if ended:
+        message = "Ended as failed after their worker stopped: " + ", ".join(ended) + ". See the worker's log."
+        await asyncio.to_thread(_report_failure, "stalled_jobs", message)
 
 
 # --------------------------------------------------------------------------------------------------

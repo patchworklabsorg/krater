@@ -52,6 +52,10 @@ QUILT_BACKLOG_AGE = timedelta(minutes=30)
 PRICES_STALE = timedelta(hours=48)
 #: Background jobs that ended in an error (an exception a task didn't catch) within this window open an alert.
 FAILED_JOBS_WINDOW = timedelta(hours=1)
+#: A due background job waiting longer than this is stuck: a healthy worker starts one within seconds, so it's
+#: behind a lock some other job never let go of (a hung task, or one whose worker died), or the worker isn't taking
+#: jobs. The compute scheduler's lock stuck like this stops all of Krater Compute without anything failing.
+JOBS_WAITING_AGE = timedelta(minutes=15)
 #: Charges for machines Krater never rented (`krater.compute.reconcile`) keep their alert open this long.
 UNKNOWN_CHARGES_WINDOW = timedelta(hours=24)
 #: The audit action the reconciliation writes for them (`krater.compute.reconcile.AUDIT_UNKNOWN_CHARGES`).
@@ -79,6 +83,8 @@ FAILURE_RULES = {
     "quilt": FailureRule("Sending events to Quilt keeps failing", 5, timedelta(minutes=15)),
     "stash": FailureRule("Archiving submission links in Stash keeps failing", 5, timedelta(minutes=15)),
     "slack": FailureRule("Slack tasks keep failing", 3, timedelta(minutes=30)),
+    # The worker's `stalled_jobs_sweep`: one is enough, since a job cut off mid-run may have left work half done.
+    "stalled_jobs": FailureRule("A worker stopped in the middle of a background job", 1, timedelta(hours=1)),
 }
 #: The conditions `check` watches, by key.
 CONDITION_TITLES = {
@@ -86,6 +92,7 @@ CONDITION_TITLES = {
     "stash_backlog": "Archive requests to Stash are backing up",
     "prices_stale": "GPU prices aren't being refreshed",
     "failed_jobs": "Background jobs are ending in errors",
+    "jobs_waiting": "Background jobs are stuck waiting",
     "compute_halted": "Krater Compute is stopped",
     "unknown_charges": "Vast charged for machines Krater never rented",
     "low_credit": "The Vast account's credit is low",
@@ -186,6 +193,26 @@ def _failed_jobs(session: Session, now: datetime) -> str | None:
     return "In the last hour: " + ", ".join(f"{name} ×{count}" for name, count in rows) + ". See the worker's log."
 
 
+def _jobs_waiting(session: Session, now: datetime) -> str | None:
+    """The tasks with a job that has been due for over `JOBS_WAITING_AGE` and still hasn't started, oldest first."""
+    rows = session.execute(
+        sa.text(
+            "SELECT j.task_name, min(greatest(e.at, coalesce(j.scheduled_at, e.at))) AS due "
+            "FROM procrastinate_jobs j JOIN procrastinate_events e ON e.job_id = j.id AND e.type = 'deferred' "
+            "WHERE j.status = 'todo' GROUP BY j.task_name "
+            "HAVING min(greatest(e.at, coalesce(j.scheduled_at, e.at))) < :cutoff ORDER BY due"
+        ),
+        {"cutoff": now - JOBS_WAITING_AGE},
+    ).all()
+    if not rows:
+        return None
+    waiting = ", ".join(f"{name} since {due:%Y-%m-%d %H:%M}" for name, due in rows)
+    return (
+        f"Waiting to start: {waiting} UTC. A job holding their lock may have hung, or the worker isn't taking jobs. "
+        "See the worker's log and the runbook's \"Stuck background jobs\"."
+    )
+
+
 def _compute_halted(session: Session) -> str | None:
     row = session.get(ComputeSettings, 1)
     if row is None:
@@ -251,6 +278,7 @@ def check(session: Session, settings: Settings, *, now: datetime) -> None:
     _set_condition(session, "stash_backlog", _stash_backlog(session, settings, now), now=now)
     _set_condition(session, "prices_stale", _prices_stale(session, now), now=now)
     _set_condition(session, "failed_jobs", _failed_jobs(session, now), now=now)
+    _set_condition(session, "jobs_waiting", _jobs_waiting(session, now), now=now)
     _set_condition(session, "compute_halted", _compute_halted(session), now=now)
     _set_condition(session, "unknown_charges", _unknown_charges(session, now), now=now)
     _set_condition(session, "low_credit", _low_credit(session), now=now)

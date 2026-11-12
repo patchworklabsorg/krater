@@ -106,6 +106,22 @@ The scheduler keeps retrying, and after 5 failures in 15 minutes the alerts chan
 failing". Machines already running keep running and keep billing. If Vast is down for long, or you can't tell whether
 machines are being watched, use the stop switch. Machines that can't reach Krater stop themselves after 3 hours.
 
+## Stuck background jobs
+
+Two alerts are about the worker's own jobs (not members' compute jobs):
+
+- **"A worker stopped in the middle of a background job"**: the worker died while running a job (killed for memory,
+  or a restart that couldn't wait for it). Within about 3 minutes Krater ends that job as failed, which frees its lock,
+  and doesn't run it again; the alert names it. Periodic tasks such as the compute scheduler simply run on their next
+  tick. A Slack approve or reject click that was cut off didn't happen: the reviewer clicks again. Look at the
+  worker's log around that time for why it died.
+- **"Background jobs are stuck waiting"**: a job has been due for 15 minutes and hasn't started. Usually a job that
+  holds the same lock is hung in a live worker (the alert names the waiting task; `compute_schedule` or
+  `compute_reconcile` waiting means **Krater Compute isn't scheduling**: nothing is rented, watched or destroyed).
+  Look at the worker's log for the task that started and never finished. Restarting the worker ends it: the sweep
+  above then fails it and the queue moves again. If the worker isn't taking any jobs, `/healthz/worker` says so too.
+  If machines are running and the scheduler is stuck for long, use the stop switch.
+
 ## After an incident
 
 - Turn compute back on with a reason saying what was fixed.
