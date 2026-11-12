@@ -186,9 +186,10 @@ Below the defaults are the **organization limits**, one value for all of Krater:
 
 The spending caps use Krater's own estimate, which trails Vast's charges by up to an hour, so leave a margin.
 
-At the top is the **stop switch**: **Stop all compute**, with a reason. Within a minute Krater starts nothing,
-searches for nothing, destroys every batch job's machine (the jobs go back in the queue and carry on from their last
-checkpoint later) and stops every running box after it saves /workspace. **Turn compute back on** undoes it; queued
+At the top is the **stop switch**, with a reason: **Stop and save** or **Emergency stop**. Within a minute Krater
+starts nothing and searches for nothing. It destroys every batch job's machine (the jobs go back in the queue and carry
+on from their last checkpoint later) and stops every running box. **Stop and save** first has each job upload its
+checkpoints and each box its /workspace, for up to the box sync deadline; **Emergency stop** doesn't wait. **Turn compute back on** undoes it; queued
 jobs get the stopped time back on their max wait. See the [compute runbook](compute-runbook.md) for when to use it.
 
 The page also shows Vast's daily search quota and any hourly spend check that didn't match Vast's charges.

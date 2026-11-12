@@ -82,6 +82,9 @@ class ComputeSettings(Base):
     paused_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
     paused_reason: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
     paused_by_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), sa.ForeignKey("users.id"), nullable=True)
+    # "regular" (running jobs save their checkpoints, and boxes /workspace, before their machines stop) or "emergency"
+    # (everything stops at once). Null while compute runs; a stop from before the column existed counts as emergency.
+    paused_mode: Mapped[str | None] = mapped_column(sa.String(16), nullable=True)
     # Written by the scheduler: since when compute has been stopped (by the switch or a spending cap), and why, as
     # members read it. Null while it runs. When it clears, waiting jobs get that time back on their max wait.
     halted_since: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)

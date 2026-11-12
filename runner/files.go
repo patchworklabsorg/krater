@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -22,6 +23,8 @@ type Syncer struct {
 	Storage *http.Client
 	// What was last uploaded, by relative name: size and modification time.
 	uploaded map[string]fileStamp
+	// One push at a time: the timed sync and a save Krater asks for can overlap.
+	mu sync.Mutex
 }
 
 type fileStamp struct {
@@ -64,6 +67,8 @@ func (s *Syncer) Restore(ctx context.Context) (int, error) {
 // Push uploads every file that changed since it was last uploaded. Files still being written may change again;
 // the next push picks them up.
 func (s *Syncer) Push(ctx context.Context) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	var names []string
 	stamps := map[string]fileStamp{}
 	err := filepath.WalkDir(s.Dir, func(path string, d fs.DirEntry, err error) error {

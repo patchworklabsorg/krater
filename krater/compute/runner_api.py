@@ -225,7 +225,7 @@ def _record_net_use(instance: ComputeInstance, kept: dict[str, Any], *, now: dat
 @dataclass(frozen=True)
 class HeartbeatReply:
     stop: bool  # the job has ended: stop the command
-    sync: bool  # save /workspace and confirm: Krater is about to stop the box
+    sync: bool  # save /workspace (a box) or the checkpoints (a batch job) and confirm: Krater is about to stop it
     # A box's whole authorized_keys: the owner's keys and every admin's (`box_access`). None for a batch job, and the
     # runner leaves the file alone when the reply has none.
     ssh_keys: tuple[str, ...] | None = None
@@ -249,9 +249,11 @@ def heartbeat(session: Session, instance: ComputeInstance, payload: dict[str, An
 
 
 def synced(session: Session, instance: ComputeInstance, *, now: datetime) -> None:
-    """The runner saved /workspace. Once Krater asked for it, the scheduler stops the box on its next pass."""
+    """The runner saved /workspace (a box) or its checkpoints (a batch job, when a regular stop of all compute asked).
+    Once Krater asked for it, the scheduler stops the machine on its next pass."""
     instance.last_synced_at = now
-    _event(session, instance, "synced", "The box saved /workspace.", now=now)
+    saved = "The box saved /workspace." if instance.job.kind is ComputeJobKind.BOX else "The job saved its checkpoints."
+    _event(session, instance, "synced", saved, now=now)
     session.flush()
 
 

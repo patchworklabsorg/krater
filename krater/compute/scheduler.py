@@ -254,6 +254,8 @@ class Scheduler:
         self._searches: dict[str, list[Offer]] = {}
         # Why compute is halted this pass (`krater.services.compute_halt`), as members read it; `None` while it runs.
         self.halt: str | None = None
+        # Whether that halt lets running machines save first (every halt but an emergency stop).
+        self.save_first = True
         self._org: compute_settings.OrgLimits | None = None
 
     # -- Entry point -----------------------------------------------------------------------------------
@@ -265,6 +267,7 @@ class Scheduler:
         self.session.commit()
         self._enforce_budgets()
         self.halt = compute_halt.halt_reason(self.session, self.now)
+        self.save_first = compute_halt.saves_first(self.session)
         compute_halt.record(self.session, self.halt, now=self.now)
         self.session.commit()
 
@@ -562,6 +565,8 @@ class Scheduler:
         if self.halt is not None:
             self._halt_one(row, job, policy)
             return
+        if job.kind is ComputeJobKind.JOB and row.stop_requested_at is not None:
+            row.stop_requested_at = None  # a halt ended while the job was saving: it carries on
         if row.state is ComputeInstanceState.STOPPED:
             self._watch_stopped(row, job, seen, policy, previously_seen=previously_seen)
             return
@@ -690,9 +695,10 @@ class Scheduler:
 
     def _halt_one(self, row: ComputeInstance, job: ComputeJob, policy: ComputePolicy) -> None:
         """Compute is halted: stop this machine. A batch job's machine is destroyed and the job requeued (it resumes
-        from its last checkpoint in storage). A box that has run saves /workspace and stops, as an idle box does; one
-        still starting is destroyed and requeued, having nothing on its disk. A stopped box stays stopped, and a
-        resume asked for before the halt is taken back."""
+        from its last checkpoint in storage); unless it's an emergency stop, a running job first saves its checkpoints,
+        until the box sync deadline. A box that has run stops, as an idle box does, after saving /workspace unless it's
+        an emergency stop (its disk keeps /workspace either way); one still starting is destroyed and requeued, having
+        nothing on its disk. A stopped box stays stopped, and a resume asked for before the halt is taken back."""
         reason = f"{HALTED}: {self.halt}"
         if job.kind is ComputeJobKind.BOX:
             if row.state is ComputeInstanceState.STOPPED:
@@ -702,7 +708,7 @@ class Scheduler:
                     job.state_reason = f"Not resumed: {self.halt}. Resume it once compute is back on."
                     _event(self.session, job, "resume_blocked", job.state_reason, now=self.now, instance=row)
                 return
-            if row.state is ComputeInstanceState.RUNNING:
+            if row.state is ComputeInstanceState.RUNNING and self.save_first:
                 if row.stop_requested_at is None:
                     self.request_stop(row, job, reason)
                 self._finish_stopping(row, job, policy)
@@ -710,9 +716,46 @@ class Scheduler:
             if row.runner_starts > 0:
                 self._stop_box(row, job, reason)
                 return
-        _event(self.session, job, "halted", f"Stopping the machine: {self.halt}.", now=self.now, instance=row)
+        saved = None
+        if job.kind is ComputeJobKind.JOB and self.save_first and row.state is ComputeInstanceState.RUNNING:
+            saved = self._save_before_halt(row, job, policy)
+            if saved is None:
+                return  # still saving
+        note = {True: " Its checkpoints were saved first.", False: " Its checkpoints weren't confirmed saved."}
+        _event(
+            self.session,
+            job,
+            "halted",
+            f"Stopping the machine: {self.halt}.{note.get(saved, '')}",
+            now=self.now,
+            instance=row,
+            saved=saved,
+        )
         if self._destroy(row, HALTED):
             self._requeue_moved(job)
+
+    def _save_before_halt(self, row: ComputeInstance, job: ComputeJob, policy: ComputePolicy) -> bool | None:
+        """A regular stop: the next heartbeat asks the job's runner to upload its checkpoints now. Returns `None`
+        while it saves, then whether the runner confirmed the save before the box sync deadline. Without this the
+        job lost whatever it had written since the last timed sync (every 10 minutes by default)."""
+        if row.stop_requested_at is None:
+            row.stop_requested_at = self.now
+            row.stop_reason = f"{HALTED}: {self.halt}"
+            job.state_reason = f"Stopping ({self.halt}): saving its checkpoints first."
+            _event(
+                self.session,
+                job,
+                "save_requested",
+                f"Saving checkpoints before the machine stops: {self.halt}.",
+                now=self.now,
+                instance=row,
+            )
+            return None
+        if row.last_synced_at is not None and row.last_synced_at >= row.stop_requested_at:
+            return True
+        if self.now - row.stop_requested_at >= timedelta(minutes=policy.box_sync_deadline_minutes):
+            return False
+        return None
 
     def _hold_queue(self) -> None:
         """Compute is halted: queued jobs wait, without searching, and say why."""

@@ -6,13 +6,22 @@ are on **Admin → Compute settings** (`/admin/compute`) and **Spend and storage
 
 ## The stop switch
 
-**Stop all compute** on `/admin/compute`, with a reason, stops everything within a minute:
+`/admin/compute` has two buttons, each with a reason:
+
+- **Stop and save** (a regular stop): each running job first uploads its checkpoints, and each box its /workspace;
+  a machine stops once its runner confirms, or after the box sync deadline (10 minutes by default). Use it when
+  spend just needs to stop soon, or for planned work. The spending caps stop compute this way too.
+- **Emergency stop**: every machine stops within a minute, without waiting. A job loses what it wrote since its last
+  checkpoint upload (every 10 minutes); a box's disk still has /workspace. Use it when Vast misbehaves or something
+  must stop now. While a regular stop is still saving, the page offers an emergency stop to cut it short.
+
+Either way:
 
 - nothing new is rented, and Krater stops searching Vast (saving the daily search quota);
 - every batch job's machine is destroyed, and the job goes back in the queue saying why. It carries on from its last
-  checkpoint in storage once compute is back on. Work since its last checkpoint upload (every 10 minutes) is lost;
-- every running box saves /workspace, then stops. Its disk is kept for the box destroy time (24 hours by default),
-  and is destroyed after that even while compute is stopped. Its saved workspace stays in storage;
+  checkpoint in storage once compute is back on;
+- every running box stops. Its disk is kept for the box destroy time (24 hours by default), and is destroyed after
+  that even while compute is stopped. Its saved workspace stays in storage;
 - members can still queue jobs. They wait, and the job page says compute is stopped.
 
 **Turn compute back on**, with a reason, undoes it. Queued jobs start on the next pass, and the time compute was
@@ -40,7 +49,7 @@ Posted while compute is stopped, by the switch or by a spending cap.
 Symptoms: a project's spend jumps, a "spend checks that didn't match" row on `/admin/compute`, or a spending cap
 reached sooner than expected.
 
-1. **Stop all compute** if it's still growing.
+1. **Emergency stop** if it's still growing.
 2. On **Spend and storage**, find the project and compare its last check: Krater's estimate against what Vast
    charged. Every hour Krater replaces its estimate with Vast's figure, so a large Vast figure is real money.
 3. Open the project's jobs from **Live compute** or the project page. Each job's **What happened** list shows every

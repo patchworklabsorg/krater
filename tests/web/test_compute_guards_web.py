@@ -50,7 +50,7 @@ def test_the_overview_needs_sign_in(client: TestClient) -> None:
 def test_an_admin_stops_and_restarts_compute(client: TestClient, login_as, db_session) -> None:
     login_as(ADMIN_SUB)
     page = client.get("/admin/compute")
-    assert "Stop all compute" in page.text
+    assert "Stop and save" in page.text and "Emergency stop" in page.text
 
     missing = client.post("/admin/compute/stop", data={"reason": " ", "csrf_token": get_csrf_token(page.text)})
     assert missing.status_code == 422 and "A reason is required." in missing.text
@@ -63,8 +63,19 @@ def test_an_admin_stops_and_restarts_compute(client: TestClient, login_as, db_se
     )
     assert response.status_code == 303
     assert _row(db_session).paused_reason == "Spend looks wrong."
+    assert _row(db_session).paused_mode == "regular"  # no mode sent: the safer stop
     stopped = client.get("/admin/compute")
     assert "Compute is stopped" in stopped.text and "Turn compute back on" in stopped.text
+    assert "Emergency stop: don't wait for saves" in stopped.text
+
+    response = client.post(
+        "/admin/compute/stop",
+        data={"reason": "It's getting worse.", "mode": "emergency", "csrf_token": get_csrf_token(stopped.text)},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303 and _row(db_session).paused_mode == "emergency"
+    stopped = client.get("/admin/compute")
+    assert "An emergency stop" in stopped.text and "don't wait for saves" not in stopped.text
 
     response = client.post(
         "/admin/compute/start",
