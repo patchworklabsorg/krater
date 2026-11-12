@@ -59,6 +59,9 @@ AREAS = ("checkpoints", "outputs", "workspace", "logs", "inputs")
 #: The project's inputs (`krater.services.compute_inputs`): a machine may list and download the ones its job asked
 #: for, and never change them.
 INPUTS = "inputs"
+WORKSPACE = "workspace"
+# How many stored files one delete call may name.
+MAX_DELETE_NAMES = 1000
 # Wide enough for the names ML tools write (Lightning's `epoch=3-step=100.ckpt`), with no control characters or
 # backslashes, which would trip the CLI writing them to a member's disk.
 _NAME_RE = re.compile(r"^[A-Za-z0-9._\-=+,@~][A-Za-z0-9._\-=+,@~ /]{0,511}$")
@@ -452,6 +455,20 @@ def complete_upload(
 ) -> None:
     _no_inputs(area)
     finish_upload(store, _key(instance, area, name), upload_id, etags)
+
+
+def delete_files(store: ObjectStore, instance: ComputeInstance, area: str, names: Any) -> int:
+    """Removes stored files of a box's workspace: the runner deletes what the member deleted on the machine, so it
+    doesn't come back on the next restore (docs/compute/runner.md "Boxes"). Checkpoints, outputs, logs and inputs are
+    never deleted by a machine."""
+    if area != WORKSPACE or instance.job.kind is not ComputeJobKind.BOX:
+        raise NotAllowed("A machine can delete files only from its box's /workspace.")
+    if not isinstance(names, list) or len(names) > MAX_DELETE_NAMES or not all(isinstance(name, str) for name in names):
+        raise ValidationFailed({"names": f"Send a list of up to {MAX_DELETE_NAMES} stored names."})
+    keys = [_key(instance, area, name) for name in names]
+    for key in keys:
+        store.delete(key)
+    return len(keys)
 
 
 def finish_upload(store: ObjectStore, key: str, upload_id: str, etags: list[str]) -> None:

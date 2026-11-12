@@ -182,6 +182,11 @@ func (a *API) CompleteUpload(ctx context.Context, area, name, uploadID string, e
 	return a.post(ctx, "/files/"+area+"/complete", body, nil)
 }
 
+// Delete removes stored files of an area (Krater allows it for a box's workspace only).
+func (a *API) Delete(ctx context.Context, area string, names []string) error {
+	return a.post(ctx, "/files/"+area+"/delete", map[string]any{"names": names}, nil)
+}
+
 // retryFirstWait is the pause after the first failure; it doubles up to 30 s. A variable so tests needn't wait.
 var retryFirstWait = 2 * time.Second
 

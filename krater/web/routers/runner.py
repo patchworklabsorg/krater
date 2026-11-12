@@ -161,6 +161,16 @@ async def complete_upload(area: str, request: Request, db_session: Annotated[Ses
     return _files(request, db_session, _complete)
 
 
+@router.post("/files/{area}/delete")
+async def delete_files(area: str, request: Request, db_session: Annotated[Session, Depends(get_session)]):
+    body = await _body(request)
+    return _files(
+        request,
+        db_session,
+        lambda instance: {"deleted": runner_api.delete_files(get_compute_store(), instance, area, body.get("names"))},
+    )
+
+
 def _files(request: Request, db_session: Session, action):
     try:
         return action(_instance(request, db_session))

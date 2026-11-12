@@ -49,9 +49,12 @@ type fakeKrater struct {
 	// The job asked for project inputs; inputsGone: Krater refuses the list, as when they were deleted.
 	inputs     bool
 	inputsGone bool
+	// Storage answers 503 to GETs of this key, as when it's briefly unreachable.
+	unreadable string
 
 	mu         sync.Mutex
 	objects    map[string][]byte // "area/name" -> content
+	deleted    []string          // names the runner asked to delete
 	multipart  map[string]map[int][]byte
 	heartbeats []map[string]any
 	exitCodes  []int
@@ -165,6 +168,13 @@ func (f *fakeKrater) handle(w http.ResponseWriter, r *http.Request) {
 			parts = append(parts, fmt.Sprintf("%s/storage/part/%s/%d", f.server.URL, uploadID, n))
 		}
 		f.writeJSON(w, map[string]any{"name": name, "upload_id": uploadID, "part_bytes": f.partBytes, "parts": parts})
+	case strings.HasSuffix(path, "/delete"):
+		area := strings.Split(path, "/")[4]
+		for _, name := range body["names"].([]any) {
+			f.deleted = append(f.deleted, name.(string))
+			delete(f.objects, area+"/"+name.(string))
+		}
+		f.writeJSON(w, map[string]any{"ok": true})
 	case strings.HasSuffix(path, "/complete"):
 		area := strings.Split(path, "/")[4]
 		uploadID := body["upload_id"].(string)
@@ -197,6 +207,10 @@ func (f *fakeKrater) storage(w http.ResponseWriter, r *http.Request, key string)
 	}
 	switch r.Method {
 	case http.MethodGet:
+		if key == f.unreadable {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
 		data, ok := f.objects[key]
 		if !ok {
 			http.NotFound(w, r)
