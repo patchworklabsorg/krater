@@ -1,6 +1,6 @@
-"""Who Weave clears (`krater.services.clearance`): a project's compute waits until Weave clears every team member,
-ID verification and a verified guardian for a member under 18 (docs/SPEC.md "Verification before funding"). Its
-budget waits too: tests/services/test_grants.py."""
+"""Who Weave clears (`krater.services.clearance`): a project's compute waits until every team member has passed ID
+verification in Weave, which for a member under 18 includes a parent or guardian on the call (docs/SPEC.md
+"Verification before funding"). Its budget waits too: tests/services/test_grants.py."""
 
 from __future__ import annotations
 
@@ -50,9 +50,10 @@ def clearance_logs(caplog, monkeypatch):
 
 @pytest.fixture
 def minor(make_actor, weave: StubWeaveClient) -> Actor:
-    """A Ganymede member Weave lists as under 18, ID-verified, with no verified guardian."""
+    """A Ganymede member Weave lists as under 18 who hasn't done ID verification yet."""
     actor = make_actor(groups=frozenset({GROUP_MEMBER}), display_name="Milo Minor")
     weave.set_minor(actor.user.weave_sub, True)
+    weave.set_verification_status(actor.user.weave_sub, "needs_submission")
     return actor
 
 
@@ -98,7 +99,7 @@ def _submit_job(db_session: Session, actor: Actor, project, weave_client):
 # -- Compute waits ---------------------------------------------------------------------------------------
 
 
-def test_a_minor_without_a_verified_guardian_holds_the_compute(
+def test_a_minor_is_held_until_their_id_verification_passes(
     db_session: Session, minor: Actor, reviewer: Actor, weave: StubWeaveClient
 ) -> None:
     project = _approved(db_session, minor, reviewer, weave)
@@ -106,9 +107,15 @@ def test_a_minor_without_a_verified_guardian_holds_the_compute(
     with pytest.raises(VerificationRequired) as exc_info:
         _submit_job(db_session, minor, project, weave)
 
-    assert exc_info.value.members == [(f"Milo Minor ({minor.user.weave_sub})", guardian.REASON_NO_VERIFIED_GUARDIAN)]
+    assert exc_info.value.members == [
+        (f"Milo Minor ({minor.user.weave_sub})", f"hasn't done ID verification in Weave; {guardian.MINOR_NOTE}")
+    ]
     assert "compute is held until every team member is cleared in Weave" in str(exc_info.value)
-    weave.set_guardian_verified(minor.user.weave_sub, True)
+    assert "guardian joins the call" in str(exc_info.value)
+    # Weave passes a minor only with a granted guardian consent and the guardian on the call. Its separate
+    # `guardian_verified` admin step isn't needed: Krater clears them on the pass alone.
+    weave.set_verification_status(minor.user.weave_sub, "verified")
+    weave.set_guardian_verified(minor.user.weave_sub, False)
     grants.release_ready(db_session, weave, now=NOW)  # its budget was held too (tests/services/test_grants.py)
     assert _submit_job(db_session, minor, project, weave).state is ComputeJobState.QUEUED
 
@@ -162,16 +169,17 @@ def test_a_teammate_holds_the_whole_projects_compute(
     ]
 
 
-def test_a_minor_without_either_check_gets_both_reasons(
+def test_a_minor_in_review_gets_one_reason_that_mentions_the_guardian(
     db_session: Session, minor: Actor, reviewer: Actor, weave: StubWeaveClient
 ) -> None:
     project = _approved(db_session, minor, reviewer, weave)
     weave.set_verification_status(minor.user.weave_sub, "pending")
+    weave.set_guardian_verified(minor.user.weave_sub, True)  # an admin's guardian record alone doesn't clear them
 
     pending = clearance.members_not_cleared(db_session, weave, project)
 
     assert [member.reason for member in pending] == [
-        f"{guardian.REASON_NO_VERIFIED_GUARDIAN}; ID verification in Weave is still in review"
+        f"ID verification in Weave is still in review; {guardian.MINOR_NOTE}"
     ]
 
 
@@ -255,6 +263,20 @@ def test_pending_for_display_lists_the_members_and_uses_the_cache(
 
     assert [member.user.id for member in pending] == [minor.user.id]
     assert spy.fresh_flags == [False]
+
+
+def test_team_for_display_shows_who_is_verified_too(
+    db_session: Session, member: Actor, unverified: Actor, reviewer: Actor, weave: StubWeaveClient
+) -> None:
+    project = _approved(db_session, member, reviewer, weave, builders=[unverified])
+
+    team = clearance.team_for_display(db_session, weave, project)
+
+    assert [(m.user.id, m.cleared, m.reason) for m in team] == [
+        (member.user.id, True, ""),
+        (unverified.user.id, False, "hasn't done ID verification in Weave"),
+    ]
+    assert clearance.team_for_display(db_session, _DownWeave(), project) is None
 
 
 def test_pending_for_display_is_none_when_weave_is_down(

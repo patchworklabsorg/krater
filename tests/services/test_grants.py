@@ -49,9 +49,10 @@ def unverified(make_actor, weave: StubWeaveClient) -> Actor:
 
 @pytest.fixture
 def minor(make_actor, weave: StubWeaveClient) -> Actor:
-    """A Ganymede member under 18, ID-verified, with no verified guardian."""
+    """A Ganymede member under 18 whose ID verification (with a guardian on the call) is still in review."""
     actor = make_actor(groups=frozenset({GROUP_MEMBER}), display_name="Milo Minor")
     weave.set_minor(actor.user.weave_sub, True)
+    weave.set_verification_status(actor.user.weave_sub, "pending")
     return actor
 
 
@@ -166,10 +167,11 @@ def test_the_release_writes_the_entry_once_the_team_is_cleared(
     project = _approved(db_session, unverified, reviewer, weave, builders=[minor])
 
     weave.set_verification_status(unverified.user.weave_sub, "verified")
-    assert grants.release_ready(db_session, weave, now=NOW) == 0  # the minor still has no verified guardian
+    assert grants.release_ready(db_session, weave, now=NOW) == 0  # the minor's verification is still in review
     assert budget.ceiling_cents(db_session, project) == 0
 
-    weave.set_guardian_verified(minor.user.weave_sub, True)
+    # Their pass is enough: Weave's separate `guardian_verified` admin step never happened.
+    weave.set_verification_status(minor.user.weave_sub, "verified")
     assert grants.release_ready(db_session, weave, now=NOW) == 1
 
     db_session.refresh(project)

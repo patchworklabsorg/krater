@@ -623,13 +623,13 @@ def _budget_event_message(event: AuditEvent) -> tuple[list[dict], str]:
             )
         else:
             text = (
-                f":hourglass_flowing_sand: *Budget held*: {amount} of budget is held until every team member is "
-                "verified in Weave (ID verification, and a verified guardian for anyone under 18). "
+                f":hourglass_flowing_sand: *Budget held*: {amount} of budget is held until every team member has "
+                "passed ID verification in Weave (for anyone under 18, with a parent or guardian on the call). "
                 f"<{link}|See who it's waiting on>."
             )
     elif event.action == AUDIT_GRANT_RELEASED:
         text = (
-            ":white_check_mark: *Budget released*: every team member is verified in Weave, so the held "
+            ":white_check_mark: *Budget released*: every team member has passed ID verification in Weave, so the held "
             f"{_format_cents(payload.get('amount_cents', 0))} is now this project's to use."
         )
     elif event.action == AUDIT_BUDGET_TEARDOWN:
@@ -662,9 +662,9 @@ def _held_grant_dm(project: Project) -> tuple[list[dict], str]:
     where = f"<{verify}|Weave's verification page>" if verify else "Weave's verification page"
     text = (
         f":hourglass_flowing_sand: *<{base}/projects/{project.id}|{title}>* is approved, but its budget is held until "
-        "every team member is verified in Weave, you included. That's ID verification, and for anyone under 18 a "
-        f"verified guardian. See what's left on {where}. Krater adds the budget within a few minutes of the last check "
-        "passing."
+        "every team member has passed ID verification in Weave, you included. Anyone under 18 also needs a parent or "
+        f"guardian's consent in Weave, and the guardian joins the call. See what's left on {where}. Krater adds the "
+        "budget within a few minutes of the last check passing."
     )
     return [{"type": "section", "text": {"type": "mrkdwn", "text": text}}], text
 

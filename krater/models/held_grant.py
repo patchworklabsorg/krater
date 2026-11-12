@@ -1,9 +1,9 @@
 """HeldGrant: a budget grant approved while the team wasn't cleared in Weave, waiting to be written to the ledger.
 
 `krater.services.grants` writes one instead of a `BudgetEntry` when a grant (a proposal approval, an amendment that
-raises the ceiling, an admin increase) is decided before every team member passed ID verification and, under 18, has
-a verified guardian. The release task writes the `BudgetEntry` once Weave clears the team; until then the ledger,
-and so Quilt, has nothing. A project has at most one pending hold.
+raises the ceiling, an admin increase) is decided before every team member passed ID verification (under 18, with a
+parent or guardian on the call). The release task writes the `BudgetEntry` once Weave clears the team; until then
+the ledger, and so Quilt, has nothing. A project has at most one pending hold.
 """
 
 from __future__ import annotations

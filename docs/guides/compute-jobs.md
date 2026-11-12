@@ -69,9 +69,10 @@ Check these, in order. Each one stops a job from starting.
    project is *approved*, *pending completion review* or *completion changes requested*.
 2. **No funding hold.** A project approved as *awaiting funding* or *awaiting 3rd party review* can't start compute
    until an admin clears the hold.
-3. **Everyone on the team is verified in Weave.** That's ID verification for every member, and a verified guardian
-   for anyone under 18. Until then the budget is held and nothing starts. The project page and the new-job page list
-   who it's waiting on and why, with a link to Weave's verification page.
+3. **Everyone on the team is verified in Weave.** That's ID verification for every member; anyone under 18 also
+   needs a parent or guardian's consent in Weave, and the guardian joins the verification call. Until then the
+   budget is held and nothing starts. The project page and the new-job page list the team, who is verified and who
+   isn't yet and why, with a link to Weave's verification page.
 4. **You're on the team.** Only the lead and members who accepted their invitation can queue jobs. Reviewers can see
    your jobs, but not their files or output.
 5. **For a box: an SSH key.** Add your public key under **SSH keys** (in the top bar, `/account/ssh-keys`). It's the

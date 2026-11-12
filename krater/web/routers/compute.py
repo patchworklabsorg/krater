@@ -244,7 +244,7 @@ def _form_page(
             "posted": posted or {},
             # Compute is held until Weave clears every team member (`krater.services.clearance`); the page says who
             # first, and the submit checks Weave fresh. `None`: Weave couldn't say right now.
-            "verification_pending": clearance.pending_for_display(db_session, weave_client, project),
+            **_verification(db_session, weave_client, project),
             "weave_verification_url": weave_links.verification_url(),
         },
         status_code=status_code,
@@ -269,6 +269,14 @@ def new_job(
     # "Run again": the same job's fields, to queue as they are or change first. Only a job of this project.
     source = _job(db_session, project, from_job)
     return _form_page(request, db_session, project, weave_client, posted=_posted_from(source), source=source)
+
+
+def _verification(session: Session, weave_client: WeaveClient, project: Project) -> dict:
+    """The team's verification for the job form: everyone (`verification_team`) and who isn't cleared yet
+    (`verification_pending`); both `None` when Weave can't be reached."""
+    team = clearance.team_for_display(session, weave_client, project)
+    pending = None if team is None else [member for member in team if not member.cleared]
+    return {"verification_team": team, "verification_pending": pending}
 
 
 def _rate_text(microusd: int) -> str:

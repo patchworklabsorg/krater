@@ -266,12 +266,13 @@ def test_nobody_leaves_or_is_removed_with_a_job_still_running(db_session: Sessio
     assert project.members == []
 
 
-def test_joining_a_funded_project_needs_a_verified_guardian_for_a_minor(
+def test_joining_a_funded_project_needs_a_minors_id_verification_to_pass(
     db_session: Session, member: Actor, make_actor, weave: StubWeaveClient
 ) -> None:
     # Someone joining a project that already has budget could reach a running machine, so they are checked on accept.
     minor = make_actor(groups=frozenset({GROUP_MEMBER}))
     weave.set_minor(minor.user.weave_sub, True)
+    weave.set_verification_status(minor.user.weave_sub, "pending")
     project = _project(db_session, member)
     draft = teams.invite(db_session, member, weave, project=project, query=minor.user.weave_sub)
     teams.accept(db_session, minor, weave, member_id=draft.id)  # no budget yet: compute checks them
@@ -285,7 +286,7 @@ def test_joining_a_funded_project_needs_a_verified_guardian_for_a_minor(
         teams.accept(db_session, minor, weave, member_id=invitation.id)
     assert not invitation.accepted
 
-    weave.set_guardian_verified(minor.user.weave_sub, True)
+    weave.set_verification_status(minor.user.weave_sub, "verified")  # with the guardian on the call
     teams.accept(db_session, minor, weave, member_id=invitation.id)
     assert invitation.accepted
 

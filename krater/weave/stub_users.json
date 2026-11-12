@@ -90,7 +90,7 @@
     "name": "Milo Minor",
     "email": "milo@example.com",
     "email_verified": true,
-    "verification_status": "verified",
+    "verification_status": "pending",
     "slack_id": "U0006MINOR",
     "slack_member": true,
     "minor": true,

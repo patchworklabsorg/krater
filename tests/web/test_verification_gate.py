@@ -8,12 +8,15 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from krater.models import ProjectStatus
+from krater.services import guardian
 from krater.weave import StubWeaveClient, WeaveUnavailableError
 from tests.conftest import ADMIN_SUB, MEMBER_SUB, REVIEWER_SUB, get_csrf_token
 
-# Fixture users from krater/weave/stub_users.json: both under 18, one with a guardian Weave has verified.
+# Fixture users from krater/weave/stub_users.json: both under 18. Milo's ID verification is still in review; the other
+# passed, and has a guardian a Weave admin recorded as verified too.
 MINOR_SUB = "PWLMINORONE"
 VERIFIED_MINOR_SUB = "PWLMINORVERIFIED"
+MILO_WAITS = f"ID verification in Weave is still in review; {guardian.MINOR_NOTE}"
 
 
 def _post_decision(client: TestClient, project, path: str, **data: str):
@@ -36,7 +39,7 @@ def test_a_reviewer_approves_a_minors_project_and_the_page_says_its_budget_is_he
     assert "Approved. Its budget of $" in page and "is held until every team member is verified in Weave" in page
     held = project.approved_revision.budget_requested_cents / 100
     assert f"{held:,.2f} of this project's budget is held until every team member" in page
-    assert "Milo Minor (PWLMINORONE): under 18 without a verified guardian in Weave" in page
+    assert f"Milo Minor (PWLMINORONE): {MILO_WAITS}" in page
 
 
 def test_an_admin_increase_says_it_is_held(
@@ -81,8 +84,41 @@ def test_the_project_page_lists_a_member_without_id_verification(
     assert page.status_code == 200
     assert 'class="guardian-banner"' in page.text
     assert "Mia Member (PWLMEMBERONE): hasn&#39;t done ID verification in Weave" in page.text
-    assert "budget and compute are held until every team member is verified in Weave" in page.text
+    assert "budget and compute are held until every team member has passed ID verification in" in page.text
     assert "Weave's verification page" in page.text
+
+
+def test_the_banner_lists_the_whole_team_with_who_is_already_verified(
+    client: TestClient, login_as, submitted_project, weave_stub: StubWeaveClient, db_session: Session
+) -> None:
+    from krater.services.actor import Actor
+    from tests.services.conftest import add_to_team
+
+    lead = login_as(MEMBER_SUB)
+    project = submitted_project(lead)
+    add_to_team(db_session, project, Actor(user=login_as(MINOR_SUB), groups=frozenset()))
+
+    login_as(REVIEWER_SUB)
+    page = " ".join(client.get(f"/projects/{project.id}").text.split())
+
+    assert 'class="verification-team"' in page
+    assert '<span class="badge badge--good">Verified</span> Mia Member (PWLMEMBERONE) </li>' in page
+    assert f'<span class="badge badge--info">Not yet</span> Milo Minor (PWLMINORONE): {MILO_WAITS} </li>' in page
+
+
+def test_a_minor_whose_id_verification_passed_holds_nothing(
+    client: TestClient, login_as, submitted_project, weave_stub: StubWeaveClient
+) -> None:
+    # A minor passes Weave's ID verification only with a guardian consent and the guardian on the call; Weave's
+    # separate "Record a verified guardian" admin step isn't needed.
+    weave_stub.set_verification_status(MINOR_SUB, "verified")
+    weave_stub.set_guardian_verified(MINOR_SUB, False)
+    project = submitted_project(login_as(MINOR_SUB))
+
+    login_as(REVIEWER_SUB)
+    page = client.get(f"/projects/{project.id}").text
+
+    assert "guardian-banner" not in page
 
 
 def test_the_project_page_has_no_notice_once_the_team_is_cleared(
@@ -159,7 +195,7 @@ def test_a_minor_submits_and_is_approved_and_every_list_says_awaiting_verificati
     login_as(MINOR_SUB)
     assert "Approved · awaiting verification" in client.get("/").text
 
-    weave_stub.set_guardian_verified(MINOR_SUB, True)
+    weave_stub.set_verification_status(MINOR_SUB, "verified")
     assert grants.release_ready(db_session, weave_stub, now=datetime.now(UTC)) == 1
     assert "Approved · awaiting verification" not in client.get("/").text
     assert "awaiting verification" not in client.get(f"/projects/{project.id}").text

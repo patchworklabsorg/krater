@@ -556,14 +556,16 @@ def _build_detail_context(
 
     image_url = primary_image_url(get_object_store(), current)
 
-    # The project's budget and compute are held until every team member is cleared in Weave: ID verification, and a
-    # verified guardian for a member under 18 (docs/SPEC.md "Verification before funding"). A finished project runs
-    # nothing, so it doesn't ask. `None` means Weave couldn't say right now; releasing a grant and starting compute
-    # check Weave fresh. `held_grant` is the budget an approval granted that is waiting for that.
+    # The project's budget and compute are held until Weave clears every team member: their ID verification passed
+    # (for a member under 18, with a parent or guardian on the call; docs/SPEC.md "Verification before funding"). A
+    # finished project runs nothing, so it doesn't ask. `None` means Weave couldn't say right now; releasing a grant
+    # and starting compute check Weave fresh. `held_grant` is the budget an approval granted that is waiting for that.
+    # The page lists the whole team while anyone is waiting, so who is already verified shows too.
+    verification_team = (
+        clearance.team_for_display(session, weave_client, project) if project.status not in _TERMINAL_STATUSES else []
+    )
     verification_pending = (
-        clearance.pending_for_display(session, weave_client, project)
-        if project.status not in _TERMINAL_STATUSES
-        else []
+        None if verification_team is None else [member for member in verification_team if not member.cleared]
     )
     held_grant = grants.pending(session, project)
 
@@ -625,6 +627,7 @@ def _build_detail_context(
         "budget_flag": budget_flag,
         "primary_image_url": image_url,
         "verification_pending": verification_pending,
+        "verification_team": verification_team,
         "held_grant": held_grant,
         "weave_verification_url": weave_links.verification_url(),
         "team_residency": team_residency,

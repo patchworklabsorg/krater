@@ -6,6 +6,7 @@ import sqlalchemy as sa
 from fastapi.testclient import TestClient
 
 from krater.models import ApprovalPolicy, ApprovalStage, QuiltOutbox, QuiltOutboxState
+from krater.services import guardian
 from tests.conftest import ADMIN_SUB, MEMBER_SUB, REVIEWER_SUB, get_csrf_token
 
 
@@ -234,7 +235,7 @@ def test_the_gallery_setting_needs_a_reason_and_an_admin(client: TestClient, log
 def test_admin_sees_held_budget_and_who_it_waits_on(
     client: TestClient, login_as, approved_project, weave_stub, monkeypatch
 ) -> None:
-    # Fixture users from krater/weave/stub_users.json: a minor without a verified guardian.
+    # Fixture users from krater/weave/stub_users.json: a minor whose ID verification is still in review.
     minor = login_as("PWLMINORONE")
     reviewer = login_as(REVIEWER_SUB)
     approved_project(minor, reviewer, title="Held Rover", budget_requested_cents=12_500)
@@ -244,9 +245,9 @@ def test_admin_sees_held_budget_and_who_it_waits_on(
 
     assert "Budget held" in page
     assert "Held Rover" in page and "$125.00" in page and "Approval" in page
-    assert "Milo Minor (PWLMINORONE): under 18 without a verified guardian in Weave" in page
+    assert f"Milo Minor (PWLMINORONE): ID verification in Weave is still in review; {guardian.MINOR_NOTE}" in page
 
-    weave_stub.set_guardian_verified("PWLMINORONE", True)
+    weave_stub.set_verification_status("PWLMINORONE", "verified")
     assert "Everyone is verified. It's added within five minutes." in client.get("/admin").text
 
 

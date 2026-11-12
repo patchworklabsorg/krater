@@ -98,8 +98,8 @@ can't clear the hold on their own project.
 
 Krater grants no budget and starts no compute until Weave has cleared **every** team member:
 
-- ID verification (`verified` in Weave), and
-- for a member under 18, a verified guardian (a signed form plus a call or video check, recorded by a Weave admin).
+- ID verification (`verified` in Weave). For a member under 18, Weave passes it only with a parent or guardian's
+  consent on file and the guardian on the call, so nothing else is needed.
 
 Until then an approval's budget is **held**. The project reads *Approved · awaiting verification*, its page lists who
 it's waiting on and why, and each of them gets a Slack DM with a link to Weave's verification page. Krater checks

@@ -24,15 +24,8 @@
 
 {% if verification_pending %}
   <div class="guardian-banner" role="status">
-    <p><strong>This project's compute is held until every team member is verified in Weave.</strong> Waiting on:</p>
-    <ul>
-      {% for member in verification_pending %}
-        <li>{{ member.label }}: {{ member.reason }}</li>
-      {% endfor %}
-    </ul>
-    <p>Each member does ID verification on
-      {% if weave_verification_url %}<a href="{{ weave_verification_url }}">Weave's verification page</a>{% else %}Weave's verification page{% endif %}.
-      For a member under 18, a Weave admin also records a verified guardian.</p>
+    <p><strong>This project's compute is held until every team member has passed ID verification in Weave.</strong></p>
+    {% include "projects/_verification_team.html" %}
   </div>
 {% elif verification_pending is none %}
   <p class="guardian-banner">Krater couldn't reach Weave to check that the team is verified. It checks again when you

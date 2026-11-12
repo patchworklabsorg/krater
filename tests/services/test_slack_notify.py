@@ -519,7 +519,7 @@ def test_a_held_grant_dms_each_member_it_waits_on(db_session: Session, member: A
     assert set(by_channel) == {project.slack_channel_id, "U_WAITING"}
     assert "U_CLEARED" not in by_channel
     dm = by_channel["U_WAITING"]
-    assert "budget is held until every team member is verified in Weave, you included" in dm
+    assert "budget is held until every team member has passed ID verification in Weave, you included" in dm
     assert f"/projects/{project.id}" in dm
 
     # The next reconcile pass posts neither again.
@@ -983,6 +983,7 @@ def test_notify_decision_says_an_unverified_teams_approval_is_awaiting_verificat
     db_session: Session, member: Actor, reviewer: Actor, weave: StubWeaveClient
 ) -> None:
     weave.set_minor(member.user.weave_sub, True)
+    weave.set_verification_status(member.user.weave_sub, "needs_submission")
     project = new_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=5000)
     project = projects.submit(db_session, member, project=project, criteria_read=True)
     revision = project.current_revision

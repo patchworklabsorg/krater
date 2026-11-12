@@ -413,21 +413,26 @@ Uploads use presigned URLs, and only objects from approved completion revisions 
 
 Changed Nov 6, 2026. A project can be submitted, reviewed and approved before anyone on the team is verified. What
 waits is everything that funds it: the budget its approval grants, and its compute. Krater adds no budget and starts
-nothing for it until Weave has cleared every team member. Weave owns both checks, so every Patchwork Labs app can use
+nothing for it until Weave has cleared every team member. Weave owns the checks, so every Patchwork Labs app can use
 them, and Krater stores none of them (`krater.services.clearance`, `krater.services.grants`).
 
 - **ID verification.** Weave's identity verification (a document, reviewed by Weave's identity team). Weave's
   directory sends `verification_status`: `needs_submission`, `pending`, `verified` or `ineligible`. Only `verified`
   clears the member. A record without the field (an older Weave) doesn't clear them, and Krater logs a warning.
-- **A verified guardian, under 18.** Weave asks a parent or guardian to consent by email for a member under 18. An
-  email link proves control of an inbox, not parenthood, so a Weave admin also records a signed guardian form plus a
-  short call or video check, and the directory sends `guardian_verified: true`. A member with `minor: true` isn't
-  cleared until then. A record without `minor` is treated as "not known to be a minor", and Krater logs a warning.
+- **The guardian, under 18.** Weave asks a parent or guardian to consent by email for a member under 18, and its ID
+  verification passes a member under 18 only with that consent granted and the parent or guardian on the call
+  (Weave's docs/KYC.md "Pass rules"). An email link proves control of an inbox, not parenthood; the call checks the
+  guardian too. So for a minor, `verified` already includes the guardian, and Krater clears them on it. (Changed Nov
+  12, 2026: Krater used to also wait for the directory's `guardian_verified`, which only a separate Weave admin step
+  sets, so minors who had passed with their guardian on the call stayed held.) Until a minor passes, the reason shown
+  says a parent or guardian consents and joins the call. A record without `minor` is treated as "not known to be a
+  minor", and Krater logs a warning.
 - **No directory record.** Weave's directory answers 404 for anyone the Krater app may not serve, a minor whose
   guardian consent is missing or was revoked included. A 404 doesn't clear, and the member is listed as "not
   available in Weave (no access to Krater)".
 - **The team** is the project's lead plus its accepted members, as it stands when the budget is released or compute
-  is asked for.
+  is asked for. While anyone is waiting, the project page and the new-job page list the whole team, each member
+  marked *Verified* or *Not yet* with the reason, so who has already passed shows too.
 - **The budget is held.** A proposal approval, an amendment approval that raises the ceiling, and an admin increase
   write their `BudgetEntry` at once only if Weave clears the team right then. Otherwise the grant is held (a
   `HeldGrant`): the approval goes through, but the ledger, and so Quilt's `budget.committed`, has nothing yet, and
