@@ -176,6 +176,29 @@ func (a *API) BeginUpload(ctx context.Context, area, name string, size int64) (*
 	return &out, nil
 }
 
+// UploadAsk is one file of a batch: its stored name and size.
+type UploadAsk struct {
+	Name string `json:"name"`
+	Size int64  `json:"size"`
+}
+
+// BatchUpload is Krater's answer for one file of a batch: where to upload it, or why it can't be.
+type BatchUpload struct {
+	Upload
+	Error string `json:"error"`
+}
+
+// BeginUploads asks where to upload up to 500 files, with one quota check for all of them.
+func (a *API) BeginUploads(ctx context.Context, area string, files []UploadAsk) ([]BatchUpload, error) {
+	var out struct {
+		Uploads []BatchUpload `json:"uploads"`
+	}
+	if err := a.post(ctx, "/files/"+area+"/upload-batch", map[string]any{"files": files}, &out); err != nil {
+		return nil, err
+	}
+	return out.Uploads, nil
+}
+
 // CompleteUpload finishes a multipart upload.
 func (a *API) CompleteUpload(ctx context.Context, area, name, uploadID string, etags []string) error {
 	body := map[string]any{"name": name, "upload_id": uploadID, "etags": etags}

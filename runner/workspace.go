@@ -141,22 +141,33 @@ func (s *Syncer) pushWorkspace(ctx context.Context) (int, error) {
 	for _, e := range s.storedEntries {
 		stored[e.Path] = e
 	}
-	pushed := 0
-	var firstErr error
+	started := time.Now()
 	current := map[string]bool{}
-	manifest := make([]manifestEntry, 0, len(entries))
+	var todo []pendingUpload
+	upload := map[string]int{} // path -> index in todo
 	for _, e := range entries {
 		if e.Type != "file" {
-			manifest = append(manifest, e)
 			continue
 		}
 		current[e.Path] = true
-		stamp := fileStamp{e.Size, e.MTime}
-		if prev, ok := s.uploaded[e.Path]; ok && prev == stamp {
+		if prev, ok := s.uploaded[e.Path]; ok && prev == (fileStamp{e.Size, e.MTime}) {
+			continue
+		}
+		upload[e.Path] = len(todo)
+		todo = append(todo, pendingUpload{e.Stored, filepath.Join(s.Dir, filepath.FromSlash(e.Path)), e.Size})
+	}
+	errs, calls := s.uploadAll(ctx, todo)
+	pushed := 0
+	var savedBytes int64
+	var firstErr error
+	manifest := make([]manifestEntry, 0, len(entries))
+	for _, e := range entries {
+		i, sent := upload[e.Path]
+		if !sent {
 			manifest = append(manifest, e)
 			continue
 		}
-		if err := s.uploadFile(ctx, e.Stored, filepath.Join(s.Dir, filepath.FromSlash(e.Path)), e.Size); err != nil {
+		if err := errs[i]; err != nil {
 			logf("uploading %s failed: %v", e.Path, err)
 			if firstErr == nil {
 				firstErr = fmt.Errorf("uploading %s: %w", e.Path, err)
@@ -166,9 +177,14 @@ func (s *Syncer) pushWorkspace(ctx context.Context) (int, error) {
 			}
 			continue
 		}
-		s.uploaded[e.Path] = stamp
+		s.uploaded[e.Path] = fileStamp{e.Size, e.MTime}
 		manifest = append(manifest, e)
 		pushed++
+		savedBytes += e.Size
+	}
+	if len(todo) > 0 {
+		logf("saved %d of %d changed workspace files (%d bytes) in %s, %d upload calls",
+			pushed, len(todo), savedBytes, time.Since(started).Round(time.Millisecond), calls)
 	}
 	for path := range s.uploaded {
 		if !current[path] {
@@ -296,7 +312,8 @@ func (s *Syncer) restore(ctx context.Context, onlyMissing bool) (int, error) {
 			firstErr = fmt.Errorf("restoring %s: %w", path, err)
 		}
 	}
-	var dirs, links []manifestEntry
+	var dirs, links, fetches []manifestEntry
+	var targets []pendingDownload
 	for _, e := range m.Entries {
 		local, err := s.localPath(e.Path)
 		if err != nil {
@@ -337,20 +354,30 @@ func (s *Syncer) restore(ctx context.Context, onlyMissing bool) (int, error) {
 				logf("skipping saved path %q: it isn't in storage", e.Path)
 				continue
 			}
-			if err := s.download(ctx, file.URL, local); err != nil {
-				fail(e.Path, err)
-				continue
-			}
-			os.Chmod(local, e.Mode)
-			if e.MTime != 0 { // 0: named from an older save, with no time
-				mtime := time.Unix(0, e.MTime)
-				os.Chtimes(local, mtime, mtime)
-			}
-			if info, err := os.Stat(local); err == nil {
-				s.uploaded[e.Path] = stampOf(info) // as stored here: some filesystems round the time
-			}
-			restored++
+			fetches = append(fetches, e)
+			targets = append(targets, pendingDownload{file.URL, local})
 		}
+	}
+	started := time.Now()
+	errs := s.downloadAll(ctx, targets)
+	for i, e := range fetches {
+		if errs[i] != nil {
+			fail(e.Path, errs[i])
+			continue
+		}
+		local := targets[i].local
+		os.Chmod(local, e.Mode)
+		if e.MTime != 0 { // 0: named from an older save, with no time
+			mtime := time.Unix(0, e.MTime)
+			os.Chtimes(local, mtime, mtime)
+		}
+		if info, err := os.Stat(local); err == nil {
+			s.uploaded[e.Path] = stampOf(info) // as stored here: some filesystems round the time
+		}
+		restored++
+	}
+	if len(targets) > 0 {
+		logf("downloaded %d of %d workspace files in %s", restored, len(targets), time.Since(started).Round(time.Millisecond))
 	}
 	for _, e := range links {
 		local, _ := s.localPath(e.Path)

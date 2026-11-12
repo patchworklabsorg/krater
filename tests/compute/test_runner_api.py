@@ -293,6 +293,80 @@ def test_uploads_in_flight_count_against_the_quota(http, machine, store, db_sess
     assert begin("b.bin", gb // 2).status_code == 200
 
 
+def test_a_batch_begins_many_uploads_in_one_call(http, machine, store, db_session) -> None:
+    """One call per file, each listing the whole project, was too slow for a box's virtual environment."""
+    job, row, token = machine
+    files = [{"name": f"venv/lib/f{n}.py", "size": 10} for n in range(300)]
+    files.append({"name": "big.bin", "size": runner_api.PART_BYTES + 1})
+
+    response = http.post("/runner/v1/files/workspace/upload-batch", headers=_auth(token), json={"files": files})
+
+    uploads = response.json()["uploads"]
+    prefix = f"projects/{job.project_id}/jobs/{job.id}/workspace/"
+    assert response.status_code == 200 and len(uploads) == 301
+    assert uploads[0] == {"name": "venv/lib/f0.py", "url": uploads[0]["url"]}
+    assert uploads[0]["url"].startswith(f"fake://krater-storage/{prefix}venv/lib/f0.py?put&length=10&")
+    assert uploads[300]["name"] == "big.bin" and len(uploads[300]["parts"]) == 2
+    from krater.models import StorageReservation
+
+    assert db_session.query(StorageReservation).count() == 301
+
+
+def test_a_batch_refuses_files_one_by_one(http, machine, store, db_session, admin) -> None:  # noqa: F811
+    """A bad name, a repeated name or a full quota refuses that file only, as one call per file did."""
+    from krater.services import compute_settings
+
+    job, row, token = machine
+    compute_settings.set_project_overrides(
+        db_session, admin, project=job.project, overrides={"storage_quota_gb": 1}, reason="small"
+    )
+    db_session.commit()
+    gb = 1024**3
+    files = [
+        {"name": "a.bin", "size": gb // 2},
+        {"name": "../escape", "size": 1},
+        {"name": "a.bin", "size": 1},
+        {"name": "b.bin", "size": gb // 2 + 1},  # a.bin, earlier in the batch, already counts
+        {"name": "c.txt", "size": 10},
+    ]
+
+    uploads = http.post("/runner/v1/files/outputs/upload-batch", headers=_auth(token), json={"files": files}).json()[
+        "uploads"
+    ]
+
+    assert [u["name"] for u in uploads] == ["a.bin", "../escape", "a.bin", "b.bin", "c.txt"]
+    assert "upload_id" in uploads[0] and "url" in uploads[4]  # a.bin is big enough for parts
+    assert "relative path" in uploads[1]["error"]
+    assert "twice" in uploads[2]["error"]
+    assert "quota" in uploads[3]["error"]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"files": []},
+        {"files": [{"name": "x", "size": 1}] * 501},
+        {"files": [{"name": "x", "size": "1"}]},
+        {"files": [{"name": "x", "size": True}]},
+        {"files": "x"},
+        {},
+    ],
+)
+def test_a_batch_must_be_a_list_of_names_and_sizes(http, machine, store, body) -> None:
+    _, _, token = machine
+    response = http.post("/runner/v1/files/checkpoints/upload-batch", headers=_auth(token), json=body)
+    assert response.status_code == 422
+
+
+def test_a_batch_cant_touch_inputs_or_go_without_a_token(http, machine, store) -> None:
+    _, _, token = machine
+    files = {"files": [{"name": "x", "size": 1}]}
+    inputs = http.post("/runner/v1/files/inputs/upload-batch", headers=_auth(token), json=files)
+    no_token = http.post("/runner/v1/files/workspace/upload-batch", json=files)
+    assert inputs.status_code == 403 and no_token.status_code == 403
+    assert store.list_prefix("projects/") == []
+
+
 def test_an_expired_reservation_frees_its_space(http, machine, store, db_session, admin, monkeypatch) -> None:  # noqa: F811
     from krater.services import compute_settings
     from krater.web.routers import runner as runner_routes

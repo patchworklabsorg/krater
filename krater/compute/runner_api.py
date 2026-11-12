@@ -60,8 +60,9 @@ AREAS = ("checkpoints", "outputs", "workspace", "logs", "inputs")
 #: for, and never change them.
 INPUTS = "inputs"
 WORKSPACE = "workspace"
-# How many stored files one delete call may name.
+# How many stored files one delete call may name, and one upload call may begin.
 MAX_DELETE_NAMES = 1000
+MAX_BATCH_UPLOADS = 500
 # Wide enough for the names ML tools write (Lightning's `epoch=3-step=100.ckpt`), with no control characters or
 # backslashes, which would trip the CLI writing them to a member's disk.
 _NAME_RE = re.compile(r"^[A-Za-z0-9._\-=+,@~][A-Za-z0-9._\-=+,@~ /]{0,511}$")
@@ -401,34 +402,72 @@ def reserve_upload(
     now: datetime,
 ) -> dict[str, Any]:
     """`begin_upload` for any key under the project (a machine's files, or a member's inputs)."""
-    if not 0 <= size <= MAX_UPLOAD_BYTES:
-        raise ValidationFailed({"size": f"Files can be up to {MAX_UPLOAD_BYTES // 1024**3} GB."})
-    session.execute(sa.select(Project.id).where(Project.id == project_id).with_for_update())
-    session.execute(
-        sa.delete(StorageReservation).where(
-            StorageReservation.project_id == project_id, StorageReservation.expires_at <= now
-        )
-    )
-    usage = _usage(store, project_id)
-    reserved = session.execute(
-        sa.select(StorageReservation.key, StorageReservation.size_bytes).where(
-            StorageReservation.project_id == project_id
-        )
-    )
-    for reserved_key, reserved_size in reserved:
-        usage[reserved_key] = max(usage.get(reserved_key, 0), reserved_size)
-    used = sum(usage.values()) - usage.get(key, 0)
-    if used + size > quota_bytes:
-        raise ValidationFailed(
-            {"size": f"The project's storage quota of {quota_bytes // 1024**3} GB is full ({used} bytes used)."}
-        )
-    reservation = session.get(StorageReservation, key)
-    if reservation is None:
-        reservation = StorageReservation(key=key, project_id=project_id)
-        session.add(reservation)
-    reservation.size_bytes = size
-    reservation.expires_at = now + timedelta(seconds=URL_EXPIRES_SECONDS)
+    usage = _QuotaUsage.take(session, store, project_id, now=now)
+    upload = usage.reserve(key, name, size, quota_bytes=quota_bytes)
     session.flush()
+    return upload
+
+
+class _QuotaUsage:
+    """What a project stores, counting each key at the larger of its stored and reserved size, under the project's
+    row lock. `reserve` checks one more upload against the quota and counts it, so a batch checks file N with files
+    1 to N-1 already counted."""
+
+    def __init__(
+        self,
+        session: Session,
+        store: ObjectStore,
+        project_id: uuid.UUID,
+        usage: dict[str, int],
+        reservations: dict[str, StorageReservation],
+        now: datetime,
+    ):
+        self.session, self.store, self.project_id, self.now = session, store, project_id, now
+        self.usage, self.reservations = usage, reservations
+        self.total = sum(usage.values())
+
+    @classmethod
+    def take(cls, session: Session, store: ObjectStore, project_id: uuid.UUID, *, now: datetime) -> _QuotaUsage:
+        session.execute(sa.select(Project.id).where(Project.id == project_id).with_for_update())
+        session.execute(
+            sa.delete(StorageReservation).where(
+                StorageReservation.project_id == project_id, StorageReservation.expires_at <= now
+            )
+        )
+        usage = _usage(store, project_id)
+        # Loaded once, so a batch of uploads doesn't look each one up (a key holds its project's id: no other
+        # project's reservation can have it).
+        reservations = {
+            r.key: r
+            for r in session.scalars(sa.select(StorageReservation).where(StorageReservation.project_id == project_id))
+        }
+        for reserved_key, reservation in reservations.items():
+            usage[reserved_key] = max(usage.get(reserved_key, 0), reservation.size_bytes)
+        return cls(session, store, project_id, usage, reservations, now)
+
+    def reserve(self, key: str, name: str, size: int, *, quota_bytes: int) -> dict[str, Any]:
+        if not 0 <= size <= MAX_UPLOAD_BYTES:
+            raise ValidationFailed({"size": f"Files can be up to {MAX_UPLOAD_BYTES // 1024**3} GB."})
+        current = self.usage.get(key, 0)
+        used = self.total - current
+        if used + size > quota_bytes:
+            raise ValidationFailed(
+                {"size": f"The project's storage quota of {quota_bytes // 1024**3} GB is full ({used} bytes used)."}
+            )
+        reservation = self.reservations.get(key)
+        if reservation is None:
+            reservation = StorageReservation(key=key, project_id=self.project_id)
+            self.session.add(reservation)
+            self.reservations[key] = reservation
+        reservation.size_bytes = size
+        reservation.expires_at = self.now + timedelta(seconds=URL_EXPIRES_SECONDS)
+        counted = max(current, size)
+        self.usage[key] = counted
+        self.total += counted - current
+        return _upload_urls(self.store, key, name, size)
+
+
+def _upload_urls(store: ObjectStore, key: str, name: str, size: int) -> dict[str, Any]:
     if size <= PART_BYTES:
         return {"name": name, "url": store.presign_put(key, content_length=size, expires=URL_EXPIRES_SECONDS)}
     upload_id = store.create_multipart_upload(key)
@@ -448,6 +487,48 @@ def reserve_upload(
             for n in range(1, parts + 1)
         ],
     }
+
+
+def begin_uploads(
+    session: Session,
+    store: ObjectStore,
+    instance: ComputeInstance,
+    area: str,
+    files: Any,
+    *,
+    quota_bytes: int,
+    now: datetime,
+) -> list[dict[str, Any]]:
+    """`begin_upload` for up to MAX_BATCH_UPLOADS files in one call, with one quota count for all of them. A box's
+    workspace can be thousands of small files, and one call per file (each listing the whole project) was too slow
+    to save a Python virtual environment before its box stopped (staging, 2026-11-12: 2,357 files, over 10 minutes).
+
+    A file that can't be uploaded (a bad name, a repeated name, the quota) gets `{"name", "error"}` in its place,
+    and the others still get URLs. The caller commits."""
+    _no_inputs(area)
+    _prefix(instance, area)
+    if not isinstance(files, list) or not 0 < len(files) <= MAX_BATCH_UPLOADS:
+        raise ValidationFailed({"files": f"Send a list of 1 to {MAX_BATCH_UPLOADS} files."})
+    wanted: list[tuple[str, int]] = []
+    for item in files:
+        name = item.get("name") if isinstance(item, dict) else None
+        size = item.get("size") if isinstance(item, dict) else None
+        if not isinstance(name, str) or not isinstance(size, int) or isinstance(size, bool):
+            raise ValidationFailed({"files": "Each file needs a name (a string) and a size (an integer)."})
+        wanted.append((name, size))
+    usage = _QuotaUsage.take(session, store, instance.job.project_id, now=now)
+    uploads: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for name, size in wanted:
+        try:
+            if name in seen:
+                raise ValidationFailed({"name": "The same name is twice in this batch."})
+            seen.add(name)
+            uploads.append(usage.reserve(_key(instance, area, name), name, size, quota_bytes=quota_bytes))
+        except ValidationFailed as exc:
+            uploads.append({"name": name, "error": "; ".join(exc.errors.values())})
+    session.flush()
+    return uploads
 
 
 def complete_upload(

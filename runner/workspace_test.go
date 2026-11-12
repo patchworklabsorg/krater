@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -359,6 +360,77 @@ func TestARestoreDoesNotWriteThroughASymlinkedFolder(t *testing.T) {
 	workspaceSyncer(f, b).Restore(ctx)
 	if _, err := os.Stat(filepath.Join(outside, "x.txt")); !os.IsNotExist(err) {
 		t.Errorf("wrote outside the workspace: %v", err)
+	}
+}
+
+// Staging, 2026-11-12: a virtual environment of 2,357 files didn't save within a stop's 10 minutes, at one call to
+// Krater per file. Files now begin a batch per call and go up and down in parallel.
+func TestManyFilesTakeAFewCallsAndComeBackWhole(t *testing.T) {
+	f := newFakeKrater(t)
+	ctx := context.Background()
+	a := t.TempDir()
+	for n := 0; n < 600; n++ {
+		write(t, filepath.Join(a, "venv", "lib", fmt.Sprintf("m%03d.py", n)), fmt.Sprintf("module %d", n), 0o644)
+	}
+	sa := workspaceSyncer(f, a)
+	sa.Restore(ctx)
+	pushed, err := sa.Push(ctx)
+	if err != nil || pushed != 600 {
+		t.Fatalf("Push = %d, %v", pushed, err)
+	}
+	if f.batches != 3 || f.singles != 1 { // 250 + 250 + 100, and the manifest
+		t.Errorf("%d batch calls, %d single uploads", f.batches, f.singles)
+	}
+
+	b := t.TempDir()
+	if n, err := workspaceSyncer(f, b).Restore(ctx); err != nil || n != 600 {
+		t.Fatalf("Restore = %d, %v", n, err)
+	}
+	for _, n := range []int{0, 299, 599} {
+		name := filepath.Join(b, "venv", "lib", fmt.Sprintf("m%03d.py", n))
+		if got, _ := os.ReadFile(name); string(got) != fmt.Sprintf("module %d", n) {
+			t.Errorf("%s = %q", name, got)
+		}
+	}
+}
+
+func TestARefusedFileInABatchStopsOnlyItself(t *testing.T) {
+	f := newFakeKrater(t)
+	ctx := context.Background()
+	a := t.TempDir()
+	for _, name := range []string{"a.txt", "b.txt", "c.txt"} {
+		write(t, filepath.Join(a, name), name, 0o644)
+	}
+	f.refuse = "b.txt"
+	sa := workspaceSyncer(f, a)
+	sa.Restore(ctx)
+	if n, err := sa.Push(ctx); err == nil || n != 2 {
+		t.Fatalf("Push = %d, %v", n, err)
+	}
+	if string(f.objects["workspace/a.txt"]) != "a.txt" || string(f.objects["workspace/c.txt"]) != "c.txt" {
+		t.Errorf("objects %v", keys(f.objects))
+	}
+	f.refuse = ""
+	if n, err := sa.Push(ctx); err != nil || n != 1 {
+		t.Errorf("second Push = %d, %v", n, err)
+	}
+}
+
+// Storage behind Cloudflare can answer 429 or 503 for a moment; a file is tried again rather than failing the save.
+func TestABrieflyUnavailableStorageIsTriedAgain(t *testing.T) {
+	quickRetries(t, time.Second)
+	f := newFakeKrater(t)
+	ctx := context.Background()
+	a := t.TempDir()
+	write(t, filepath.Join(a, "x.txt"), "x", 0o644)
+	f.storageFails = putTries - 1
+	sa := workspaceSyncer(f, a)
+	sa.Restore(ctx)
+	if _, err := sa.Push(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if string(f.objects["workspace/x.txt"]) != "x" {
+		t.Errorf("objects %v", keys(f.objects))
 	}
 }
 
