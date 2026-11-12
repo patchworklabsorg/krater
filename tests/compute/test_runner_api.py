@@ -365,16 +365,17 @@ def test_a_box_deletes_from_its_workspace_and_nothing_else(http, machine, store,
     other = "projects/other/jobs/other/workspace/gone.txt"
     store.put(other, content_type="", size_bytes=1)
 
-    deleted = http.post(
-        "/runner/v1/files/workspace/delete", headers=_auth(token), json={"names": ["gone.txt", "never-stored.txt"]}
-    )
-    refused = [
-        http.post(f"/runner/v1/files/{area}/delete", headers=_auth(token), json={"names": ["c.pt"]}).status_code
-        for area in ("checkpoints", "outputs", "logs", "inputs")
-    ]
-    escaping = http.post("/runner/v1/files/workspace/delete", headers=_auth(token), json={"names": ["../c.pt"]})
-    too_many = http.post("/runner/v1/files/workspace/delete", headers=_auth(token), json={"names": ["x"] * 1001})
-    no_token = http.post("/runner/v1/files/workspace/delete", json={"names": ["dir/kept.txt"]})
+    def delete(area: str, names, token: str | None = token):
+        job.kind = ComputeJobKind.BOX  # a refusal rolls the test's session back
+        db_session.flush()
+        headers = _auth(token) if token else {}
+        return http.post(f"/runner/v1/files/{area}/delete", headers=headers, json={"names": names})
+
+    deleted = delete("workspace", ["gone.txt", "never-stored.txt"])
+    refused = [delete(area, ["c.pt"]).status_code for area in ("checkpoints", "outputs", "logs", "inputs")]
+    escaping = delete("workspace", ["../c.pt"])
+    too_many = delete("workspace", ["x"] * 1001)
+    no_token = delete("workspace", ["dir/kept.txt"], token=None)
 
     assert deleted.json() == {"deleted": 2}
     assert refused == [403, 403, 403, 403]
