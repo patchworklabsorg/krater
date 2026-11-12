@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from krater.models import ProjectStatus
 from krater.services import budget
-from tests.conftest import ADMIN_SUB, MEMBER_SUB, OTHER_MEMBER_SUB, REVIEWER_SUB, get_csrf_token
+from tests.conftest import ADMIN_SUB, MEMBER_SUB, REVIEWER_SUB, get_csrf_token
 
 
 def _post(client: TestClient, url: str, page_url: str, **data):
@@ -173,10 +173,10 @@ def test_more_without_a_reason_is_refused_on_the_web(client: TestClient, login_a
 
 
 def test_a_member_cant_grant_more(client: TestClient, login_as, submitted_project, db_session):
+    # The team's own lead, a plain member who can see the project page but isn't a reviewer.
     member = login_as(MEMBER_SUB)
     project = submitted_project(member, budget_requested_cents=18_000)
     db_session.commit()
-    login_as(OTHER_MEMBER_SUB)
 
     response = _post(
         client,
