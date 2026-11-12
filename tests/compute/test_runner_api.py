@@ -335,7 +335,7 @@ def test_a_batch_refuses_files_one_by_one(http, machine, store, db_session, admi
     ]
 
     assert [u["name"] for u in uploads] == ["a.bin", "../escape", "a.bin", "b.bin", "c.txt"]
-    assert "url" in uploads[0] and "url" in uploads[4]
+    assert "upload_id" in uploads[0] and "url" in uploads[4]  # a.bin is big enough for parts
     assert "relative path" in uploads[1]["error"]
     assert "twice" in uploads[2]["error"]
     assert "quota" in uploads[3]["error"]
