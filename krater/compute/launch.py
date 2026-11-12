@@ -4,7 +4,9 @@ How the bootstrap gets to run is each provider's (`krater.vast.launch` for Vast'
 The bootstrap downloads the runner from Krater with curl, wget or Python (whichever the image has), checks its
 sha256, and runs it; the runner asks Krater for the command. Each download names itself (`krater-bootstrap`):
 Cloudflare in front of Krater refuses Python's default user agent with a 403 (error 1010, seen on staging
-2026-11-12), and a slim Python image has no curl or wget to fall back on. Then a job's shell waits forever, whatever
+2026-11-12), and a slim Python image has no curl or wget to fall back on. Each try is bounded and lands in a `.part`
+file that becomes the runner only once complete: on staging (2026-11-12) a host's first download was cut short and
+the second hung for ten minutes, past the runner start deadline. Then a job's shell waits forever, whatever
 happened: Vast restarts a container whose main process ends, which would rerun the job and keep billing (spike,
 2026-10-11), so only Krater ends a machine, by destroying it. If the runner never starts, the scheduler's start
 deadline does.
@@ -25,17 +27,20 @@ RUNNER_PATH = "/runner/v1/krater-runner"
 _FETCH = r"""R=/tmp/krater-runner
 U="${KRATER_RUNNER_URL}__PATH__"
 P='import sys, urllib.request as u; q = u.Request(sys.argv[1], headers={"User-Agent": "krater-bootstrap"})
-open(sys.argv[2], "wb").write(u.urlopen(q).read())'
+d = u.urlopen(q, timeout=30).read()
+open(sys.argv[2], "wb").write(d)'
 i=0
-while [ "$i" -lt 5 ] && [ ! -s "$R" ]; do
-  if command -v curl >/dev/null 2>&1; then curl -fsSL -A krater-bootstrap -o "$R" "$U"
-  elif command -v wget >/dev/null 2>&1; then wget -q -U krater-bootstrap -O "$R" "$U"
-  elif command -v python3 >/dev/null 2>&1; then python3 -c "$P" "$U" "$R"
-  elif command -v python >/dev/null 2>&1; then python -c "$P" "$U" "$R"
+while [ "$i" -lt 6 ] && [ ! -s "$R" ]; do
+  rm -f "$R.part"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL -A krater-bootstrap --connect-timeout 15 --max-time 90 -o "$R.part" "$U" && mv -f "$R.part" "$R"
+  elif command -v wget >/dev/null 2>&1; then wget -q -U krater-bootstrap -T 30 -O "$R.part" "$U" && mv -f "$R.part" "$R"
+  elif command -v python3 >/dev/null 2>&1; then python3 -c "$P" "$U" "$R.part" && mv -f "$R.part" "$R"
+  elif command -v python >/dev/null 2>&1; then python -c "$P" "$U" "$R.part" && mv -f "$R.part" "$R"
   else echo "krater: this image has none of curl, wget or python, so it can't fetch Krater's runner"; break
   fi
   i=$((i + 1))
-  [ -s "$R" ] || sleep 10
+  [ -s "$R" ] || { echo "krater: fetching the runner failed (try $i); trying again"; sleep 5; }
 done
 OK=0
 if [ -s "$R" ]; then

@@ -1173,7 +1173,7 @@ def test_a_start_from_before_a_pause_does_not_count_after_it(db_session, member,
     _passes(db_session, client, 9, 17)
     assert job.state is ComputeJobState.RUNNING
     _pass(db_session, client, NOW + timedelta(minutes=18))
-    assert job.state is ComputeJobState.FAILED and "never started" in job.state_reason
+    assert job.state is ComputeJobState.FAILED and "didn't start within" in job.state_reason
 
 
 def test_a_runner_restart_reported_before_the_resume_is_seen_counts(db_session, member, project, client, fake) -> None:  # noqa: F811
