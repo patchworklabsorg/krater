@@ -88,35 +88,27 @@
   <p class="guardian-banner" role="status"><strong>{{ funding_hold_explanation }}</strong>
     {% if held_grant %}Its {{ held_grant.amount_cents | dollars }} of budget{% else %}Its budget{% endif %} isn't
     added and no compute starts until an admin clears the hold.
-    {% if verification_pending %}Every team member also needs to be verified in Weave:
+    {% if verification_pending %}Every team member also needs to pass ID verification in Weave. Not yet:
       {% for member in verification_pending %}{{ member.label }} ({{ member.reason }}){{ "; " if not loop.last else "." }}{% endfor %}
     {% endif %}</p>
 {% elif held_grant and verification_pending == [] %}
-  <p class="guardian-banner" role="status">Every team member is now verified in Weave. The held
+  <p class="guardian-banner" role="status">Every team member has now passed ID verification in Weave. The held
     {{ held_grant.amount_cents | dollars }} of budget is released within a few minutes.</p>
 {% elif verification_pending %}
   <div class="guardian-banner" role="status">
     {% if held_grant %}
-      <p><strong>{{ held_grant.amount_cents | dollars }} of this project's budget is held until every team member is
-        verified in Weave.</strong> Until then the budget isn't added and no compute runs. Waiting on:</p>
+      <p><strong>{{ held_grant.amount_cents | dollars }} of this project's budget is held until every team member has
+        passed ID verification in Weave.</strong> Until then the budget isn't added and no compute runs.</p>
     {% else %}
-      <p><strong>This project's budget and compute are held until every team member is verified in Weave.</strong> It
-        can still be reviewed and approved. Waiting on:</p>
+      <p><strong>This project's budget and compute are held until every team member has passed ID verification in
+        Weave.</strong> It can still be reviewed and approved.</p>
     {% endif %}
-    <ul>
-      {% for member in verification_pending %}
-        <li>{{ member.label }}: {{ member.reason }}</li>
-      {% endfor %}
-    </ul>
-    <p>Each member does ID verification on
-      {% if weave_verification_url %}<a href="{{ weave_verification_url }}">Weave's verification page</a>{% else %}Weave's verification page{% endif %}.
-      For a member under 18, a Weave admin also records the signed guardian form and the call or video check. A member
-      who is not available in Weave needs their access to Krater back in Weave.</p>
+    {% include "projects/_verification_team.html" %}
   </div>
 {% elif verification_pending is none %}
   <p class="guardian-banner">
     {% if held_grant %}{{ held_grant.amount_cents | dollars }} of this project's budget is held until every team
-      member is verified in Weave.{% endif %}
+      member has passed ID verification in Weave.{% endif %}
     Krater couldn't reach Weave to check that the team is verified. Krater checks again before it adds any budget or
     starts any compute.</p>
 {% endif %}

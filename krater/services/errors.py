@@ -46,8 +46,8 @@ class ConfirmationRequired(DomainError):
 
 
 class VerificationRequired(InvalidState):
-    """A project's compute is held: a team member isn't cleared in Weave (ID verification, a verified guardian for a
-    member under 18, or Weave's directory doesn't return them).
+    """A project's compute is held: a team member isn't cleared in Weave (their ID verification hasn't passed, or
+    Weave's directory doesn't return them).
 
     `members` holds `(label, reason)` for each such member, so the team, reviewers and admins see who holds it and
     why (docs/SPEC.md "Verification before funding"). `joining` is set when one person can't join a team whose project
@@ -63,7 +63,7 @@ class VerificationRequired(InvalidState):
         )
         super().__init__(
             f"{lead}. {listed}. ID verification is done on Weave's verification page; a member under 18 also needs a "
-            "verified guardian, which a Weave admin records."
+            "parent or guardian's consent in Weave, and the guardian joins the call."
         )
 
 

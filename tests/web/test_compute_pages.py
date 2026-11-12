@@ -126,7 +126,7 @@ def test_compute_is_held_until_the_team_is_verified(
     login_as(MEMBER_SUB)
     weave_stub.set_verification_status(MEMBER_SUB, "pending")
     page = client.get(f"/projects/{project.id}/compute/new")
-    assert "compute is held until every team member is verified in Weave" in page.text
+    assert "compute is held until every team member has passed ID verification in Weave" in page.text
     assert "Mia Member (PWLMEMBERONE): ID verification in Weave is still in review" in page.text
 
     response = client.post(

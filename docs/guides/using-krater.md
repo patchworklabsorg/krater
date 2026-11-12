@@ -66,8 +66,8 @@ To **submit** a proposal you also need:
 To **get funded**, every member of your team needs to be **verified in Weave**:
 
 - **ID verification**, which Weave's identity team reviews;
-- for anyone **under 18**, a **verified guardian**: a parent or guardian consents by email, and a Weave admin records a
-  signed form and a short call or video check.
+- for anyone **under 18**, a **parent or guardian**: they consent by email in Weave first, then join your
+  verification call.
 
 You can write, submit and even be approved before that. What waits is the money: the budget and any compute. Start
 your verification early, since it takes time.

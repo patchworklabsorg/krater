@@ -90,7 +90,8 @@ tests/             mirrors krater/ layout
   `krater.services.stash_archives.sync_project` in the same transaction, and the worker asks Stash later. Never call
   Stash from a request, and never fail a submission because Stash is down (`docs/stash-integration.md`).
 - **Funding waits for verification** (`krater.services.clearance`): a team member is cleared only with Weave's ID
-  verification (`verification_status: "verified"`), a `guardian_verified` if `minor`, and a directory record.
+  verification (`verification_status: "verified"`; for a minor Weave passes it only with the guardian's consent and the
+  guardian on the call, so `guardian_verified` isn't needed) and a directory record.
   Approval doesn't wait, but the budget it grants does: grant budget only through `krater.services.grants.grant`,
   which holds it (`HeldGrant`) until Weave clears the team, and no compute starts until then
   (`require_team_cleared`). Weave owns the checks; Krater stores no copy, and no admin override bypasses it

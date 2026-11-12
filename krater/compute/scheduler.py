@@ -20,7 +20,7 @@ and stops) and step 5 starts and searches for nothing.
    target (or its max, after `max_wait_minutes`, as the member chose), hold its budget under the project's row
    lock, then rent. Searches are paced (`krater.compute.search_pacing`): Vast's daily quota of search rows is small,
    and a job that keeps finding nothing is searched for less and less often. A job whose team Weave hasn't cleared
-   (`krater.services.clearance`: ID verification, and a verified guardian for a member under 18) waits in the
+   (`krater.services.clearance`: ID verification, with a guardian on the call for a member under 18) waits in the
    queue without searching. A machine that is already running isn't stopped for that, and a self-stopped one is
    started again: both were rented while the team was cleared.
 

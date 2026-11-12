@@ -1,0 +1,14 @@
+{# The team's ID verification in Weave, member by member (`verification_team`, from krater.services.clearance), so
+   who is already verified shows next to who isn't yet. #}
+<ul class="verification-team">
+  {% for member in verification_team %}
+    <li>
+      {% if member.cleared %}<span class="badge badge--good">Verified</span>{% else %}<span class="badge badge--info">Not yet</span>{% endif %}
+      {{ member.label }}{% if not member.cleared %}: {{ member.reason }}{% endif %}
+    </li>
+  {% endfor %}
+</ul>
+<p>Each member does ID verification on
+  {% if weave_verification_url %}<a href="{{ weave_verification_url }}">Weave's verification page</a>{% else %}Weave's verification page{% endif %}.
+  A member under 18 also needs a parent or guardian's consent in Weave, and the guardian joins the verification call.
+  A member who is not available in Weave needs their access to Krater back in Weave.</p>

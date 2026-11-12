@@ -781,6 +781,21 @@ a.stat .stat__value {
   padding-left: var(--space-5);
 }
 
+/* The team's ID verification, one member a line with its badge (projects/_verification_team.html). */
+.guardian-banner .verification-team {
+  margin: var(--space-2) 0;
+  padding-left: 0;
+  list-style: none;
+}
+
+.verification-team li + li {
+  margin-top: var(--space-1);
+}
+
+.verification-team .badge {
+  margin-right: var(--space-1);
+}
+
 /* Whether a project's whole team is verified US residents in Weave, for picking OSPool projects. */
 .residency-line p {
   margin: 0;
