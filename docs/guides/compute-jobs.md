@@ -394,7 +394,10 @@ want its last outputs.
 ### What Krater does on its own
 
 - **Finished machines are destroyed** within a minute or two, so nothing keeps billing.
-- **A machine that never starts** (the image can't be pulled, has no shell, or the host is broken) is destroyed, and
+- **An image the registry refuses** (it doesn't exist, the tag is wrong, or it's private) fails the job within a
+  minute or two, quoting the registry's answer, such as `manifest unknown` or `denied`. No other machine is tried:
+  each would get the same answer.
+- **A machine that never starts** (the image has no shell, or the host is broken) is destroyed, and
   the job is tried on another host. After three bad hosts in a row, or 30 minutes without starting, the job fails:
   by then the image is the likelier cause.
 - **A runner that stops reporting** (the machine crashed or lost its network) for 30 minutes fails the job.
@@ -716,6 +719,7 @@ Only rank 0 should write checkpoints and outputs.
 | Queued, "Waiting for budget" | Not enough budget left for an hour at your price, or other running jobs hold it. Lower the max runtime, wait for them, or ask for more |
 | Queued, "Waiting: the project is awaiting funding" | A funding hold. An admin clears it |
 | Queued, a search quota message | Krater limits how often it searches Vast. It tries again automatically |
+| Failed: "The image ... couldn't be pulled" | The registry refused it. Check the name and tag character by character (a stray full stop counts), and that it's public: `docker logout ghcr.io && docker pull <image>` should work |
 | Failed in `starting` | The image couldn't be pulled (wrong name, private registry), or it has no `sh` and none of curl, wget or Python. Try `docker run --rm <image> sh -c "command -v curl wget python3"` |
 | Failed, exit code 125 | The runner couldn't create its directories. Check that the image's user can write to `/tmp` |
 | Failed with your program's exit code | Your command failed. Read **Output**. Run the same command locally in the image |
