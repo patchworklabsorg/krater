@@ -280,7 +280,10 @@ def submit_job(
         input_names=list(spec.inputs),
         inputs_bytes=inputs_bytes,
         state=ComputeJobState.QUEUED,
-        state_reason="Waiting for an offer at or under its "
+        # While compute is stopped, say so from the start, as the scheduler's next pass would.
+        state_reason=f"Waiting: {halted}."
+        if (halted := compute_halt.current(session)) is not None
+        else "Waiting for an offer at or under its "
         + (
             "limit."
             if spec.on_outbid is ComputeOutbid.HOLD and spec.target_microusd == spec.max_microusd

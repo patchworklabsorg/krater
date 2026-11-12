@@ -746,6 +746,28 @@ def test_a_host_that_cannot_start_the_container_is_left_for_another_machine(
     assert job.state is ComputeJobState.STARTING
 
 
+def test_a_later_attempt_doesnt_claim_to_resume_when_nothing_ran_before(
+    db_session,  # noqa: F811
+    member,  # noqa: F811
+    project,  # noqa: F811
+    client,  # noqa: F811
+    fake,  # noqa: F811
+) -> None:
+    job = _submit(db_session, member, project)
+    _pass(db_session, client)
+    _host_fails(fake, _instance(db_session, job))
+    _pass(db_session, client, NOW + timedelta(minutes=5))
+    second = _instance(db_session, job)
+    assert second.attempt == 2
+
+    _runner_starts(db_session, fake, second, NOW + timedelta(minutes=6))
+
+    said = db_session.scalars(
+        sa.select(ComputeEvent.message).where(ComputeEvent.job_id == job.id, ComputeEvent.kind == "runner_started")
+    ).one()
+    assert said == "The runner started (attempt 2; no earlier attempt got this far)."
+
+
 def test_a_job_whose_containers_never_start_anywhere_fails(db_session, member, project, client, fake) -> None:  # noqa: F811
     job = _submit(db_session, member, project, target_microusd=100_000)  # all three RTX 3060 machines qualify
     _pass(db_session, client)

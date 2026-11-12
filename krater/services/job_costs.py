@@ -104,8 +104,15 @@ class JobEstimate:
 
 
 def _hours(hours: Decimal) -> str:
-    value = float(hours)
-    return f"{value:g} hour" + ("" if value == 1 else "s")
+    """A max runtime for people: "20 minutes", "1 hour", "1 hour 30 minutes", "8 hours" (not "0.333333 hours")."""
+    minutes = max(round(hours * 60), 1 if hours > 0 else 0)
+    whole, rest = divmod(minutes, 60)
+    parts = []
+    if whole:
+        parts.append(f"{whole} hour" + ("" if whole == 1 else "s"))
+    if rest or not whole:
+        parts.append(f"{rest} minute" + ("" if rest == 1 else "s"))
+    return " ".join(parts)
 
 
 def market_price(session: Session, job: _Shape, *, now: datetime) -> MarketPrice | None:

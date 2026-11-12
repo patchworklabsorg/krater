@@ -58,6 +58,15 @@ def test_the_estimate_is_an_upper_bound_at_the_max_runtime(db_session) -> None:
     assert "finish sooner" in estimate.summary()
 
 
+def test_a_runtime_under_an_hour_reads_in_minutes(db_session) -> None:
+    """It read "its full 0.333333 hours" (staging, 2026-11-12)."""
+    short = job_costs.estimate(db_session, _spec(max_runtime_minutes=20), transfer_cap_microusd_per_gb=CAP, now=NOW)
+    longer = job_costs.estimate(db_session, _spec(max_runtime_minutes=90), transfer_cap_microusd_per_gb=CAP, now=NOW)
+
+    assert "its full 20 minutes" in short.summary()
+    assert "its full 1 hour 30 minutes" in longer.summary()
+
+
 def test_the_members_data_estimate_is_counted_at_the_cap(db_session) -> None:
     estimate = job_costs.estimate(
         db_session, _spec(data_in_gb=500, data_out_gb=100), transfer_cap_microusd_per_gb=CAP, now=NOW
