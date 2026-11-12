@@ -78,6 +78,8 @@ class LiveWeaveClient:
         self._directory_cache: TTLCache[str, WeaveUser | None] = TTLCache(DIRECTORY_CACHE_TTL_SECONDS)
         # CLI tokens already checked, by their sha256: (sub, monotonic time to check again at).
         self._cli_tokens: dict[str, tuple[str, float]] = {}
+        # Whether the patch-role list's 403/404 was logged (once per process: it stays so until Weave is set up).
+        self._patch_list_warned = False
 
     # -- OIDC ------------------------------------------------------------------------------------
 
@@ -193,21 +195,51 @@ class LiveWeaveClient:
         return user
 
     def list_users_with_role(self, role: str) -> list[WeaveUser]:
-        # Weave's directory filters by app role key only: someone who holds the role only as a patch role is not
-        # listed. Fine while the app roles and patch roles are the same people (docs/weave-integration.md).
+        """The union of the users who hold `role` as an app role and those who hold it as a patch role in Krater's
+        patch, by `sub`, sorted by `sub` (docs/weave-integration.md, "Patch roles")."""
         key = self._roles.weave_role_key(role)
         response = self._directory_get("/api/v1/directory/users", params={"role": key})
         if response.status_code == 404:
             # Weave answers 404 for a role that isn't defined on (or linked to) the Krater app.
             logger.warning("Weave's directory doesn't know Krater role key %r; treating it as nobody", key)
+            users: dict[str, WeaveUser] = {}
+        else:
+            users = {user.sub: user for user in self._user_list(response)}
+        for user in self._list_users_with_patch_role(role):
+            users.setdefault(user.sub, user)
+        return [users[sub] for sub in sorted(users)]
+
+    def _list_users_with_patch_role(self, role: str) -> list[WeaveUser]:
+        patch, key = self._roles.patch_slug, self._roles.patch_role_key(role)
+        response = self._directory_get(
+            "/api/v1/directory/users", params={"patch": patch, "patch_role": key}, passthrough=(403,)
+        )
+        if response.status_code in (403, 404):
+            # 403: the Krater app's scopes don't list `patches` yet. 404: the app isn't linked to the patch, or the
+            # patch has no such role. Both are the state before Weave's setup is done, so the app-role list stands.
+            if not self._patch_list_warned:
+                self._patch_list_warned = True
+                logger.warning(
+                    "Weave's directory refused to list patch %r role %r (%s): link the Krater app to the patch, "
+                    "add `patches` to its scopes, and create the role. Listing by app role only.",
+                    patch,
+                    key,
+                    response.status_code,
+                )
             return []
+        return self._user_list(response)
+
+    def _user_list(self, response: httpx.Response) -> list[WeaveUser]:
         data = self._directory_json(response)
         entries = data.get("users") if isinstance(data, dict) else None
         if not isinstance(entries, list):
             raise WeaveUnavailableError("Weave's directory returned a malformed user list")
         return [self._parse_user(entry) for entry in entries]
 
-    def _directory_get(self, path: str, *, params: dict[str, str] | None = None) -> httpx.Response:
+    def _directory_get(
+        self, path: str, *, params: dict[str, str] | None = None, passthrough: tuple[int, ...] = ()
+    ) -> httpx.Response:
+        """A directory GET. 200 and 404 come back, and so does any status in `passthrough`; anything else raises."""
         base = (self._settings.weave_api_base_url or self._settings.weave_issuer).rstrip("/")
         url = f"{base}{path}"
         response = self._authorized_get(url, params)
@@ -215,6 +247,8 @@ class LiveWeaveClient:
             # The token may have been revoked or rotated early: fetch a new one and try once more.
             self._service_tokens.pop(DIRECTORY_SCOPE, None)
             response = self._authorized_get(url, params)
+        if response.status_code in passthrough:
+            return response
         if response.status_code == 403:
             # Not a token problem, so no refetch: the token lacks the `directory` scope, or Weave doesn't
             # let this app use the directory. Only an admin fixing Weave's config helps.

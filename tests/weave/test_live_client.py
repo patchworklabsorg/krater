@@ -71,6 +71,8 @@ class FakeWeave:
         self.valid_tokens: set[str] = set()
         self.expires_in: object = 3600
         self.directory_status: int | None = None
+        # The status the `?patch=&patch_role=` filter answers instead of a list (403 or 404 before Weave's setup).
+        self.patch_filter_status: int | None = None
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -107,6 +109,17 @@ class FakeWeave:
                 return httpx.Response(401, json={"error": "invalid_token"})
             if self.directory_status is not None:
                 return httpx.Response(self.directory_status, json={"error": "boom"})
+            if path == "/api/v1/directory/users" and "patch" in request.url.params:
+                patch, key = request.url.params["patch"], request.url.params.get("patch_role")
+                if self.patch_filter_status is not None:
+                    return httpx.Response(self.patch_filter_status, json={"error": "refused"})
+                if patch != "ganymede" or not key:
+                    return httpx.Response(404, json={"error": "not_found"})
+                users = sorted(
+                    (u for u in self.directory_users.values() if key in (u.get("patches") or {}).get(patch, [])),
+                    key=lambda u: u["sub"],
+                )
+                return httpx.Response(200, json={"users": users})
             if path == "/api/v1/directory/users":
                 role = request.url.params.get("role")
                 if role == "unlinked":
@@ -588,7 +601,8 @@ def test_get_user_reads_patch_roles_from_the_directory_record(
 def test_a_fresh_lookup_sees_a_patch_role_removed(fake_weave: FakeWeave, live_client: LiveWeaveClient) -> None:
     admin = {**DIRECTORY_USER, "roles": [], "patches": {"ganymede": ["krater:admin"]}}
     fake_weave.directory_users["PWLDIR0001"] = admin
-    live_client.get_user("PWLDIR0001")
+    first = live_client.get_user("PWLDIR0001")
+    assert first is not None and GROUP_ADMIN in first.roles
 
     fake_weave.directory_users["PWLDIR0001"] = {**DIRECTORY_USER, "roles": [], "patches": {"ganymede": []}}
     fresh = live_client.get_user("PWLDIR0001", fresh=True)
@@ -605,6 +619,64 @@ def test_list_users_with_role_sends_the_weave_role_key(fake_weave: FakeWeave, li
     assert [u.sub for u in reviewers] == ["PWLDIR0001"]
     list_request = next(r for r in fake_weave.requests if r.url.path == "/api/v1/directory/users")
     assert list_request.url.params["role"] == "reviewer"
+
+
+def _list_requests(fake_weave: FakeWeave) -> list[httpx.Request]:
+    return [r for r in fake_weave.requests if r.url.path == "/api/v1/directory/users"]
+
+
+def test_list_users_with_role_lists_a_patch_only_holder(fake_weave: FakeWeave, live_client: LiveWeaveClient) -> None:
+    fake_weave.directory_users["PWLDIR0003"] = {
+        **DIRECTORY_USER,
+        "sub": "PWLDIR0003",
+        "roles": [],
+        "patches": {"ganymede": ["krater:reviewer"]},
+    }
+
+    reviewers = live_client.list_users_with_role(GROUP_REVIEWER)
+
+    assert [u.sub for u in reviewers] == ["PWLDIR0003"]
+    patch_request = _list_requests(fake_weave)[1]
+    assert dict(patch_request.url.params) == {"patch": "ganymede", "patch_role": "krater:reviewer"}
+
+
+def test_list_users_with_role_is_the_union_deduped_by_sub(fake_weave: FakeWeave, live_client: LiveWeaveClient) -> None:
+    both = {**DIRECTORY_USER, "sub": "PWLDIR0002", "roles": ["admin"], "patches": {"ganymede": ["krater:admin"]}}
+    app_only = {**DIRECTORY_USER, "sub": "PWLDIR0004", "roles": ["admin"]}
+    patch_only = {**DIRECTORY_USER, "sub": "PWLDIR0001", "roles": [], "patches": {"ganymede": ["krater:admin"]}}
+    other_patch = {**DIRECTORY_USER, "sub": "PWLDIR0005", "roles": [], "patches": {"europa": ["krater:admin"]}}
+    for user in (both, app_only, patch_only, other_patch):
+        fake_weave.directory_users[user["sub"]] = user
+
+    admins = live_client.list_users_with_role(GROUP_ADMIN)
+
+    assert [u.sub for u in admins] == ["PWLDIR0001", "PWLDIR0002", "PWLDIR0004"]
+
+
+@pytest.mark.parametrize("status", [403, 404])
+def test_a_refused_patch_filter_falls_back_to_the_app_role_list_and_warns_once(
+    fake_weave: FakeWeave, live_client: LiveWeaveClient, monkeypatch: pytest.MonkeyPatch, status: int
+) -> None:
+    warnings: list[str] = []
+    monkeypatch.setattr(live_module.logger, "warning", lambda msg, *args: warnings.append(msg % args))
+    fake_weave.directory_users["PWLDIR0001"] = DIRECTORY_USER
+    fake_weave.patch_filter_status = status
+
+    first = live_client.list_users_with_role(GROUP_REVIEWER)
+    second = live_client.list_users_with_role(GROUP_REVIEWER)
+
+    assert [u.sub for u in first] == [u.sub for u in second] == ["PWLDIR0001"]
+    assert len(warnings) == 1 and str(status) in warnings[0]
+    # A 403 here is no token problem: no new token is fetched.
+    assert len(_token_requests(fake_weave)) == 1
+
+
+def test_any_other_patch_filter_error_fails_closed(fake_weave: FakeWeave, live_client: LiveWeaveClient) -> None:
+    fake_weave.directory_users["PWLDIR0001"] = DIRECTORY_USER
+    fake_weave.patch_filter_status = 500
+
+    with pytest.raises(WeaveUnavailableError):
+        live_client.list_users_with_role(GROUP_REVIEWER)
 
 
 def test_a_403_fails_closed_without_refetching_the_token(fake_weave: FakeWeave, live_client: LiveWeaveClient) -> None:

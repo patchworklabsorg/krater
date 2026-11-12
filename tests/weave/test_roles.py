@@ -151,3 +151,10 @@ def test_settings_change_the_patch_and_its_keys() -> None:
     assert mapping.krater_roles(roles=[], groups=[], patches={"ganymede": ["krater:admin"]}) == frozenset(
         {GROUP_MEMBER}
     )
+
+
+def test_patch_role_key_names_the_patch_key(mapping: RoleMapping) -> None:
+    assert mapping.patch_role_key(GROUP_REVIEWER) == "krater:reviewer"
+    assert mapping.patch_role_key(GROUP_ADMIN) == "krater:admin"
+    with pytest.raises(ValueError):
+        mapping.patch_role_key(GROUP_MEMBER)

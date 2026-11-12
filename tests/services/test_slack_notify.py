@@ -406,6 +406,20 @@ def test_sync_reviewer_invites_sees_a_reviewer_role_weave_granted_after_the_chan
     assert "U_NEWCOMER" in slack_client.channels[project.slack_channel_id]["members"]
 
 
+def test_sync_reviewer_invites_invites_a_reviewer_by_patch_role_only(
+    db_session: Session, member: Actor, make_actor, weave: StubWeaveClient
+) -> None:
+    project = new_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=5000)
+    slack_client = FakeSlackClient()
+    project.slack_channel_id = slack_client.create_channel("ganymede-rover-test")
+    newcomer = make_actor(groups=frozenset({GROUP_MEMBER}), slack_user_id="U_PATCHREVIEWER")
+    weave.set_roles(newcomer.user.weave_sub, [], patches={"ganymede": ["krater:reviewer"]})
+
+    slack_notify.sync_reviewer_invites(db_session, slack_client, weave)
+
+    assert "U_PATCHREVIEWER" in slack_client.channels[project.slack_channel_id]["members"]
+
+
 class _OneBrokenChannelSlackClient(FakeSlackClient):
     def __init__(self) -> None:
         super().__init__()

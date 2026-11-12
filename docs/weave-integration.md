@@ -43,7 +43,7 @@ everyone Weave lets use the Krater app is a Ganymede member. An admin must add `
 | `GET /api/v1/directory/users/{sub}` | The fresh role check before every action, the verification check before a project's compute starts, the demographics gate before every grant application, and names and emails when a page needs them |
 | The page `/profile/demographics?return_to=<url>` | Where a member answers the demographics form. Weave sends them back to `return_to` after they save |
 | The page `/verification` | Where a member does ID verification. The project and new-job pages link to it |
-| `GET /api/v1/directory/users?role=<key>` | "Everyone with role X", e.g. reviewers to invite to Slack channels |
+| `GET /api/v1/directory/users?role=<key>` and `?patch=<slug>&patch_role=<key>` | "Everyone with role X", e.g. reviewers to invite to Slack channels: the union of both lists |
 | A second, public app for the `krater` CLI; `GET /oauth/token/info` and `GET /oauth/userinfo` with a member's CLI token | Checking the CLI's tokens (docs/compute/cli.md) |
 
 Krater asks for the sign-in scopes `openid profile email groups roles slack patches`.
@@ -76,7 +76,7 @@ content they wrote (proposals, reviews), which belongs to their projects.
    Krater's sign-in request with `invalid_scope`, and the directory leaves out `patches`. Add `quilt` to send events to Quilt
    ([quilt-integration.md](quilt-integration.md)) and `stash` to archive submitted links in Stash
    ([stash-integration.md](stash-integration.md)); each is a client_credentials scope of the same app.
-4. Link the Krater app to the patch `ganymede`. On that patch, a Weave superadmin creates the patch roles
+4. A superadmin links the Krater app to the patch `ganymede` (the Patch field on the app). On that patch, a Weave superadmin creates the patch roles
    `krater:reviewer` and `krater:admin`. Until the follow-up in "Patch roles" ships, the app roles `reviewer` and
    `admin` on the Krater app page still count too.
 5. Give those roles to the reviewer and admin groups (or people) in Weave. Members need no role: the app's access
@@ -140,17 +140,19 @@ flowchart LR
 Deploy order:
 
 1. Weave #288 merges and deploys.
-2. In Weave, add `patches` to the scopes of the Krater app.
-3. Run the Weave import, first as a dry run, then with `APPLY=1`:
+2. In Weave, a superadmin links the Krater app to the patch `ganymede` (the Patch field on the app). The import
+   refuses to run without that link.
+3. In Weave, add `patches` to the scopes of the Krater app.
+4. Run the Weave import, first as a dry run, then with `APPLY=1`:
 
    ```sh
-   bin/rails patches:import_app_roles APP=<krater app> PATCH=ganymede PREFIX=krater ACTOR=<superadmin email> \
-     GROUP_MAP=krater-reviewers:reviewer,krater-admins:admin
-   bin/rails patches:import_app_roles APP=<krater app> PATCH=ganymede PREFIX=krater ACTOR=<superadmin email> \
-     GROUP_MAP=krater-reviewers:reviewer,krater-admins:admin APPLY=1
+   bin/rails patches:import_app_roles APP=<krater app> PATCH=ganymede PREFIX=krater ACTOR=<superadmin email>
+   bin/rails patches:import_app_roles APP=<krater app> PATCH=ganymede PREFIX=krater ACTOR=<superadmin email> APPLY=1
    ```
 
-4. Deploy Krater.
+   Krater needs no `GROUP_MAP`. It reads the group fallback only when `roles` is absent, and it always asks for
+   `roles`.
+5. Deploy Krater.
 
 If Krater deploys before its Weave app lists `patches`, Weave refuses every Krater sign-in request with
 `invalid_scope`. Actions keep working, because the directory only leaves `patches` out.
@@ -158,11 +160,15 @@ If Krater deploys before its Weave app lists `patches`, Weave refuses every Krat
 **While the union holds, removing someone's reviewer or admin access takes both:** remove the app role (or the group)
 and the patch role.
 
+"Everyone with role X" (`list_users_with_role`: reviewer invites to Slack channels, admin keys on boxes through
+`box_access`) is the union too, deduplicated by `sub`. Krater asks Weave's directory by app role
+(`?role=<key>`) and by patch role (`?patch=ganymede&patch_role=krater:<role>`). Until Weave is set up, the patch
+filter answers 403 (the app's scopes don't list `patches`) or 404 (the app isn't linked to the patch, or the patch
+has no such role). Krater then logs one warning and uses the app-role list alone. Any other failure fails closed, as
+the app-role list does.
+
 Follow-up, in a later PR, once the import ran: remove the app roles and the fallback groups from `RoleMapping`, the
-settings and this page, so the patch roles are the only source. Before that, `list_users_with_role` needs a new
-source too. It calls `GET /api/v1/directory/users?role=<key>`, and Weave's filter knows app roles only, so a person
-who holds a role only as a patch role is not listed (no reviewer invite to Slack channels, no admin access to boxes
-through `box_access`). Weave's directory needs a patch role filter first.
+settings, the `?role=` list and this page, so the patch roles are the only source.
 
 ## The directory API
 
@@ -189,7 +195,11 @@ Endpoints:
   scopes list `patches`; Krater reads it as in "Roles".
 - `GET /api/v1/directory/users?role=<key>` (or `?group=<slug>`, which Krater doesn't use) answers
   `{"users": [...]}`, sorted by `sub`. Send exactly one parameter. A role or group that isn't linked to Krater answers
-  404: Krater treats it as an empty list and logs a warning. The filter knows app roles only (see "Patch roles").
+  404: Krater treats it as an empty list and logs a warning.
+- `GET /api/v1/directory/users?patch=<slug>&patch_role=<key>` answers the same `{"users": [...]}` for a patch role:
+  direct holders and active members of a group that holds it. Send `patch` and `patch_role` together, and no `role`
+  or `group`. A 403 means the app's scopes don't list `patches`. A 404 means the app isn't linked to that patch, or
+  the patch has no such role. Krater treats both as an empty list, with one warning (see "Patch roles").
 
 `get_user` answers are cached for 60 seconds for page views only: every state-changing action (`fresh_actor` on
 anything but a GET/HEAD, and Slack clicks) asks with `fresh=True`, which skips the cache. Any other failure (no answer, a 5xx, malformed JSON) raises
@@ -359,7 +369,7 @@ warning. One user
 guardian, `PWLMINORVERIFIED` is a minor with one, and `PWLMEMBERTWO` has no `minor` field. The stub client answers the
 directory lookups from the same fixture with the same `RoleMapping`. `PWLPATCHREVIEWER` is a reviewer through the
 patch role `krater:reviewer` only, and `PWLMEMBERONE` has `patches: {}`. Like Weave, the stub's
-`list_users_with_role` lists by app role, so it leaves `PWLPATCHREVIEWER` out.
+`list_users_with_role` lists by app role and by patch role, so it lists `PWLPATCHREVIEWER` too.
 
 Tests change what Weave says mid-test with `StubWeaveClient.set_roles` (with `patches=` for patch roles), `set_active`, `set_minor`,
 `set_guardian_verified`, `set_verification_status`, `set_demographics_answered`, `remove_user` and `put_user`. The

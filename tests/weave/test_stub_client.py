@@ -58,7 +58,7 @@ def test_exchange_code_rejects_an_unknown_code(stub_client: StubWeaveClient) -> 
 def test_directory_lookups(stub_client: StubWeaveClient) -> None:
     assert stub_client.get_user("does-not-exist") is None
     reviewers = {u.sub for u in stub_client.list_users_with_role(GROUP_REVIEWER)}
-    assert reviewers == {"PWLREVIEWERONE", "PWLREVIEWERTWO", "PWLADMINONE"}
+    assert reviewers == {"PWLREVIEWERONE", "PWLREVIEWERTWO", "PWLADMINONE", "PWLPATCHREVIEWER"}
 
 
 def test_set_roles_and_remove_user_change_later_lookups(stub_client: StubWeaveClient) -> None:
@@ -174,11 +174,11 @@ def test_sign_in_reads_the_patches_field(stub_client: StubWeaveClient) -> None:
     assert identity.roles == frozenset({GROUP_MEMBER, GROUP_REVIEWER})
 
 
-def test_list_users_with_role_lists_by_app_role_only_like_weave(stub_client: StubWeaveClient) -> None:
-    # Weave's `?role=<key>` filter knows app roles only, so a patch-only reviewer is not listed.
+def test_list_users_with_role_lists_a_patch_only_holder(stub_client: StubWeaveClient) -> None:
+    # Like the live client, which asks Weave by app role and by patch role.
     reviewers = {u.sub for u in stub_client.list_users_with_role(GROUP_REVIEWER)}
 
-    assert "PWLPATCHREVIEWER" not in reviewers
+    assert "PWLPATCHREVIEWER" in reviewers
 
 
 def test_set_roles_changes_patches_only_when_asked(stub_client: StubWeaveClient) -> None:

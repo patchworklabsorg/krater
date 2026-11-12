@@ -133,13 +133,9 @@ class StubWeaveClient:
         return None if user is None else self._record(user)
 
     def list_users_with_role(self, role: str) -> list[WeaveUser]:
-        # Like Weave's `?role=<key>`, this lists by app role (and, as before, the group fallback), not by patch role:
-        # a user who holds the role only in `patches` is left out, as Weave leaves them out.
-        return [
-            self._record(user)
-            for user in self._users_by_sub.values()
-            if role in self._mapping.krater_roles(roles=user.roles, groups=user.groups)
-        ]
+        # The union of the app-role list and the patch-role list, as the live client asks Weave for both.
+        records = (self._record(user) for user in self._users_by_sub.values())
+        return [record for record in records if role in record.roles]
 
     def quilt_token(self) -> str:
         self.quilt_token_requests += 1

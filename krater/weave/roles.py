@@ -94,6 +94,13 @@ class RoleMapping:
         except KeyError:
             raise ValueError(f"no Weave role key for Krater role {krater_role!r}") from None
 
+    def patch_role_key(self, krater_role: str) -> str:
+        """The Weave patch role key for a Krater role name, e.g. `ganymede:reviewer` -> `krater:reviewer`."""
+        try:
+            return self.patch_role_keys[krater_role]
+        except KeyError:
+            raise ValueError(f"no Weave patch role key for Krater role {krater_role!r}") from None
+
     def _patch_keys(self, patches: object) -> frozenset[str]:
         """The keys the user holds in Krater's patch, or none if `patches` is missing or malformed."""
         if not isinstance(patches, Mapping):

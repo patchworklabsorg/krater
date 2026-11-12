@@ -34,7 +34,8 @@ class WeaveClient(Protocol):
         ...
 
     def list_users_with_role(self, role: str) -> list[WeaveUser]:
-        """Every user who holds a Krater role (a `ganymede:*` name, e.g. `ganymede:reviewer`)."""
+        """Every user who holds a Krater role (a `ganymede:*` name, e.g. `ganymede:reviewer`), as an app role or as
+        a patch role."""
         ...
 
     def quilt_token(self) -> str:
