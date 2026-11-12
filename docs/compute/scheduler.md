@@ -36,7 +36,7 @@ workspace sync, and step 5 starts and searches for nothing: queued jobs say why.
      container started counts as one too;
    - rented with a refusal (Vast answered the create `success: false` but made the instance) and stopped → dropped
      on the pass that finds it, without waiting out the grace or counting towards `MAX_HOST_FAILURES`: the job is
-     requeued in its place (on staging, 2026-11-12, all such creates came from three offers, again and again). A
+     requeued in its place (seen on staging, 2026-11-12, at several bid levels; cause unknown, not the image). A
      machine dropped either way is kept from every job for 6 hours (`BAD_HOST_WINDOW`);
    - never running within 30 minutes → job failed (check the image), machine destroyed;
    - stopped by its own runner after `runner_self_stop_minutes` without Krater (see [runner.md](runner.md)) → a
