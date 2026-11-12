@@ -935,8 +935,9 @@ class Scheduler:
                 _finish(
                     job,
                     ComputeJobState.FAILED,
-                    "Krater's runner never started on the machine. The image needs a POSIX shell and one of curl, "
-                    "wget or Python.",
+                    f"Krater's runner didn't start within {policy.runner_start_minutes} minutes. The machine may not "
+                    "have been able to download it (try again), or the image lacks a POSIX shell and curl, wget or "
+                    "Python.",
                     now=self.now,
                 )
                 self._destroy(row, "runner never started")
