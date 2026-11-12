@@ -122,28 +122,38 @@ func (s *Syncer) scanWorkspace() ([]manifestEntry, error) {
 }
 
 // pushWorkspace saves the workspace: changed files, then the manifest, then removes from storage what the
-// manifest no longer names. Until a restore has completed it saves files only: a manifest written over a workspace
-// that's still missing stored files would drop them.
+// manifest no longer names.
+//
+// The manifest names only what storage holds: a file whose upload failed keeps its stored entry, if it has one. And
+// until a restore has completed it keeps every stored entry too, since the files still missing here aren't deleted,
+// only not back yet. Only a save that uploaded everything over a complete restore removes anything from storage.
 func (s *Syncer) pushWorkspace(ctx context.Context) (int, error) {
 	if !s.restored {
 		if _, err := s.restore(ctx, true); err != nil {
-			logf("the saved /workspace still isn't fully restored, so it isn't replaced: %v", err)
+			logf("the saved /workspace still isn't fully restored, so nothing is removed from storage: %v", err)
 		}
 	}
 	entries, err := s.scanWorkspace()
 	if err != nil {
 		return 0, err
 	}
+	stored := map[string]manifestEntry{}
+	for _, e := range s.storedEntries {
+		stored[e.Path] = e
+	}
 	pushed := 0
 	var firstErr error
 	current := map[string]bool{}
+	manifest := make([]manifestEntry, 0, len(entries))
 	for _, e := range entries {
 		if e.Type != "file" {
+			manifest = append(manifest, e)
 			continue
 		}
 		current[e.Path] = true
 		stamp := fileStamp{e.Size, e.MTime}
 		if prev, ok := s.uploaded[e.Path]; ok && prev == stamp {
+			manifest = append(manifest, e)
 			continue
 		}
 		if err := s.uploadFile(ctx, e.Stored, filepath.Join(s.Dir, filepath.FromSlash(e.Path)), e.Size); err != nil {
@@ -151,9 +161,13 @@ func (s *Syncer) pushWorkspace(ctx context.Context) (int, error) {
 			if firstErr == nil {
 				firstErr = fmt.Errorf("uploading %s: %w", e.Path, err)
 			}
+			if old, ok := stored[e.Path]; ok && old.Type == "file" {
+				manifest = append(manifest, old)
+			}
 			continue
 		}
 		s.uploaded[e.Path] = stamp
+		manifest = append(manifest, e)
 		pushed++
 	}
 	for path := range s.uploaded {
@@ -161,30 +175,49 @@ func (s *Syncer) pushWorkspace(ctx context.Context) (int, error) {
 			delete(s.uploaded, path)
 		}
 	}
-	if firstErr != nil {
-		return pushed, firstErr
-	}
+	complete := firstErr == nil && s.restored
 	if !s.restored {
-		return pushed, errors.New("the saved /workspace couldn't be restored, so its manifest isn't replaced")
+		if s.storedEntries == nil && !s.manifestRead {
+			// The stored manifest couldn't be read: one written now would replace it without its entries. The
+			// uploaded files are stored; the next save over a complete restore names them.
+			return pushed, errors.New("the saved /workspace couldn't be read, so its manifest isn't replaced")
+		}
+		listed := map[string]bool{}
+		for _, e := range manifest {
+			listed[e.Path] = true
+		}
+		for _, e := range s.storedEntries {
+			if !listed[e.Path] {
+				manifest = append(manifest, e)
+			}
+		}
+		sort.Slice(manifest, func(i, j int) bool { return manifest[i].Path < manifest[j].Path })
 	}
-	data, err := json.Marshal(workspaceManifest{Version: 1, Entries: entries})
+	data, err := json.Marshal(workspaceManifest{Version: 1, Entries: manifest})
 	if err != nil {
 		return pushed, err
 	}
-	if bytes.Equal(data, s.lastManifest) {
-		return pushed, nil
+	if !bytes.Equal(data, s.lastManifest) {
+		if err := s.uploadBytes(ctx, manifestName, data); err != nil {
+			return pushed, fmt.Errorf("uploading the workspace manifest: %w", err)
+		}
+		s.lastManifest, s.storedEntries, s.pruned = data, manifest, false
 	}
-	if err := s.uploadBytes(ctx, manifestName, data); err != nil {
-		return pushed, fmt.Errorf("uploading the workspace manifest: %w", err)
+	if firstErr != nil {
+		return pushed, firstErr
 	}
-	s.lastManifest = data
-	s.pruneStored(ctx, entries)
+	if !complete {
+		return pushed, errors.New("the saved /workspace isn't fully restored yet, so nothing was removed from storage")
+	}
+	if !s.pruned {
+		s.pruned = s.pruneStored(ctx, manifest)
+	}
 	return pushed, nil
 }
 
 // pruneStored removes stored files the manifest doesn't name: deleted on the machine, or renamed. A failure only
 // leaves them in storage, where a restore ignores them.
-func (s *Syncer) pruneStored(ctx context.Context, entries []manifestEntry) {
+func (s *Syncer) pruneStored(ctx context.Context, entries []manifestEntry) bool {
 	keep := map[string]bool{manifestName: true}
 	for _, e := range entries {
 		if e.Type == "file" {
@@ -194,7 +227,7 @@ func (s *Syncer) pruneStored(ctx context.Context, entries []manifestEntry) {
 	remote, err := s.API.List(ctx, s.Area)
 	if err != nil {
 		logf("couldn't list the stored workspace to remove deleted files: %v", err)
-		return
+		return false
 	}
 	var stale []string
 	for _, f := range remote {
@@ -206,12 +239,13 @@ func (s *Syncer) pruneStored(ctx context.Context, entries []manifestEntry) {
 		end := min(start+deleteBatch, len(stale))
 		if err := s.API.Delete(ctx, s.Area, stale[start:end]); err != nil {
 			logf("removing %d deleted files from storage failed: %v", end-start, err)
-			return
+			return false
 		}
 	}
 	if len(stale) > 0 {
 		logf("removed %d deleted workspace files from storage", len(stale))
 	}
+	return true
 }
 
 // restore brings the stored workspace back. With a manifest it recreates folders, files (with their permissions
@@ -228,8 +262,21 @@ func (s *Syncer) restore(ctx context.Context, onlyMissing bool) (int, error) {
 	}
 	stored, ok := urls[manifestName]
 	if !ok {
+		// Saved by an older runner, or nothing saved yet: plain files. A failed restore here still lets a save
+		// write a manifest, since what isn't back yet is kept by naming every stored file in it below.
 		n, err := s.restoreFiles(ctx, remote, onlyMissing)
 		s.restored = err == nil
+		if !s.restored {
+			s.manifestRead = true
+			s.storedEntries = nil
+			for _, f := range remote {
+				if storedNameFor(f.Name) == f.Name {
+					s.storedEntries = append(s.storedEntries, manifestEntry{
+						Path: f.Name, Type: "file", Mode: 0o644, Size: f.Size, Stored: f.Name,
+					})
+				}
+			}
+		}
 		return n, err
 	}
 	data, err := s.fetch(ctx, stored.URL)
@@ -240,6 +287,7 @@ func (s *Syncer) restore(ctx context.Context, onlyMissing bool) (int, error) {
 	if err := json.Unmarshal(data, &m); err != nil {
 		return 0, fmt.Errorf("reading the workspace manifest: %w", err)
 	}
+	s.storedEntries, s.manifestRead = m.Entries, true
 	restored := 0
 	var firstErr error
 	fail := func(path string, err error) {
@@ -294,8 +342,10 @@ func (s *Syncer) restore(ctx context.Context, onlyMissing bool) (int, error) {
 				continue
 			}
 			os.Chmod(local, e.Mode)
-			mtime := time.Unix(0, e.MTime)
-			os.Chtimes(local, mtime, mtime)
+			if e.MTime != 0 { // 0: named from an older save, with no time
+				mtime := time.Unix(0, e.MTime)
+				os.Chtimes(local, mtime, mtime)
+			}
 			if info, err := os.Stat(local); err == nil {
 				s.uploaded[e.Path] = stampOf(info) // as stored here: some filesystems round the time
 			}
@@ -325,7 +375,7 @@ func (s *Syncer) restore(ctx context.Context, onlyMissing bool) (int, error) {
 	}
 	s.restored = firstErr == nil
 	if s.restored {
-		s.lastManifest = nil // written again on the next save, which also prunes
+		s.lastManifest, s.pruned = nil, false // written again on the next save, which also prunes
 	}
 	return restored, firstErr
 }

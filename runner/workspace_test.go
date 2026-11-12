@@ -188,21 +188,110 @@ func TestASaveAfterAnIncompleteRestoreRemovesNothing(t *testing.T) {
 		t.Errorf("manifest %v", paths)
 	}
 
-	// Still missing: new files are saved, the manifest and storage are left alone.
+	// Still missing on the next box: its new files are saved and named next to everything stored, nothing is
+	// removed, and the save isn't reported as complete.
 	f.unreadable = "workspace/model.pt"
 	c := t.TempDir()
 	sc := workspaceSyncer(f, c)
 	sc.Restore(ctx)
-	manifest := string(f.objects["workspace/"+manifestName])
+	os.Remove(filepath.Join(c, "new.txt")) // looks deleted here, but the restore didn't finish
 	write(t, filepath.Join(c, "other.txt"), "other", 0o644)
 	if _, err := sc.Push(ctx); err == nil {
 		t.Error("a save over an incomplete restore said it was complete")
 	}
-	if string(f.objects["workspace/"+manifestName]) != manifest || len(f.deleted) != 0 {
-		t.Errorf("manifest replaced or files deleted (%v)", f.deleted)
+	if len(f.deleted) != 0 {
+		t.Errorf("deleted %v", f.deleted)
 	}
-	if string(f.objects["workspace/other.txt"]) != "other" {
-		t.Errorf("other.txt wasn't saved: %v", keys(f.objects))
+	paths = map[string]bool{}
+	for _, e := range storedManifest(t, f).Entries {
+		paths[e.Path] = true
+	}
+	if !paths["model.pt"] || !paths["new.txt"] || !paths["other.txt"] {
+		t.Errorf("manifest %v", paths)
+	}
+
+	// The box after that, with storage back, gets all of it, and its first save deletes nothing.
+	f.unreadable = ""
+	d := t.TempDir()
+	sd := workspaceSyncer(f, d)
+	if _, err := sd.Restore(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sd.Push(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{"model.pt": "weights", "new.txt": "new", "other.txt": "other"} {
+		if got, _ := os.ReadFile(filepath.Join(d, name)); string(got) != want {
+			t.Errorf("%s = %q", name, got)
+		}
+	}
+	if len(f.deleted) != 0 {
+		t.Errorf("deleted %v", f.deleted)
+	}
+}
+
+// A save where one upload failed still names the files it stored, and the failed file's last stored copy.
+func TestAPartlyFailedSaveStillNamesWhatItStored(t *testing.T) {
+	f := newFakeKrater(t)
+	ctx := context.Background()
+	a := t.TempDir()
+	write(t, filepath.Join(a, "big.bin"), "v1", 0o644)
+	sa := workspaceSyncer(f, a)
+	sa.Restore(ctx)
+	if _, err := sa.Push(ctx); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(a, "big.bin"), "v2 refused", 0o644)
+	write(t, filepath.Join(a, "small.txt"), "stored", 0o644)
+	f.refuse = "big.bin"
+	if _, err := sa.Push(ctx); err == nil {
+		t.Fatal("a save with a refused file said it was complete")
+	}
+
+	f.refuse = ""
+	b := t.TempDir()
+	if _, err := workspaceSyncer(f, b).Restore(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{"big.bin": "v1", "small.txt": "stored"} {
+		if got, _ := os.ReadFile(filepath.Join(b, name)); string(got) != want {
+			t.Errorf("%s = %q", name, got)
+		}
+	}
+}
+
+// An older save without a manifest, restored only in part: a save names the stored files it hasn't brought back.
+func TestAnIncompleteRestoreOfAnOlderSaveKeepsItsFiles(t *testing.T) {
+	f := newFakeKrater(t)
+	ctx := context.Background()
+	f.objects["workspace/a.txt"] = []byte("a")
+	f.objects["workspace/b.txt"] = []byte("b")
+	f.unreadable = "workspace/b.txt"
+	c := t.TempDir()
+	sc := workspaceSyncer(f, c)
+	sc.Restore(ctx)
+	write(t, filepath.Join(c, "c.txt"), "c", 0o644)
+	sc.Push(ctx)
+
+	f.unreadable = ""
+	d := t.TempDir()
+	sd := workspaceSyncer(f, d)
+	if _, err := sd.Restore(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sd.Push(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"a.txt", "b.txt", "c.txt"} {
+		if got, _ := os.ReadFile(filepath.Join(d, name)); string(got) != name[:1] {
+			t.Errorf("%s = %q", name, got)
+		}
+		if info, err := os.Stat(filepath.Join(d, name)); err != nil || info.Mode().Perm() != 0o644 {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if len(f.deleted) != 0 {
+		t.Errorf("deleted %v", f.deleted)
 	}
 }
 

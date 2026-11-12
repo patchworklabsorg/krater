@@ -27,6 +27,11 @@ type Syncer struct {
 	// With Manifest: the manifest last stored, and whether the stored workspace was fully restored.
 	lastManifest []byte
 	restored     bool
+	// With Manifest: the entries of the manifest last read or stored (manifestRead: one was read or there was none),
+	// and whether storage has been pruned to it.
+	storedEntries []manifestEntry
+	manifestRead  bool
+	pruned        bool
 	// One push at a time: the timed sync and a save Krater asks for can overlap.
 	mu sync.Mutex
 }

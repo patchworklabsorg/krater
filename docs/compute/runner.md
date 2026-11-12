@@ -150,11 +150,12 @@ workspace (`runner/workspace.go`) also stores a manifest, `.krater-workspace.jso
 with its type (file, folder or symlink), permission bits (with setuid, setgid and sticky), size, modification time
 in nanoseconds and a symlink's target. Owners aren't kept: a box runs as root.
 
-- **Saving** walks `/workspace` without following symlinks and uploads files whose size or modification time
-  changed. Only when every upload succeeded does it store the manifest (when it changed), then delete from storage
-  the files the manifest no longer names, with `POST /runner/v1/files/workspace/delete {"names": [...]}` in batches
-  of 500. Krater allows that endpoint only for a box's workspace; a failed delete only leaves files in storage, where
-  a restore ignores them.
+- **Saving** walks `/workspace` without following symlinks, uploads files whose size or modification time changed,
+  and stores the manifest when it changed. The manifest names only what storage holds: a file whose upload failed
+  keeps its last stored entry. Only a save that uploaded everything, over a complete restore, then deletes from
+  storage the files the manifest no longer names, with `POST /runner/v1/files/workspace/delete {"names": [...]}` in
+  batches of 500. Krater allows that endpoint only for a box's workspace; a failed delete only leaves files in
+  storage, where a restore ignores them.
 - **Names:** a path Krater's stored-name rule refuses (letters, digits, spaces and `. _ - = + , @ ~`), or a top-level
   path starting `.krater-`, is stored as `.krater-files/<40 hex characters of its sha256>`. The manifest maps it back.
 - **Restoring** makes the folders, then each file that's missing or older here than in the manifest, with its
@@ -162,8 +163,10 @@ in nanoseconds and a symlink's target. Owners aren't kept: a box runs as root.
   file already on the machine wins, so a box resumed on its own machine after an emergency stop keeps its work. A
   path under a folder that is a symlink here is skipped, so a restore can't write outside `/workspace`.
 - **Nothing is removed after an incomplete restore.** If the list, the manifest or any file couldn't be fetched, the
-  next save first tries the restore again (only files that are missing). If that still fails it uploads changed files
-  but keeps the stored manifest and deletes nothing, and reports the save as failed, so Krater doesn't confirm it.
+  next save first tries the restore again (only files that are missing). If that still fails, the save uploads
+  changed files and stores a manifest that keeps every stored entry next to them (what isn't back yet isn't
+  deleted), removes nothing, and reports the save as failed, so Krater doesn't confirm it. If the stored manifest
+  couldn't be read at all, the save stores no manifest.
 - A workspace saved before the manifest (runner before 2026-11-12) restores as plain files; the first save then
   writes a manifest.
 
