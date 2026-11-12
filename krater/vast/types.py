@@ -273,6 +273,9 @@ class CreateInstance:
     onstart: str | None = None
     args: tuple[str, ...] | None = None
     runtype: str | None = None
+    #: Ask Vast to refuse, rather than create a stopped instance, when the machine can't start it at once. Vast's
+    #: default is false for an interruptible rental (`cancel_unavail` in its create reference).
+    cancel_unavail: bool = False
 
     def __post_init__(self) -> None:
         if self.onstart is not None and len(self.onstart) > ONSTART_MAX_CHARS:
@@ -299,6 +302,8 @@ class CreateInstance:
             body["args"] = list(self.args)
         if self.runtype is not None:
             body["runtype"] = self.runtype
+        if self.cancel_unavail:
+            body["cancel_unavail"] = True
         return body
 
     def __repr__(self) -> str:

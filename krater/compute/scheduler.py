@@ -111,6 +111,13 @@ RUNNER_NOT_STARTED = "runner never started"
 NOT_STARTED = "never started by the provider"
 #: How long a machine that failed one job is kept from every job (a host_failed one is kept from its own job for good).
 BAD_HOST_WINDOW = timedelta(hours=6)
+#: `destroy_reason` of a rental the provider refused because the machine couldn't start it at once (Vast's 410
+#: `no_such_ask`, which a bid sent with `cancel_unavail` gets instead of a stopped instance). Nothing was made. The same
+#: answer comes when someone else rented the offer first, so the machine is kept from every job for less time.
+UNAVAILABLE = "the provider couldn't start it"
+UNAVAILABLE_WINDOW = timedelta(hours=1)
+#: Vast's error code for an offer it can't rent out now.
+NO_SUCH_ASK = "no_such_ask"
 MICROUSD_PER_CENT = 10_000
 #: A box is idle while its GPU use stays under this (percent), and its CPU use, when reported, under that.
 IDLE_GPU_PERCENT = 5
@@ -852,9 +859,17 @@ class Scheduler:
         job found the same broken hosts for itself, a few minutes apiece."""
         stmt = sa.select(ComputeInstance.provider_machine_id).where(
             self._ours(),
-            ComputeInstance.destroy_reason.in_([HOST_FAILED, NOT_STARTED]),
             ComputeInstance.provider_machine_id.is_not(None),
-            ComputeInstance.destroy_requested_at >= self.now - BAD_HOST_WINDOW,
+            sa.or_(
+                sa.and_(
+                    ComputeInstance.destroy_reason.in_([HOST_FAILED, NOT_STARTED]),
+                    ComputeInstance.destroy_requested_at >= self.now - BAD_HOST_WINDOW,
+                ),
+                sa.and_(
+                    ComputeInstance.destroy_reason == UNAVAILABLE,
+                    ComputeInstance.created_at >= self.now - UNAVAILABLE_WINDOW,
+                ),
+            ),
         )
         return set(self.session.scalars(stmt))
 
@@ -1701,6 +1716,8 @@ class Scheduler:
                 )
                 return True
             row.state = ComputeInstanceState.CREATE_FAILED
+            if _unavailable(exc):
+                row.destroy_reason = UNAVAILABLE  # nothing to destroy: this keeps the machine out of the next search
             queued_at, wait_started_at = job.queued_at, job.wait_started_at
             _requeue(self.session, job, "The offer was taken before Krater could rent it; trying again.", now=self.now)
             # Keep its place in the queue and its wait: it never ran.
@@ -1728,6 +1745,13 @@ class Scheduler:
         )
         self.result.rented.append(label)
         return False
+
+
+def _unavailable(exc: ProviderRequestFailedError) -> bool:
+    """Whether a refused create means the offer can't be rented now. Vast's create reference gives this as 410
+    `no_such_ask`, and as 404 `invalid_args` with "no_such_ask" in the message; it hasn't been seen live yet, so any of
+    the three counts. Left unmarked, the machine stays in the search, and the job would ask for it every pass."""
+    return exc.status_code == 410 or exc.error == NO_SUCH_ASK or NO_SUCH_ASK in str(exc)
 
 
 def run_pass(

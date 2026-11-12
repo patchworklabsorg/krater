@@ -37,7 +37,9 @@ workspace sync, and step 5 starts and searches for nothing: queued jobs say why.
    - rented with a refusal (Vast answered the create `success: false` but made the instance) and stopped → dropped
      on the pass that finds it, without waiting out the grace or counting towards `MAX_HOST_FAILURES`: the job is
      requeued in its place (seen on staging, 2026-11-12, at several bid levels; cause unknown, not the image). A
-     machine dropped either way is kept from every job for 6 hours (`BAD_HOST_WINDOW`);
+     machine dropped either way is kept from every job for 6 hours (`BAD_HOST_WINDOW`). Bids are now sent with
+     `cancel_unavail`, so Vast refuses such a rental instead (410 `no_such_ask`, nothing made): the job is requeued
+     in its place and the machine kept from every job for an hour (`UNAVAILABLE`, `UNAVAILABLE_WINDOW`);
    - never running within 30 minutes → job failed (check the image), machine destroyed;
    - running, but Krater's runner hasn't reported within the runner start deadline (`runner_start_minutes`, default
      10) → the machine is destroyed and the job requeued onto another (`RUNNER_NOT_STARTED`; on staging, 2026-11-12, a

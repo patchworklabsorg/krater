@@ -24,5 +24,14 @@ def test_a_box_runs_the_bootstrap_as_vasts_ssh_startup_script() -> None:
     assert request.bid_price is None
 
 
+def test_a_bid_asks_vast_to_refuse_rather_than_park_a_stopped_instance() -> None:
+    """Staging, 2026-11-12: with Vast's default, bids its machines couldn't start were made anyway and left stopped."""
+    for box in (False, True):
+        bid = create_request(_launch(bid_price=Decimal("0.055"), box=box)).to_body()
+        on_demand = create_request(_launch(box=box)).to_body()
+        assert bid["cancel_unavail"] is True
+        assert "cancel_unavail" not in on_demand
+
+
 def test_a_launch_never_shows_its_environment() -> None:
     assert "secret" not in repr(_launch(env={"KRATER_JOB_TOKEN": "secret"}))
