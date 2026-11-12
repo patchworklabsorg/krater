@@ -96,6 +96,13 @@ HOST_START_GRACE = timedelta(minutes=5)
 HOST_FAILED = "container never started"
 #: Machines a job may lose this way before it fails: by then the fault is more likely the job's own.
 MAX_HOST_FAILURES = 3
+#: `destroy_reason` of a machine the provider created but never started: Vast answered the rental with `success: false`
+#: and an instance id, and left the instance stopped. On staging (2026-11-12) all seven such creates came from the same
+#: three offers, again and again, while other bids at the same price ran within a minute: the host's doing, not the
+#: price or the image. It's dropped at once, and doesn't count towards MAX_HOST_FAILURES.
+NOT_STARTED = "never started by the provider"
+#: How long a machine that failed one job is kept from every job (a host_failed one is kept from its own job for good).
+BAD_HOST_WINDOW = timedelta(hours=6)
 MICROUSD_PER_CENT = 10_000
 #: A box is idle while its GPU use stays under this (percent), and its CPU use, when reported, under that.
 IDLE_GPU_PERCENT = 5
@@ -560,6 +567,14 @@ class Scheduler:
             row.state is ComputeInstanceState.PROVISIONING
             and seen.phase in (Phase.STOPPED, Phase.INTERRUPTED)
             and row.runner_starts == 0
+            and self._create_was_refused(row)
+        ):
+            self._drop_unstarted(row, job, seen)
+            return
+        if (
+            row.state is ComputeInstanceState.PROVISIONING
+            and seen.phase in (Phase.STOPPED, Phase.INTERRUPTED)
+            and row.runner_starts == 0
             and self.now - row.created_at >= HOST_START_GRACE
         ):
             self._give_up_on_host(row, job, seen)
@@ -785,6 +800,50 @@ class Scheduler:
             ComputeInstance.provider_machine_id.is_not(None),
         )
         return set(self.session.scalars(stmt))
+
+    def _bad_machines(self) -> set[str]:
+        """The machines that failed any job in the last BAD_HOST_WINDOW: no job is rented onto them. Without this, each
+        job found the same broken hosts for itself, a few minutes apiece."""
+        stmt = sa.select(ComputeInstance.provider_machine_id).where(
+            self._ours(),
+            ComputeInstance.destroy_reason.in_([HOST_FAILED, NOT_STARTED]),
+            ComputeInstance.provider_machine_id.is_not(None),
+            ComputeInstance.destroy_requested_at >= self.now - BAD_HOST_WINDOW,
+        )
+        return set(self.session.scalars(stmt))
+
+    def _create_was_refused(self, row: ComputeInstance) -> bool:
+        """Whether the provider answered `row`'s create with a refusal yet made the machine (found by its label)."""
+        stmt = sa.select(ComputeEvent.id).where(
+            ComputeEvent.instance_id == row.id,
+            ComputeEvent.kind == "create_unconfirmed",
+            ComputeEvent.payload["refused"].as_boolean().is_(True),
+        )
+        return self.session.scalar(stmt.limit(1)) is not None
+
+    def _drop_unstarted(self, row: ComputeInstance, job: ComputeJob, seen: Instance) -> None:
+        """The provider refused the rental, made the machine anyway and left it stopped: try another machine now,
+        rather than after HOST_START_GRACE. The job keeps its place, and this doesn't count against it: its container
+        never had a chance to run."""
+        _event(
+            self.session,
+            job,
+            "not_started",
+            f"{self.provider.title} never started instance {row.provider_instance_id} "
+            f"({seen.status or 'no status'}); trying another machine.",
+            now=self.now,
+            instance=row,
+            provider_status=seen.status,
+        )
+        if self._destroy(row, NOT_STARTED) and self._still_active(job):
+            queued_at, wait_started_at = job.queued_at, job.wait_started_at
+            _requeue(
+                self.session,
+                job,
+                f"{self.provider.title} didn't start the machine. Waiting for another machine.",
+                now=self.now,
+            )
+            job.queued_at, job.wait_started_at = queued_at, wait_started_at
 
     def _give_up_on_host(self, row: ComputeInstance, job: ComputeJob, seen: Instance) -> None:
         """The machine was rented but its container never ran: the host's fault (a pull of the same image works
@@ -1302,7 +1361,7 @@ class Scheduler:
         if searched is None:
             return False  # paced, or out of quota: it keeps its reason
         pace_key, found = searched
-        failed = self._failed_machines(job)
+        failed = self._failed_machines(job) | self._bad_machines()
         if failed:
             found = [offer for offer in found if offer.machine_id not in failed]
         digest, _ = self._image_for(job)
@@ -1567,6 +1626,7 @@ class Scheduler:
                     now=self.now,
                     instance=row,
                     error=exc.error,
+                    refused=True,
                 )
                 return True
             row.state = ComputeInstanceState.CREATE_FAILED
