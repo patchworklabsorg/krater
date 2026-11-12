@@ -130,7 +130,7 @@ func main() {
 		net.Load()
 	}
 	netSample = net.Sample
-	code, err := Run(context.Background(), cfg, &http.Client{Timeout: 60 * time.Second}, &http.Client{}, nvidiaSMI)
+	code, err := Run(context.Background(), cfg, &http.Client{Timeout: 60 * time.Second}, storageClient(), nvidiaSMI)
 	if err != nil {
 		logf("%v", err)
 	}
@@ -145,6 +145,42 @@ func main() {
 
 // Run does the whole job and returns the command's exit code. `api` and `storage` are separate clients: storage
 // requests can take far longer than API calls.
+// storageClient is the HTTP client for presigned storage URLs: Go's default transport, keeping as many idle
+// connections to storage as files go up or down at once (the default keeps 2, so most transfers would open a new
+// TLS connection).
+func storageClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConnsPerHost = transferWorkers
+	return &http.Client{Transport: transport}
+}
+
+// whileRestoring runs fn, sending a heartbeat every `every` meanwhile: restoring thousands of files can take longer
+// than Krater waits for a heartbeat (heartbeat_timeout_minutes), and it would take the runner for lost.
+func whileRestoring(ctx context.Context, api *API, every time.Duration, fn func()) {
+	done := make(chan struct{})
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		ticker := time.NewTicker(every)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if _, err := api.HeartbeatReply(ctx, map[string]any{"phase": "restoring"}); err != nil {
+					logf("heartbeat while restoring failed: %v", err)
+				}
+			}
+		}
+	}()
+	fn()
+	close(done)
+	<-stopped
+}
+
 func Run(ctx context.Context, cfg Config, apiHTTP, storageHTTP *http.Client, gpu func() (float64, bool)) (int, error) {
 	api := &API{BaseURL: cfg.RunnerURL, Token: cfg.Token, HTTP: apiHTTP}
 	if cfg.SelfStop != nil {
@@ -172,14 +208,20 @@ func Run(ctx context.Context, cfg Config, apiHTTP, storageHTTP *http.Client, gpu
 	}
 	checkpoints := NewSyncer(api, "checkpoints", cfg.CheckpointDir, storageHTTP)
 	outputs := NewSyncer(api, "outputs", cfg.OutputDir, storageHTTP)
-	if n, err := checkpoints.Restore(ctx); err != nil {
-		logf("restoring checkpoints failed: %v", err)
-	} else if n > 0 {
-		logf("restored %d checkpoint files", n)
-	}
+	beatEvery := seconds(info.HeartbeatSeconds, 60)
+	whileRestoring(ctx, api, beatEvery, func() {
+		if n, err := checkpoints.Restore(ctx); err != nil {
+			logf("restoring checkpoints failed: %v", err)
+		} else if n > 0 {
+			logf("restored %d checkpoint files", n)
+		}
+	})
 	if info.Inputs {
 		// The job asked for project inputs: without them it would run (and bill) for nothing, so it fails instead.
-		if code, err := restoreInputs(ctx, api, &cfg, storageHTTP); err != nil {
+		var code int
+		var err error
+		whileRestoring(ctx, api, beatEvery, func() { code, err = restoreInputs(ctx, api, &cfg, storageHTTP) })
+		if err != nil {
 			return code, err
 		}
 	}
@@ -205,11 +247,13 @@ func Run(ctx context.Context, cfg Config, apiHTTP, storageHTTP *http.Client, gpu
 		cfg.WorkspaceDir = workspaceDir
 		workspace := NewSyncer(api, "workspace", cfg.WorkspaceDir, storageHTTP)
 		workspace.Manifest = true
-		if n, err := workspace.Restore(ctx); err != nil {
-			logf("restoring /workspace failed: %v", err)
-		} else if n > 0 {
-			logf("restored %d workspace files", n)
-		}
+		whileRestoring(ctx, api, beatEvery, func() {
+			if n, err := workspace.Restore(ctx); err != nil {
+				logf("restoring /workspace failed: %v", err)
+			} else if n > 0 {
+				logf("restored %d workspace files", n)
+			}
+		})
 		runBox(ctx, api, info, workspace, gpu, cfg.ProcNet, cfg.Home)
 		return 0, nil
 	}

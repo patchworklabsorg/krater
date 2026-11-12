@@ -147,6 +147,26 @@ async def begin_upload(area: str, request: Request, db_session: Annotated[Sessio
     return _files(request, db_session, _begin)
 
 
+@router.post("/files/{area}/upload-batch")
+async def begin_uploads(area: str, request: Request, db_session: Annotated[Session, Depends(get_session)]):
+    body = await _body(request)
+
+    def _begin(instance: ComputeInstance) -> dict:
+        uploads = runner_api.begin_uploads(
+            db_session,
+            get_compute_store(),
+            instance,
+            area,
+            body.get("files"),
+            quota_bytes=compute_settings.effective_policy(db_session, instance.job.project).storage_quota_gb * 1024**3,
+            now=_now(),
+        )
+        db_session.commit()  # the reservations, and the project's row lock with them
+        return {"uploads": uploads}
+
+    return _files(request, db_session, _begin)
+
+
 @router.post("/files/{area}/complete")
 async def complete_upload(area: str, request: Request, db_session: Annotated[Session, Depends(get_session)]):
     body = await _body(request)

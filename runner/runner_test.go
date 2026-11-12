@@ -55,6 +55,8 @@ type fakeKrater struct {
 	mu         sync.Mutex
 	objects    map[string][]byte // "area/name" -> content
 	deleted    []string          // names the runner asked to delete
+	batches    int               // upload-batch calls
+	singles    int               // one-file upload calls
 	multipart  map[string]map[int][]byte
 	heartbeats []map[string]any
 	exitCodes  []int
@@ -147,27 +149,22 @@ func (f *fakeKrater) handle(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		f.writeJSON(w, map[string]any{"files": files})
-	case strings.HasSuffix(path, "/upload"):
+	case strings.HasSuffix(path, "/upload-batch"):
+		f.batches++
 		area := strings.Split(path, "/")[4]
-		name := body["name"].(string)
-		if name == f.refuse {
+		uploads := []map[string]any{}
+		for _, item := range body["files"].([]any) {
+			file := item.(map[string]any)
+			uploads = append(uploads, f.beginUpload(area, file["name"].(string), int64(file["size"].(float64))))
+		}
+		f.writeJSON(w, map[string]any{"uploads": uploads})
+	case strings.HasSuffix(path, "/upload"):
+		f.singles++
+		up := f.beginUpload(strings.Split(path, "/")[4], body["name"].(string), int64(body["size"].(float64)))
+		if up["error"] != nil {
 			w.WriteHeader(http.StatusUnprocessableEntity)
-			f.writeJSON(w, map[string]any{"error": "quota"})
-			return
 		}
-		size := int64(body["size"].(float64))
-		key := area + "/" + name
-		if size <= f.partBytes {
-			f.writeJSON(w, map[string]any{"name": name, "url": f.server.URL + "/storage/" + key})
-			return
-		}
-		uploadID := fmt.Sprintf("u%d", len(f.multipart)+1)
-		f.multipart[uploadID] = map[int][]byte{}
-		parts := []string{}
-		for n := int64(1); (n-1)*f.partBytes < size; n++ {
-			parts = append(parts, fmt.Sprintf("%s/storage/part/%s/%d", f.server.URL, uploadID, n))
-		}
-		f.writeJSON(w, map[string]any{"name": name, "upload_id": uploadID, "part_bytes": f.partBytes, "parts": parts})
+		f.writeJSON(w, up)
 	case strings.HasSuffix(path, "/delete"):
 		area := strings.Split(path, "/")[4]
 		for _, name := range body["names"].([]any) {
@@ -199,6 +196,24 @@ func (f *fakeKrater) handle(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// beginUpload is Krater's answer for one file: a URL, a multipart upload, or a refusal (f.refuse).
+func (f *fakeKrater) beginUpload(area, name string, size int64) map[string]any {
+	if name == f.refuse {
+		return map[string]any{"name": name, "error": "quota"}
+	}
+	key := area + "/" + name
+	if size <= f.partBytes {
+		return map[string]any{"name": name, "url": f.server.URL + "/storage/" + key}
+	}
+	uploadID := fmt.Sprintf("u%d", len(f.multipart)+1)
+	f.multipart[uploadID] = map[int][]byte{}
+	parts := []string{}
+	for n := int64(1); (n-1)*f.partBytes < size; n++ {
+		parts = append(parts, fmt.Sprintf("%s/storage/part/%s/%d", f.server.URL, uploadID, n))
+	}
+	return map[string]any{"name": name, "upload_id": uploadID, "part_bytes": f.partBytes, "parts": parts}
 }
 
 func (f *fakeKrater) storage(w http.ResponseWriter, r *http.Request, key string) {

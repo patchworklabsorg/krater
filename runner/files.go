@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -11,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Syncer keeps a local directory and the job's stored area ("checkpoints" or "outputs") in step. Files go up only
@@ -66,7 +68,8 @@ func (s *Syncer) Restore(ctx context.Context) (int, error) {
 // restoreFiles downloads each listed file that isn't here at the same size; with `onlyMissing`, only those not
 // here at all.
 func (s *Syncer) restoreFiles(ctx context.Context, files []RemoteFile, onlyMissing bool) (int, error) {
-	restored := 0
+	var names []string
+	var targets []pendingDownload
 	for _, f := range files {
 		local, err := s.localPath(f.Name)
 		if err != nil {
@@ -79,15 +82,116 @@ func (s *Syncer) restoreFiles(ctx context.Context, files []RemoteFile, onlyMissi
 			}
 			continue
 		}
-		if err := s.download(ctx, f.URL, local); err != nil {
-			return restored, fmt.Errorf("restoring %s: %w", f.Name, err)
+		names = append(names, f.Name)
+		targets = append(targets, pendingDownload{f.URL, local})
+	}
+	restored := 0
+	var firstErr error
+	for i, err := range s.downloadAll(ctx, targets) {
+		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("restoring %s: %w", names[i], err)
+			}
+			continue
 		}
-		if info, err := os.Stat(local); err == nil {
-			s.uploaded[f.Name] = stampOf(info)
+		if info, err := os.Stat(targets[i].local); err == nil {
+			s.uploaded[names[i]] = stampOf(info)
 		}
 		restored++
 	}
-	return restored, nil
+	return restored, firstErr
+}
+
+// transferWorkers is how many files go up or down at once. Small files are most of a workspace (a Python virtual
+// environment is thousands), and each is a round trip to storage.
+var transferWorkers = 16
+
+// uploadBatch is how many uploads one call to Krater begins. Each call is a quota check over the whole project, so
+// one per file was too slow; URLs last an hour, so a batch's are used well before they expire.
+var uploadBatch = 250
+
+type pendingUpload struct {
+	name  string // stored name
+	local string
+	size  int64
+}
+
+type pendingDownload struct {
+	url   string
+	local string
+}
+
+// uploadAll uploads the files, beginning them a batch at a time and sending each batch's transferWorkers at a
+// time. It returns each file's error (nil once stored) and the number of calls to Krater it made.
+func (s *Syncer) uploadAll(ctx context.Context, files []pendingUpload) ([]error, int) {
+	errs := make([]error, len(files))
+	calls := 0
+	for start := 0; start < len(files); start += uploadBatch {
+		chunk := files[start:min(start+uploadBatch, len(files))]
+		asks := make([]UploadAsk, len(chunk))
+		for i, f := range chunk {
+			asks[i] = UploadAsk{Name: f.name, Size: f.size}
+		}
+		calls++
+		ups, err := s.API.BeginUploads(ctx, s.Area, asks)
+		if err == nil && len(ups) != len(chunk) {
+			err = fmt.Errorf("krater answered %d uploads for %d files", len(ups), len(chunk))
+		}
+		if err != nil {
+			for i := range chunk {
+				errs[start+i] = err
+			}
+			var denied *ErrDenied
+			if errors.As(err, &denied) {
+				for i := start + len(chunk); i < len(files); i++ {
+					errs[i] = err
+				}
+				break
+			}
+			continue
+		}
+		parallel(len(chunk), func(i int) {
+			up, f := ups[i], chunk[i]
+			switch {
+			case up.Error != "":
+				errs[start+i] = errors.New(up.Error)
+			case up.Name != f.name:
+				errs[start+i] = fmt.Errorf("krater answered for %q", up.Name)
+			default:
+				errs[start+i] = s.send(ctx, f.name, f.local, f.size, &up.Upload)
+			}
+		})
+	}
+	return errs, calls
+}
+
+// downloadAll downloads the files transferWorkers at a time and returns each one's error.
+func (s *Syncer) downloadAll(ctx context.Context, files []pendingDownload) []error {
+	errs := make([]error, len(files))
+	parallel(len(files), func(i int) {
+		errs[i] = s.download(ctx, files[i].url, files[i].local)
+	})
+	return errs
+}
+
+// parallel calls fn(0) to fn(n-1), transferWorkers at a time, and returns when all have.
+func parallel(n int, fn func(i int)) {
+	work := make(chan int)
+	var wg sync.WaitGroup
+	for w := 0; w < min(transferWorkers, n); w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range work {
+				fn(i)
+			}
+		}()
+	}
+	for i := 0; i < n; i++ {
+		work <- i
+	}
+	close(work)
+	wg.Wait()
 }
 
 // Push uploads every file that changed since it was last uploaded. Files still being written may change again;
@@ -135,14 +239,16 @@ func (s *Syncer) Push(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	sort.Strings(names)
+	todo := make([]pendingUpload, 0, len(names))
+	for _, name := range names {
+		local, _ := s.localPath(name) // from the walk: always inside the directory
+		todo = append(todo, pendingUpload{name, local, stamps[name].size})
+	}
+	errs, _ := s.uploadAll(ctx, todo)
 	pushed := 0
 	var firstErr error
-	for _, name := range names {
-		local, err := s.localPath(name)
-		if err == nil {
-			err = s.uploadFile(ctx, name, local, stamps[name].size)
-		}
-		if err != nil {
+	for i, name := range names {
+		if err := errs[i]; err != nil {
 			// Keep going: one refused file (the project's storage quota, say) mustn't stop the others.
 			logf("uploading %s failed: %v", name, err)
 			if firstErr == nil {
@@ -202,6 +308,11 @@ func (s *Syncer) uploadFile(ctx context.Context, name, local string, size int64)
 	if err != nil {
 		return err
 	}
+	return s.send(ctx, name, local, size, up)
+}
+
+// send uploads the file to the URLs Krater handed out for it, and finishes a multipart upload.
+func (s *Syncer) send(ctx context.Context, name, local string, size int64, up *Upload) error {
 	if up.URL != "" {
 		_, err := s.put(ctx, up.URL, local, 0, size)
 		return err
@@ -225,29 +336,48 @@ func (s *Syncer) uploadFile(ctx context.Context, name, local string, size int64)
 	return s.API.CompleteUpload(ctx, s.Area, name, up.UploadID, etags)
 }
 
+// putTries is how many times a PUT is tried when storage is briefly unavailable or rate-limits (429, 5xx).
+const putTries = 3
+
 // put uploads `length` bytes of `local` from `offset` and returns the ETag storage answered with.
 func (s *Syncer) put(ctx context.Context, url, local string, offset, length int64) (string, error) {
+	wait := retryFirstWait / 4
+	for try := 1; ; try++ {
+		etag, status, err := s.putOnce(ctx, url, local, offset, length)
+		if err == nil || try == putTries || !(status == http.StatusTooManyRequests || status >= 500) {
+			return etag, err
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(wait):
+		}
+		wait *= 2
+	}
+}
+
+func (s *Syncer) putOnce(ctx context.Context, url, local string, offset, length int64) (string, int, error) {
 	file, err := os.Open(local)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	defer file.Close()
 	body := io.NewSectionReader(file, offset, length)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, body)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	req.ContentLength = length
 	resp, err := s.Storage.Do(req)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	defer resp.Body.Close()
 	io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode/100 != 2 {
-		return "", fmt.Errorf("storage answered %d", resp.StatusCode)
+		return "", resp.StatusCode, fmt.Errorf("storage answered %d", resp.StatusCode)
 	}
-	return resp.Header.Get("ETag"), nil
+	return resp.Header.Get("ETag"), resp.StatusCode, nil
 }
 
 func isPartial(name string) bool {

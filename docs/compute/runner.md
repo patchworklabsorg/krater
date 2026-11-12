@@ -169,6 +169,13 @@ in nanoseconds and a symlink's target. Owners aren't kept: a box runs as root.
   couldn't be read at all, the save stores no manifest.
 - A workspace saved before the manifest (runner before 2026-11-12) restores as plain files; the first save then
   writes a manifest.
+- **Many files.** Uploads of any area begin 250 at a time with `POST /runner/v1/files/{area}/upload-batch
+  {"files": [{"name", "size"}, ...]}` (up to 500): one quota check for the batch, and a file Krater refuses (a bad
+  name, the quota) comes back as `{"name", "error"}` without stopping the others. Files then go up, and restores come
+  down, 16 at a time, and a PUT answered 429 or 5xx is tried 3 times. Before this (2026-11-12), each file was its own
+  call, each listing the project's whole storage, and a virtual environment of 2,357 files didn't save within the
+  10 minutes a stop waits. While restoring, the runner sends a heartbeat every minute (`phase: restoring`), so a long
+  restore isn't taken for a lost runner. Each save and restore logs its file count, bytes, seconds and calls.
 
 Checked on staging (2026-10-11), plain `ubuntu:24.04` in SSH mode: Vast installs and runs sshd itself, runs the
 startup script, and the runner starts within a minute of the rental. `authorized_keys` held only the member's key
