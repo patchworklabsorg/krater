@@ -19,6 +19,29 @@
   </div>
 </div>
 
+{% if problems %}
+<section class="card" id="problems" aria-labelledby="problems-title">
+  <h2 id="problems-title">Problems</h2>
+  <p class="muted">
+    What the worker ran into in the last 24 hours, and any alert still open. Open ones were posted to the alerts
+    channel; the others failed fewer times than their alert waits for. The worker's log has the details.
+  </p>
+  <ul class="problem-list">
+    {% for problem in problems %}
+      <li>
+        <strong>{{ problem.title }}</strong>
+        {% if problem.open %}<span class="badge badge--bad">Open</span>{% endif %}
+        <div class="muted">
+          {% if problem.failures %}{{ problem.failures }} failure{{ "s" if problem.failures != 1 }}, the last {% else %}Last seen {% endif %}
+          {%- if problem.last_failed_at %} {{ problem.last_failed_at.strftime("%Y-%m-%d %H:%M UTC") }}{% endif %}
+        </div>
+        {% if problem.message %}<pre class="problem-message">{{ problem.message }}</pre>{% endif %}
+      </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
 <section class="card" id="stop-switch" aria-labelledby="stop-switch-title">
   <h2 id="stop-switch-title">Stop switch</h2>
   {% if switch.paused_at %}

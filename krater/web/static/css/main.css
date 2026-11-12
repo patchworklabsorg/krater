@@ -2477,3 +2477,23 @@ fieldset.choice-list legend {
   margin: 0 0 var(--space-3);
   max-width: 48rem;
 }
+
+/* Admin compute page: the worker's recent problems (`ops_alerts.recent`). */
+.problem-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.75rem;
+}
+.problem-message {
+  margin: 0.25rem 0 0;
+  padding: 0.5rem 0.75rem;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

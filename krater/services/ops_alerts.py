@@ -291,6 +291,44 @@ def check(session: Session, settings: Settings, *, now: datetime) -> None:
     session.flush()
 
 
+#: How far back `recent` lists problems that never reached their alert's threshold or have cleared.
+RECENT_WINDOW = timedelta(hours=24)
+
+
+@dataclass(frozen=True)
+class RecentProblem:
+    key: str
+    title: str
+    open: bool
+    failures: int
+    first_failed_at: datetime | None
+    last_failed_at: datetime | None
+    message: str
+
+
+def recent(session: Session, *, now: datetime) -> list[RecentProblem]:
+    """Every alert that is open, and every problem seen in the last `RECENT_WINDOW`, newest first, for the admin
+    compute page: Slack is otherwise the only place admins see them, and a failure under its alert's threshold
+    (four failed scheduler passes, say) is posted nowhere."""
+    rows = session.scalars(
+        sa.select(OpsAlert)
+        .where(sa.or_(OpsAlert.opened_at.is_not(None), OpsAlert.last_failed_at >= now - RECENT_WINDOW))
+        .order_by(OpsAlert.last_failed_at.desc().nulls_last())
+    )
+    return [
+        RecentProblem(
+            key=row.key,
+            title=_title(row.key),
+            open=row.opened_at is not None,
+            failures=row.failures,
+            first_failed_at=row.first_failed_at,
+            last_failed_at=row.last_failed_at,
+            message=row.message,
+        )
+        for row in rows
+    ]
+
+
 def _title(key: str) -> str:
     rule = FAILURE_RULES.get(key)
     return rule.title if rule is not None else CONDITION_TITLES.get(key, key)
