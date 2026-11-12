@@ -761,6 +761,80 @@ def test_a_job_whose_containers_never_start_anywhere_fails(db_session, member, p
     assert len({row.provider_machine_id for row in job.instances}) == scheduler.MAX_HOST_FAILURES
 
 
+def test_a_machine_vast_refused_and_left_stopped_is_dropped_at_once(db_session, member, project, fake) -> None:  # noqa: F811
+    """Staging, 2026-11-12: Vast answered a bid's create with `success: false` and an instance id, and left the instance
+    stopped. Krater waited out HOST_START_GRACE on each one, and a job failed after three, blaming its image."""
+    job = _submit(db_session, member, project, target_microusd=100_000)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        response = fake.handle(request)
+        if request.method == "PUT" and "/asks/" in request.url.path:
+            return httpx.Response(200, json={"success": False, "new_contract": response.json()["new_contract"]})
+        return response
+
+    refusing = fake.client()
+    refusing._http = httpx.Client(transport=httpx.MockTransport(handler))
+    _pass(db_session, refusing)
+    row = _instance(db_session, job)
+    fake.set_status(next(iter(fake.instances)), "loading", intended_status="stopped")
+
+    _pass(db_session, fake.client(), NOW + timedelta(minutes=1))
+
+    assert row.state is ComputeInstanceState.DESTROYED and row.destroy_reason == scheduler.NOT_STARTED
+    assert row.provider_instance_id not in fake.instances
+    assert "not_started" in _events(db_session, job) and "host_failed" not in _events(db_session, job)
+    # Rented elsewhere in the same pass, and its place in the queue kept.
+    new = _instance(db_session, job)
+    assert new.attempt == 2 and new.provider_machine_id != row.provider_machine_id
+    assert job.state is ComputeJobState.STARTING
+    assert job.queued_at == NOW
+
+
+def test_a_create_refused_but_started_is_kept(db_session, member, project, fake) -> None:  # noqa: F811
+    """The same refusal on 2026-10-11 rented a machine that ran: only a stopped one is dropped."""
+    job = _submit(db_session, member, project)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        response = fake.handle(request)
+        if request.method == "PUT" and "/asks/" in request.url.path:
+            return httpx.Response(200, json={"success": False})
+        return response
+
+    refusing = fake.client()
+    refusing._http = httpx.Client(transport=httpx.MockTransport(handler))
+    _pass(db_session, refusing)
+    fake.set_status(next(iter(fake.instances)), "running")
+
+    _pass(db_session, fake.client(), NOW + timedelta(minutes=1))
+
+    row = _instance(db_session, job)
+    assert row.attempt == 1 and row.state is ComputeInstanceState.RUNNING
+
+
+def test_a_machine_that_failed_one_job_is_kept_from_the_others(
+    db_session,  # noqa: F811
+    member,  # noqa: F811
+    project,  # noqa: F811
+    client,  # noqa: F811
+    fake,  # noqa: F811
+) -> None:
+    first = _submit(db_session, member, project, target_microusd=100_000)
+    _pass(db_session, client)
+    assert _instance(db_session, first).provider_machine_id == "501"
+    _host_fails(fake, _instance(db_session, first))
+    _pass(db_session, client, NOW + timedelta(minutes=5))
+    assert _instance(db_session, first).provider_machine_id != "501"
+
+    second = _submit(db_session, member, project, now=NOW + timedelta(minutes=6), target_microusd=100_000)
+    _pass(db_session, client, NOW + timedelta(minutes=6))
+    assert _instance(db_session, second).provider_machine_id not in ("501", None)  # 501 is still the cheapest
+
+    # Past the window it's tried again: hosts get fixed.
+    third = _submit(db_session, member, project, now=NOW + timedelta(hours=7), target_microusd=100_000)
+    _pass(db_session, client, NOW + timedelta(hours=7))
+    assert _instance(db_session, third).provider_machine_id == "501"
+
+
 def test_a_machine_whose_runner_reported_is_not_taken_for_a_broken_host(
     db_session,  # noqa: F811
     member,  # noqa: F811
