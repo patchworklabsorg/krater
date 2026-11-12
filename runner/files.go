@@ -11,7 +11,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"time"
 )
 
 // Syncer keeps a local directory and the job's stored area ("checkpoints" or "outputs") in step. Files go up only
@@ -21,27 +20,47 @@ type Syncer struct {
 	Area    string
 	Dir     string
 	Storage *http.Client
+	// Manifest keeps folders, symlinks, permissions and deletions too (a box's /workspace; see workspace.go).
+	Manifest bool
 	// What was last uploaded, by relative name: size and modification time.
 	uploaded map[string]fileStamp
+	// With Manifest: the manifest last stored, and whether the stored workspace was fully restored.
+	lastManifest []byte
+	restored     bool
 	// One push at a time: the timed sync and a save Krater asks for can overlap.
 	mu sync.Mutex
 }
 
 type fileStamp struct {
 	size    int64
-	modTime time.Time
+	modTime int64 // Unix nanoseconds
+}
+
+func stampOf(info fs.FileInfo) fileStamp {
+	return fileStamp{info.Size(), info.ModTime().UnixNano()}
 }
 
 func NewSyncer(api *API, area, dir string, storage *http.Client) *Syncer {
 	return &Syncer{API: api, Area: area, Dir: dir, Storage: storage, uploaded: map[string]fileStamp{}}
 }
 
-// Restore downloads every stored file that isn't already here at the same size.
+// Restore downloads every stored file that isn't already here at the same size (with Manifest: see restore).
 func (s *Syncer) Restore(ctx context.Context) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.Manifest {
+		return s.restore(ctx, false)
+	}
 	files, err := s.API.List(ctx, s.Area)
 	if err != nil {
 		return 0, err
 	}
+	return s.restoreFiles(ctx, files, false)
+}
+
+// restoreFiles downloads each listed file that isn't here at the same size; with `onlyMissing`, only those not
+// here at all.
+func (s *Syncer) restoreFiles(ctx context.Context, files []RemoteFile, onlyMissing bool) (int, error) {
 	restored := 0
 	for _, f := range files {
 		local, err := s.localPath(f.Name)
@@ -49,15 +68,17 @@ func (s *Syncer) Restore(ctx context.Context) (int, error) {
 			logf("skipping stored file %q: %v", f.Name, err)
 			continue
 		}
-		if info, err := os.Stat(local); err == nil && info.Size() == f.Size {
-			s.uploaded[f.Name] = fileStamp{info.Size(), info.ModTime()}
+		if info, err := os.Stat(local); err == nil && (onlyMissing || info.Size() == f.Size) {
+			if info.Size() == f.Size {
+				s.uploaded[f.Name] = stampOf(info)
+			}
 			continue
 		}
 		if err := s.download(ctx, f.URL, local); err != nil {
 			return restored, fmt.Errorf("restoring %s: %w", f.Name, err)
 		}
 		if info, err := os.Stat(local); err == nil {
-			s.uploaded[f.Name] = fileStamp{info.Size(), info.ModTime()}
+			s.uploaded[f.Name] = stampOf(info)
 		}
 		restored++
 	}
@@ -69,6 +90,9 @@ func (s *Syncer) Restore(ctx context.Context) (int, error) {
 func (s *Syncer) Push(ctx context.Context) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.Manifest {
+		return s.pushWorkspace(ctx)
+	}
 	var names []string
 	stamps := map[string]fileStamp{}
 	err := filepath.WalkDir(s.Dir, func(path string, d fs.DirEntry, err error) error {
@@ -94,7 +118,7 @@ func (s *Syncer) Push(ctx context.Context) (int, error) {
 			// Still being written (the usual pattern: write to a temporary name, then rename).
 			return nil
 		}
-		stamp := fileStamp{info.Size(), info.ModTime()}
+		stamp := stampOf(info)
 		if prev, ok := s.uploaded[name]; ok && prev == stamp {
 			return nil
 		}
@@ -109,7 +133,11 @@ func (s *Syncer) Push(ctx context.Context) (int, error) {
 	pushed := 0
 	var firstErr error
 	for _, name := range names {
-		if err := s.upload(ctx, name, stamps[name].size); err != nil {
+		local, err := s.localPath(name)
+		if err == nil {
+			err = s.uploadFile(ctx, name, local, stamps[name].size)
+		}
+		if err != nil {
 			// Keep going: one refused file (the project's storage quota, say) mustn't stop the others.
 			logf("uploading %s failed: %v", name, err)
 			if firstErr == nil {
@@ -163,11 +191,8 @@ func (s *Syncer) download(ctx context.Context, url, local string) error {
 	return os.Rename(tmp, local)
 }
 
-func (s *Syncer) upload(ctx context.Context, name string, size int64) error {
-	local, err := s.localPath(name)
-	if err != nil {
-		return err
-	}
+// uploadFile stores the local file `local` as `name`.
+func (s *Syncer) uploadFile(ctx context.Context, name, local string, size int64) error {
 	up, err := s.API.BeginUpload(ctx, s.Area, name, size)
 	if err != nil {
 		return err

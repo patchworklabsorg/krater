@@ -12,7 +12,7 @@ from krater import providers
 from krater.compute import runner_api
 from krater.config import get_settings
 from krater.db import get_session
-from krater.models import ComputeJobState
+from krater.models import ComputeJobKind, ComputeJobState
 from krater.services import compute_jobs
 from krater.storage import FakeObjectStore
 from krater.web.app import create_app
@@ -352,6 +352,48 @@ def test_a_machine_cant_change_the_projects_inputs(http, machine, store) -> None
     )
     assert upload.status_code == 403 and complete.status_code == 403
     assert store.list_prefix("projects/") == []
+
+
+def test_a_box_deletes_from_its_workspace_and_nothing_else(http, machine, store, db_session) -> None:
+    """The runner removes what the member deleted on the machine, so a restore doesn't bring it back."""
+    job, _, token = machine
+    job.kind = ComputeJobKind.BOX
+    db_session.flush()
+    prefix = f"projects/{job.project_id}/jobs/{job.id}/"
+    for key in ("workspace/gone.txt", "workspace/dir/kept.txt", "checkpoints/c.pt", "outputs/o.json", "logs/l.log"):
+        store.put(prefix + key, content_type="", size_bytes=1)
+    other = "projects/other/jobs/other/workspace/gone.txt"
+    store.put(other, content_type="", size_bytes=1)
+
+    deleted = http.post(
+        "/runner/v1/files/workspace/delete", headers=_auth(token), json={"names": ["gone.txt", "never-stored.txt"]}
+    )
+    refused = [
+        http.post(f"/runner/v1/files/{area}/delete", headers=_auth(token), json={"names": ["c.pt"]}).status_code
+        for area in ("checkpoints", "outputs", "logs", "inputs")
+    ]
+    escaping = http.post("/runner/v1/files/workspace/delete", headers=_auth(token), json={"names": ["../c.pt"]})
+    too_many = http.post("/runner/v1/files/workspace/delete", headers=_auth(token), json={"names": ["x"] * 1001})
+    no_token = http.post("/runner/v1/files/workspace/delete", json={"names": ["dir/kept.txt"]})
+
+    assert deleted.json() == {"deleted": 2}
+    assert refused == [403, 403, 403, 403]
+    assert escaping.status_code == 422 and too_many.status_code == 422 and no_token.status_code == 403
+    left = sorted(item.key for item in store.list_prefix("projects/"))
+    assert left == sorted(
+        [other] + [prefix + k for k in ("workspace/dir/kept.txt", "checkpoints/c.pt", "outputs/o.json", "logs/l.log")]
+    )
+
+
+def test_a_job_cant_delete_stored_files(http, machine, store) -> None:
+    job, _, token = machine
+    key = f"projects/{job.project_id}/jobs/{job.id}/workspace/x.txt"
+    store.put(key, content_type="", size_bytes=1)
+
+    response = http.post("/runner/v1/files/workspace/delete", headers=_auth(token), json={"names": ["x.txt"]})
+
+    assert response.status_code == 403
+    assert [item.key for item in store.list_prefix("projects/")] == [key]
 
 
 def test_inputs_deleted_after_queueing_fail_the_listing(http, machine, store, db_session) -> None:

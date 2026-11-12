@@ -142,6 +142,31 @@ bootstrap runs as its startup script, starting the runner in the background. The
    After a failed save it stays silent: Krater keeps asking on each heartbeat until its sync deadline, and records
    the box as not saved.
 
+### How /workspace is saved
+
+Checkpoints and outputs are plain file copies. A workspace is more: a virtual environment in `/workspace/venv` needs
+its executable bits and symlinks, and files deleted on the machine mustn't come back. So each save of a box's
+workspace (`runner/workspace.go`) also stores a manifest, `.krater-workspace.json`: every path under `/workspace`
+with its type (file, folder or symlink), permission bits (with setuid, setgid and sticky), size, modification time
+in nanoseconds and a symlink's target. Owners aren't kept: a box runs as root.
+
+- **Saving** walks `/workspace` without following symlinks and uploads files whose size or modification time
+  changed. Only when every upload succeeded does it store the manifest (when it changed), then delete from storage
+  the files the manifest no longer names, with `POST /runner/v1/files/workspace/delete {"names": [...]}` in batches
+  of 500. Krater allows that endpoint only for a box's workspace; a failed delete only leaves files in storage, where
+  a restore ignores them.
+- **Names:** a path Krater's stored-name rule refuses (letters, digits, spaces and `. _ - = + , @ ~`), or a top-level
+  path starting `.krater-`, is stored as `.krater-files/<40 hex characters of its sha256>`. The manifest maps it back.
+- **Restoring** makes the folders, then each file that's missing or older here than in the manifest, with its
+  permissions and time, then the symlinks that are missing, then the folders' permissions, deepest first. A newer
+  file already on the machine wins, so a box resumed on its own machine after an emergency stop keeps its work. A
+  path under a folder that is a symlink here is skipped, so a restore can't write outside `/workspace`.
+- **Nothing is removed after an incomplete restore.** If the list, the manifest or any file couldn't be fetched, the
+  next save first tries the restore again (only files that are missing). If that still fails it uploads changed files
+  but keeps the stored manifest and deletes nothing, and reports the save as failed, so Krater doesn't confirm it.
+- A workspace saved before the manifest (runner before 2026-11-12) restores as plain files; the first save then
+  writes a manifest.
+
 Checked on staging (2026-10-11), plain `ubuntu:24.04` in SSH mode: Vast installs and runs sshd itself, runs the
 startup script, and the runner starts within a minute of the rental. `authorized_keys` held only the member's key
 (the account had no SSH keys, and Vast's `SSH_PUBLIC_KEY` was empty). 22/tcp is mapped to a public port
@@ -210,13 +235,14 @@ machine's host can read anything on the machine. Members should use tokens they 
 
 The runner holds one secret, `KRATER_JOB_TOKEN`. It works for this instance only and only while it is live (Krater
 stores its sha256). Storage is reached through presigned URLs for this job's own keys
-(`projects/<project>/jobs/<job>/checkpoints|outputs/`), single PUTs up to 64 MB and multipart parts above that, so no
+(`projects/<project>/jobs/<job>/checkpoints|outputs|logs|workspace/`), single PUTs up to 64 MB and multipart parts above that, so no
 request body passes Cloudflare's cap in front of the storage host. Each URL is signed for its exact size, so a
 machine can't upload more than it asked for, and Krater refuses URLs past the project's storage quota (an admin
 setting, 50 GB by default; replacing a file counts only the difference). Checked against SeaweedFS 4.47 on
 2026-10-11: a body of the signed size gets 200, a bigger or smaller one 403, for single PUTs and parts alike.
 Unfinished multipart uploads are aborted hourly once their job has ended (SeaweedFS lists no start time, so age
-alone can't decide). The organization's Vast key never reaches a machine.
+alone can't decide). A machine can delete stored files only from its own box's workspace, never checkpoints,
+outputs, logs or the project's inputs. The organization's Vast key never reaches a machine.
 
 ## Tests
 

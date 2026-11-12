@@ -454,6 +454,10 @@ it into a job.
   restores it when the box starts on a new machine. Anything outside `/workspace` (installed packages, files in
   `/root`) is lost when the box moves or is destroyed. Install into `/workspace` (for example a virtual environment at
   `/workspace/venv`) or put it in your image.
+- **What's kept:** files with their permissions (so scripts stay executable) and modification times, symlinks, empty
+  folders, and any file name. A file you delete is deleted from the saved copy too, at the next save. A virtual
+  environment works after a move as long as the new machine's image has the same Python at the same path (its
+  `python` is a symlink to the image's).
 - **Secrets** are in your login shell's environment (from `/etc/profile.d/krater-secrets.sh`).
 
 ### Idle stop

@@ -204,6 +204,7 @@ func Run(ctx context.Context, cfg Config, apiHTTP, storageHTTP *http.Client, gpu
 		}
 		cfg.WorkspaceDir = workspaceDir
 		workspace := NewSyncer(api, "workspace", cfg.WorkspaceDir, storageHTTP)
+		workspace.Manifest = true
 		if n, err := workspace.Restore(ctx); err != nil {
 			logf("restoring /workspace failed: %v", err)
 		} else if n > 0 {
