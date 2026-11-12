@@ -322,7 +322,9 @@ def test_by_default_four_machines_run_at_once(db_session, member, project, clien
 
     states = [job.state for job in jobs]
     assert states.count(ComputeJobState.STARTING) == 4
-    assert "its limit" in jobs[-1].state_reason
+    # Queued in the same instant: which one waits is arbitrary.
+    (waiting,) = [job for job in jobs if job.state is not ComputeJobState.STARTING]
+    assert "its limit" in waiting.state_reason
 
 
 # -- Idle GPU warning ----------------------------------------------------------------------------------------------
