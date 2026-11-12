@@ -150,7 +150,7 @@ Production runs `hosts/weft/krater-production.nix` with compute off, and ships b
 - **Ports 80 and 443** open to the internet. Let's Encrypt needs port 80 to issue certificates.
 - **Weave** (production Weave, not staging), following [weave-integration.md](../weave-integration.md):
   - Krater's app has redirect URI `https://<KRATER_DOMAIN>/auth/callback` and scopes
-    `openid profile email groups roles slack directory`.
+    `openid profile email groups roles slack patches directory`.
   - A Weave superadmin creates the roles `reviewer` and `admin` on it, and gives you `admin`. Members need no role.
 - **Slack:** the app's interactivity URL is `https://<KRATER_DOMAIN>/slack/interactions` ([slack-setup.md](slack-setup.md)).
 - **Vast** (compute on only): the production API key, in a file only root can read, mounted into the worker alone

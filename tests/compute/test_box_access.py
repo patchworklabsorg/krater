@@ -69,6 +69,17 @@ def test_an_admin_removed_in_weave_leaves_the_boxes(db_session, admin, weave, bo
     assert {"added": [], "removed": [admin.user.weave_sub]} in _changes(db_session)
 
 
+def test_an_admin_by_patch_role_only_goes_on_every_box(db_session, admin, weave, box) -> None:
+    _, row, owner_key = box
+    admin_key = _key(db_session, admin)
+    weave.set_roles(admin.user.weave_sub, [], patches={"ganymede": ["krater:admin"]})
+
+    added, _removed = box_access.sync_admins(db_session, weave, now=AT)
+
+    assert added == [admin.user.weave_sub]
+    assert _beat(db_session, row, 5).ssh_keys == (owner_key, admin_key)
+
+
 def test_a_locked_admin_account_isnt_listed(db_session, admin, weave, box) -> None:
     _key(db_session, admin)
     weave.set_active(admin.user.weave_sub, False)

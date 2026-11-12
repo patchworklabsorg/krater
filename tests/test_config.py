@@ -148,6 +148,24 @@ def test_weave_role_keys_and_group_slugs_have_the_contract_defaults() -> None:
     assert not hasattr(settings, "weave_group_member")
 
 
+def test_weave_patch_and_its_role_keys_have_the_contract_defaults() -> None:
+    settings = Settings()
+
+    assert settings.weave_patch == "ganymede"
+    assert (settings.weave_patch_role_reviewer, settings.weave_patch_role_admin) == ("krater:reviewer", "krater:admin")
+
+
+def test_weave_patch_settings_read_from_the_environment(monkeypatch) -> None:
+    monkeypatch.setenv("KRATER_WEAVE_PATCH", "europa")
+    monkeypatch.setenv("KRATER_WEAVE_PATCH_ROLE_REVIEWER", "krater:judge")
+    monkeypatch.setenv("KRATER_WEAVE_PATCH_ROLE_ADMIN", "krater:boss")
+
+    settings = Settings()
+
+    assert settings.weave_patch == "europa"
+    assert (settings.weave_patch_role_reviewer, settings.weave_patch_role_admin) == ("krater:judge", "krater:boss")
+
+
 def test_weave_role_keys_read_from_the_environment(monkeypatch) -> None:
     monkeypatch.setenv("KRATER_WEAVE_ROLE_REVIEWER", "krater-reviewer")
     monkeypatch.setenv("KRATER_WEAVE_API_BASE_URL", "https://api.weave.test")

@@ -115,6 +115,39 @@ def test_authorize_drops_a_role_weave_removed(db_session: Session, weave: StubWe
     assert signed_in.roles_cached == [GROUP_MEMBER]
 
 
+def test_authorize_reads_patch_roles_from_the_directory(db_session: Session, weave: StubWeaveClient, signed_in) -> None:
+    weave.set_roles("PWLSIGNIN01", [], patches={"ganymede": ["krater:admin", "lead"], "europa": ["krater:reviewer"]})
+
+    assert authorize(db_session, weave, signed_in).groups == frozenset({GROUP_MEMBER, GROUP_ADMIN})
+    assert signed_in.roles_cached == [GROUP_ADMIN, GROUP_MEMBER]
+
+
+def test_authorize_holds_the_union_of_app_and_patch_roles(
+    db_session: Session, weave: StubWeaveClient, signed_in
+) -> None:
+    weave.set_roles("PWLSIGNIN01", ["reviewer"], patches={"ganymede": ["krater:admin"]})
+
+    assert authorize(db_session, weave, signed_in).groups == frozenset({GROUP_MEMBER, GROUP_REVIEWER, GROUP_ADMIN})
+
+
+def test_authorize_keeps_a_role_until_both_sources_drop_it(
+    db_session: Session, weave: StubWeaveClient, signed_in
+) -> None:
+    weave.set_roles("PWLSIGNIN01", ["reviewer"], patches={"ganymede": ["krater:reviewer"]})
+
+    weave.set_roles("PWLSIGNIN01", [])
+    assert authorize(db_session, weave, signed_in).groups == frozenset({GROUP_MEMBER, GROUP_REVIEWER})
+
+    weave.set_roles("PWLSIGNIN01", [], patches={"ganymede": []})
+    assert authorize(db_session, weave, signed_in).groups == frozenset({GROUP_MEMBER})
+
+
+def test_authorize_ignores_a_malformed_patches_value(db_session: Session, weave: StubWeaveClient, signed_in) -> None:
+    weave.set_roles("PWLSIGNIN01", ["reviewer"], patches={"ganymede": ["krater:admin", 7]})
+
+    assert authorize(db_session, weave, signed_in).groups == frozenset({GROUP_MEMBER, GROUP_REVIEWER})
+
+
 def test_authorize_refuses_an_inactive_user(db_session: Session, weave: StubWeaveClient, signed_in) -> None:
     weave.set_active("PWLSIGNIN01", False)
 

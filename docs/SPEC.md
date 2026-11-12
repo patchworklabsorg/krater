@@ -62,7 +62,7 @@ Three roles:
 A "logged in but can't submit" tier and a public/anonymous tier are still deferred. The gallery itself is public.
 
 **Authentication** is OIDC against Weave (Authorization Code + PKCE; Weave enforces PKCE). Krater asks for the scopes
-`openid profile email groups roles slack`. All Weave access goes through one adapter module (`WeaveClient`) so Weave
+`openid profile email groups roles slack patches`. All Weave access goes through one adapter module (`WeaveClient`) so Weave
 changes don't spread through the app. The contract is in [weave-integration.md](weave-integration.md).
 
 **Weave owns roles** (maintainer decision, Oct 7, 2026). Krater never stores a role as its own source of truth:
@@ -76,6 +76,9 @@ changes don't spread through the app. The contract is in [weave-integration.md](
 - The `roles` field is the source of truth. Only when Weave sends no `roles` field at all (absent, not empty) does Krater
   fall back to group slugs linked to the Krater app: `krater-reviewers` and `krater-admins`. The keys and slugs are
   settings (`KRATER_WEAVE_ROLE_*`, `KRATER_WEAVE_GROUP_*`).
+- Weave is moving these roles to the Ganymede patch (weave#288): the patch role keys `krater:reviewer` and
+  `krater:admin` in the `patches` claim (settings `KRATER_WEAVE_PATCH`, `KRATER_WEAVE_PATCH_ROLE_*`). During the move
+  Krater holds the union of the patch roles and the app roles (`docs/weave-integration.md` "Patch roles").
 - Inside Krater the roles keep the names `ganymede:member`, `ganymede:reviewer` and `ganymede:admin`, so review snapshots
   and approval policies read the same. `krater.weave` translates at the boundary. Later tiers
   (`ganymede:reviewer:<tier>`) will need a matching Weave role key.

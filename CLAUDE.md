@@ -67,10 +67,13 @@ tests/             mirrors krater/ layout
 - **Primary keys are UUIDs** (`uuid.uuid4`), safe to show in URLs.
 - **Every Patchwork member is a Ganymede member.** Whoever Weave lets use the Krater app (it signs them in, or its
   directory returns them) holds `ganymede:member`; there is no member role in Weave.
-- **Weave owns roles.** Krater's role keys in Weave are `reviewer` and `admin`, sent in the `roles` claim and in
-  directory records. Only when the `roles` field is absent does Krater fall back to the group slugs `krater-reviewers`
-  and `krater-admins`. `krater.weave.roles` is the one place that maps them to Krater's internal names
-  `ganymede:reviewer`, `ganymede:admin` (and adds `ganymede:member`); nothing else knows the keys or slugs.
+- **Weave owns roles.** Krater's roles in Weave are the patch role keys `krater:reviewer` and `krater:admin` in the
+  patch `ganymede`, sent in the `patches` claim and in directory records. During the move from app roles, Krater also
+  reads its legacy app role keys `reviewer` and `admin` from the `roles` claim (and, only when `roles` is absent, the
+  group slugs `krater-reviewers` and `krater-admins`), and holds the union of both. A malformed `patches` value counts
+  as no patch role. `krater.weave.roles` is the one place that maps them to Krater's internal names
+  `ganymede:reviewer`, `ganymede:admin` (and adds `ganymede:member`); nothing else knows the keys, slugs or patch
+  slug. See `docs/weave-integration.md` "Patch roles" for the deploy order and the follow-up.
   Every state-changing action (`fresh_actor`, the Slack click path) re-checks Weave's directory by `sub` through
   `krater.services.users.authorize`, and fails closed if Weave is down. `users.roles_cached` is for display only.
   Krater has no role tables, no admin users page and no disable switch: those are done in Weave.
@@ -78,7 +81,7 @@ tests/             mirrors krater/ layout
   other personal details: read those from Weave when needed (`krater.services.people`) and record who acted by
   Patchwork ID (`docs/weave-integration.md` "Member data").
 - **All Weave access goes through `krater.weave`.** Nothing else imports httpx for Weave or knows Weave's URLs.
-  Krater asks for `openid profile email groups roles slack`, and calls the directory with a client_credentials token
+  Krater asks for `openid profile email groups roles slack patches`, and calls the directory with a client_credentials token
   of its own app (scope `directory`). Its token for Quilt (scope `quilt`) comes from `WeaveClient.quilt_token`, and
   its token for Stash (scope `stash`) from `WeaveClient.stash_token`.
 - **All Vast access goes through `krater.vast`**, and only from the worker: the organization's Vast key never

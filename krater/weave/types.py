@@ -2,7 +2,8 @@
 
 `WeaveIdentity` comes from a freshly verified id_token, at sign-in time. `WeaveUser` comes from the
 directory API, and is what Weave says about a user *right now*. Both carry Krater's role names
-(`ganymede:*`), already translated from Weave's role keys or group slugs by `krater.weave.roles`.
+(`ganymede:*`), already translated from Weave's patch role keys, app role keys or group slugs by
+`krater.weave.roles`.
 See `docs/weave-integration.md`.
 """
 
