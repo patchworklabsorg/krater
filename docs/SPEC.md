@@ -310,7 +310,7 @@ later, with the channel, the invites and the feed line. It waits 10 minutes afte
 the submission's own job.
 
 **Admin alerts channel:** the worker posts there when something behind the portal keeps failing (Quilt delivery,
-Slack tasks, the compute scheduler, background jobs ending in errors, prices not refreshed), again every 6 hours
+Slack tasks, the compute scheduler, background jobs ending in errors or stuck, prices not refreshed), again every 6 hours
 while it lasts, and when it clears (`krater.services.ops_alerts`). A dead worker can't post: `/healthz/worker`
 answers 503 once its heartbeat is 5 minutes old, for an uptime check outside Krater.
 

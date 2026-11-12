@@ -226,7 +226,8 @@ while it lasts, and when it clears. It covers:
 - Quilt's outbox backing up;
 - Stash archive requests backing up;
 - prices not refreshed;
-- background jobs ending in errors (worker tasks, not members' compute jobs);
+- background jobs ending in errors, cut off by a worker that died, or stuck waiting behind a lock (worker tasks, not
+  members' compute jobs);
 - compute stopped, by an admin's stop switch or a spending cap;
 - Vast charging for machines labelled as Krater's that Krater never rented;
 - the Vast account's credit under the low credit alert;

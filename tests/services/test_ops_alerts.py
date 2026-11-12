@@ -160,6 +160,56 @@ def test_background_jobs_that_end_in_errors_open_an_alert(db_session: Session) -
     assert "cleared" in _texts(slack)[-1]
 
 
+def _job(db_session: Session, task: str, status: str, deferred_at: datetime, scheduled_at: datetime | None = None):
+    job_id = db_session.scalar(
+        sa.text(
+            "INSERT INTO procrastinate_jobs (queue_name, task_name, status, lock, scheduled_at) "
+            "VALUES ('default', :task, :status, 'compute_scheduler', :scheduled_at) RETURNING id"
+        ),
+        {"task": task, "status": status, "scheduled_at": scheduled_at},
+    )
+    db_session.execute(
+        sa.text("INSERT INTO procrastinate_events (job_id, type, at) VALUES (:id, 'deferred', :at)"),
+        {"id": job_id, "at": deferred_at},
+    )
+    return job_id
+
+
+def test_jobs_stuck_behind_a_lock_open_an_alert(db_session: Session) -> None:
+    _fresh_prices(db_session)
+    slack = FakeSlackClient()
+    # The job holding the lock is running; ones waiting behind it a short while, or due later, are normal.
+    _job(db_session, "compute_schedule", "doing", NOW - timedelta(hours=3))
+    _job(db_session, "compute_reconcile", "todo", NOW - timedelta(minutes=5))
+    _job(db_session, "compute_storage_cleanup", "todo", NOW - timedelta(hours=1), scheduled_at=NOW + timedelta(hours=1))
+    assert _watch(db_session, slack, NOW) == []
+
+    _job(db_session, "compute_schedule", "todo", NOW - timedelta(hours=2, minutes=59))
+    _job(db_session, "compute_schedule", "todo", NOW - timedelta(minutes=20))
+
+    assert _watch(db_session, slack, NOW) == ["jobs_waiting"]
+    text = _texts(slack)[-1]
+    assert "Background jobs are stuck waiting" in text and "compute_schedule since 2026-10-22 09:01" in text
+    assert "compute_reconcile" not in text
+
+    db_session.execute(sa.text("UPDATE procrastinate_jobs SET status = 'succeeded' WHERE status != 'succeeded'"))
+    assert _watch(db_session, slack, NOW + timedelta(minutes=5)) == ["jobs_waiting"]
+    assert "cleared" in _texts(slack)[-1]
+
+
+def test_one_job_cut_off_by_its_worker_opens_an_alert(db_session: Session) -> None:
+    _fresh_prices(db_session)
+    slack = FakeSlackClient()
+    ops_alerts.record_failure(
+        db_session, "stalled_jobs", "Ended as failed after their worker stopped: compute_schedule #1.", now=NOW
+    )
+
+    assert _watch(db_session, slack, NOW) == ["stalled_jobs"]
+    assert "A worker stopped in the middle of a background job" in _texts(slack)[-1]
+    assert _watch(db_session, slack, NOW + timedelta(hours=1, minutes=1)) == ["stalled_jobs"]
+    assert "cleared" in _texts(slack)[-1]
+
+
 def test_without_a_channel_alerts_go_to_the_log(db_session: Session, monkeypatch) -> None:
     logged = []
     monkeypatch.setattr(ops_alerts.logger, "error", lambda msg, *args: logged.append(msg % args))
