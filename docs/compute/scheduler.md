@@ -39,6 +39,12 @@ workspace sync, and step 5 starts and searches for nothing: queued jobs say why.
      requeued in its place (seen on staging, 2026-11-12, at several bid levels; cause unknown, not the image). A
      machine dropped either way is kept from every job for 6 hours (`BAD_HOST_WINDOW`);
    - never running within 30 minutes → job failed (check the image), machine destroyed;
+   - running, but Krater's runner hasn't reported within the runner start deadline (`runner_start_minutes`, default
+     10) → the machine is destroyed and the job requeued onto another (`RUNNER_NOT_STARTED`; on staging, 2026-11-12, a
+     host's download of the runner was cut short and then hung). It counts towards `MAX_HOST_FAILURES` with the host
+     failures above, so after 3 machines the job fails (check that the image has a POSIX shell and curl, wget or
+     Python). Not kept from other jobs: an image without them fails this way anywhere. A box whose runner ran on
+     that machine before is stopped instead, since its disk may hold newer work;
    - stopped by its own runner after `runner_self_stop_minutes` without Krater (see [runner.md](runner.md)) → a
      job's machine is started again (then the pause rules apply), a box becomes `stopped` for its member to resume;
    - not looked at for 5 minutes or more (Krater was down) → its runner deadlines count from now;

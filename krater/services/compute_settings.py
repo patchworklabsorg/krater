@@ -99,8 +99,8 @@ POLICY_FIELDS: tuple[PolicyField, ...] = (
     PolicyField(
         "runner_start_minutes",
         "Runner start deadline",
-        "A running machine whose runner hasn't reported in this long is destroyed and its job failed (the image "
-        "needs a POSIX shell and curl, wget or Python).",
+        "A running machine whose runner hasn't reported in this long is destroyed and its job tried on another "
+        "machine; after 3 machines the job fails (the image needs a POSIX shell and curl, wget or Python).",
         "minutes",
         2,
         120,
