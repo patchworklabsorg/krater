@@ -96,6 +96,35 @@ HOST_START_GRACE = timedelta(minutes=5)
 HOST_FAILED = "container never started"
 #: Machines a job may lose this way before it fails: by then the fault is more likely the job's own.
 MAX_HOST_FAILURES = 3
+#: `destroy_reason` of a machine whose Docker daemon was refused the job's image by its registry. In production
+#: (2026-11-12) a box's image was the guide's example `ghcr.io/you/train:v1` with a full stop after it: Vast said
+#: `Error response from daemon: Head "https://ghcr.io/v2/you/train/manifests/v1.": denied` within a minute, but Krater
+#: read only the stopped status, waited out HOST_START_GRACE and rented three A100s, one after another, before failing
+#: the box. Images are pulled anonymously (docs/guides/compute-jobs.md), so the registry's answer is the same on every
+#: machine: the job fails at once, and the machine isn't counted against its host.
+IMAGE_PULL_FAILED = "image couldn't be pulled"
+#: What Docker says when a registry refuses an image, rather than failing to reach it: the image or tag doesn't exist,
+#: is private, or isn't a valid name. Matched lowercase in a status message that starts with Docker's
+#: `Error response from daemon`. A host's own faults (a missing GPU runtime: `executable file not found`) and passing
+#: ones (`toomanyrequests`, timeouts, DNS) aren't here, so they still go to another machine.
+PULL_REFUSALS = (
+    "manifest unknown",
+    "pull access denied",
+    "repository does not exist",
+    "name unknown",
+    "invalid reference format",
+    '": denied',
+    '": unauthorized',
+    "denied: requested access",
+)
+
+
+def pull_refused(status_msg: str | None) -> bool:
+    """Whether a provider's status message says the image's registry refused it (PULL_REFUSALS)."""
+    message = (status_msg or "").lower()
+    return "error response from daemon" in message and any(marker in message for marker in PULL_REFUSALS)
+
+
 #: `destroy_reason` of a machine whose container ran but whose runner didn't report within the runner start deadline.
 #: On staging (2026-11-12) a host's first download of the runner was cut short and the next hung for ten minutes: the
 #: machine's fault, not the job's. So the job is tried on another machine, and this counts towards MAX_HOST_FAILURES
@@ -588,6 +617,14 @@ class Scheduler:
             return
         if (
             row.state is ComputeInstanceState.PROVISIONING
+            and seen.phase is not Phase.RUNNING
+            and row.runner_starts == 0
+            and pull_refused(seen.status_msg)
+        ):
+            self._fail_pull(row, job, seen)
+            return
+        if (
+            row.state is ComputeInstanceState.PROVISIONING
             and seen.phase in (Phase.STOPPED, Phase.INTERRUPTED)
             and row.runner_starts == 0
             and self.now - row.created_at >= HOST_START_GRACE
@@ -905,6 +942,30 @@ class Scheduler:
                 now=self.now,
             )
             job.queued_at, job.wait_started_at = queued_at, wait_started_at
+
+    def _fail_pull(self, row: ComputeInstance, job: ComputeJob, seen: Instance) -> None:
+        """The image's registry refused it (pull_refused): every machine would get the same answer, so the job fails
+        now, saying what the registry said, rather than renting more machines."""
+        said = " ".join((seen.status_msg or "").split())[:300]
+        _event(
+            self.session,
+            job,
+            "image_pull_failed",
+            f"Instance {row.provider_instance_id} couldn't pull the image: {said}",
+            now=self.now,
+            instance=row,
+            provider_status=seen.status,
+            provider_message=(seen.status_msg or "")[:500],
+        )
+        # Finished first: if the provider doesn't confirm the destroy, the next pass retries it for the finished job.
+        _finish(
+            job,
+            ComputeJobState.FAILED,
+            f"The image {job.image} couldn't be pulled ({said}). Check its name and tag, and that it's public: "
+            "machines pull it without signing in.",
+            now=self.now,
+        )
+        self._destroy(row, IMAGE_PULL_FAILED)
 
     def _give_up_on_host(self, row: ComputeInstance, job: ComputeJob, seen: Instance) -> None:
         """The machine was rented but its container never ran: the host's fault (a pull of the same image works

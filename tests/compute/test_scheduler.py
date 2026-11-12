@@ -747,6 +747,103 @@ def test_a_host_that_cannot_start_the_container_is_left_for_another_machine(
     assert job.state is ComputeJobState.STARTING
 
 
+DENIED = 'Error response from daemon: Head "https://ghcr.io/v2/you/train/manifests/v1.": denied'
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        {"actual_status": "loading"},  # what Vast showed within a minute
+        {"actual_status": "created", "intended_status": "stopped"},  # and a few minutes later
+    ],
+)
+def test_an_image_the_registry_refuses_fails_the_job_at_once(
+    db_session,  # noqa: F811
+    member,  # noqa: F811
+    project,  # noqa: F811
+    client,  # noqa: F811
+    fake,  # noqa: F811
+    status,
+) -> None:
+    """Production, 2026-11-12: a box's image didn't exist, and Krater rented three machines, five minutes each,
+    before failing it."""
+    job = _submit(db_session, member, project)
+    _pass(db_session, client)
+    row = _instance(db_session, job)
+    fake.set_status(row.provider_instance_id, status.pop("actual_status"), status_msg=DENIED, **status)
+
+    _pass(db_session, client, NOW + timedelta(minutes=1))
+
+    assert job.state is ComputeJobState.FAILED
+    assert "couldn't be pulled" in job.state_reason and 'manifests/v1.": denied' in job.state_reason
+    assert job.image in job.state_reason
+    assert row.state is ComputeInstanceState.DESTROYED and row.destroy_reason == scheduler.IMAGE_PULL_FAILED
+    assert fake.instances == {}
+    assert len(job.instances) == 1
+    event = db_session.scalars(
+        sa.select(ComputeEvent).where(ComputeEvent.job_id == job.id, ComputeEvent.kind == "image_pull_failed")
+    ).one()
+    assert event.payload["provider_message"] == DENIED
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Error response from daemon: manifest for ghcr.io/you/train:v2 not found: manifest unknown: manifest unknown",
+        "Error response from daemon: pull access denied for nosuch/image, repository does not exist or may require "
+        "'docker login': denied: requested access to the resource is denied",
+        'Error response from daemon: Head "https://ghcr.io/v2/org/private/manifests/latest": unauthorized',
+        "Error response from daemon: invalid reference format: repository name (library/Train) must be lowercase",
+    ],
+)
+def test_registry_refusals_are_recognised(message) -> None:
+    assert scheduler.pull_refused(message)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        None,
+        "",
+        "pulling image",
+        CDI_ERROR,
+        'Error response from daemon: Head "https://registry-1.docker.io/v2/library/python/manifests/3.12": '
+        "toomanyrequests: You have reached your pull rate limit.",
+        'Error response from daemon: Get "https://ghcr.io/v2/": net/http: request canceled while waiting for '
+        "connection (Client.Timeout exceeded while awaiting headers)",
+        'Error response from daemon: Get "https://ghcr.io/v2/": dial tcp: lookup ghcr.io: no such host',
+        'Error response from daemon: failed to create task for container: exec: "nvidia-container-runtime-hook": '
+        "executable file not found in $PATH",
+        "denied",  # not from Docker
+    ],
+)
+def test_passing_and_host_errors_are_not_refusals(message) -> None:
+    assert not scheduler.pull_refused(message)
+
+
+def test_a_passing_pull_error_still_waits_for_the_host(
+    db_session,  # noqa: F811
+    member,  # noqa: F811
+    project,  # noqa: F811
+    client,  # noqa: F811
+    fake,  # noqa: F811
+) -> None:
+    job = _submit(db_session, member, project)
+    _pass(db_session, client)
+    row = _instance(db_session, job)
+    fake.set_status(
+        row.provider_instance_id,
+        "loading",
+        status_msg='Error response from daemon: Head "https://registry-1.docker.io/v2/x/y/manifests/1": '
+        "toomanyrequests",
+    )
+
+    _pass(db_session, client, NOW + timedelta(minutes=1))
+
+    assert job.state is ComputeJobState.STARTING
+    assert row.state is ComputeInstanceState.PROVISIONING
+
+
 def test_a_later_attempt_doesnt_claim_to_resume_when_nothing_ran_before(
     db_session,  # noqa: F811
     member,  # noqa: F811
