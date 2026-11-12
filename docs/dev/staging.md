@@ -33,7 +33,7 @@ At `http://localhost:3000/admin/oauth_applications`, create a **confidential** a
 `docs/weave-integration.md` "Setting up Weave for Krater"):
 
 - Redirect URI: `http://localhost:8000/auth/callback`
-- Scopes: `openid profile email groups roles slack directory`. Krater uses `directory` for its own client_credentials
+- Scopes: `openid profile email groups roles slack patches directory`. Krater uses `directory` for its own client_credentials
   token; without it the directory API answers 403.
 - Note the client id/secret for `KRATER_WEAVE_CLIENT_ID`/`KRATER_WEAVE_CLIENT_SECRET`.
 

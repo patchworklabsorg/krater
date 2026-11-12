@@ -207,6 +207,36 @@ def test_a_reviewer_whose_reviewer_role_weave_revoked_is_refused(
     assert reviewer.user.roles_cached == [GROUP_MEMBER]
 
 
+def test_a_reviewer_who_holds_only_the_patch_role_can_approve(
+    db_session: Session, member: Actor, reviewer: Actor, weave: StubWeaveClient
+) -> None:
+    reviewer.user.slack_user_id = "U_REVIEWER"
+    _project, revision = _submitted_revision(db_session, member)
+    weave.set_roles(reviewer.user.weave_sub, [], patches={"ganymede": ["krater:reviewer"]})
+    slack_client = FakeSlackClient()
+
+    _approve(db_session, slack_client, weave, revision, "U_REVIEWER")
+
+    db_session.refresh(revision)
+    assert revision.outcome is RevisionOutcome.APPROVED
+    assert GROUP_REVIEWER in reviewer.user.roles_cached
+
+
+def test_a_reviewer_whose_patch_role_weave_revoked_is_refused(
+    db_session: Session, member: Actor, reviewer: Actor, weave: StubWeaveClient
+) -> None:
+    reviewer.user.slack_user_id = "U_REVIEWER"
+    _project, revision = _submitted_revision(db_session, member)
+    weave.set_roles(reviewer.user.weave_sub, [], patches={"ganymede": ["lead", "quilt:viewer"]})
+    slack_client = FakeSlackClient()
+
+    _approve(db_session, slack_client, weave, revision, "U_REVIEWER")
+
+    db_session.refresh(revision)
+    assert revision.outcome is RevisionOutcome.PENDING
+    assert reviewer.user.roles_cached == [GROUP_MEMBER]
+
+
 def test_a_reviewer_weave_no_longer_returns_is_refused(
     db_session: Session, member: Actor, reviewer: Actor, weave: StubWeaveClient
 ) -> None:

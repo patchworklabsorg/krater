@@ -34,7 +34,7 @@ from krater.weave.types import WeaveIdentity, WeaveUser
 
 logger = logging.getLogger(__name__)
 
-SCOPES = "openid profile email groups roles slack"
+SCOPES = "openid profile email groups roles slack patches"
 
 #: The scope Krater asks for on its client_credentials token for the directory API.
 DIRECTORY_SCOPE = "directory"
@@ -170,7 +170,9 @@ class LiveWeaveClient:
             email_verified=claims.get("email_verified") is True,
             slack_id=_string(claims.get("slack_id")) or None,
             slack_member=_optional_bool(claims.get("slack_member")),
-            roles=self._roles.krater_roles(roles=claims.get("roles"), groups=claims.get("groups")),
+            roles=self._roles.krater_roles(
+                roles=claims.get("roles"), groups=claims.get("groups"), patches=claims.get("patches")
+            ),
         )
 
     # -- Directory -------------------------------------------------------------------------------
@@ -191,6 +193,8 @@ class LiveWeaveClient:
         return user
 
     def list_users_with_role(self, role: str) -> list[WeaveUser]:
+        # Weave's directory filters by app role key only: someone who holds the role only as a patch role is not
+        # listed. Fine while the app roles and patch roles are the same people (docs/weave-integration.md).
         key = self._roles.weave_role_key(role)
         response = self._directory_get("/api/v1/directory/users", params={"role": key})
         if response.status_code == 404:
@@ -346,7 +350,9 @@ class LiveWeaveClient:
             email_verified=data.get("email_verified") is True,
             slack_id=_string(data.get("slack_id")) or None,
             slack_member=_optional_bool(data.get("slack_member")),
-            roles=self._roles.krater_roles(roles=data.get("roles"), groups=data.get("groups")),
+            roles=self._roles.krater_roles(
+                roles=data.get("roles"), groups=data.get("groups"), patches=data.get("patches")
+            ),
             # Fail closed: only an explicit `true` counts as active.
             active=data.get("active") is True,
             # Only a real boolean counts; a missing or malformed value is "Weave didn't say".

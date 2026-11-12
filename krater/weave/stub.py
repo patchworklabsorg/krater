@@ -5,11 +5,12 @@ Makes no network calls. Users come from a JSON fixture (`weave_stub_users_file`,
 picker page; `exchange_code` treats the authorization code as the chosen user's `sub` directly.
 
 Each fixture user has the same fields a real Weave sends: `sub`, `name`, `email`, `email_verified`,
-`slack_id`, optional `slack_member`, `groups` (group slugs), `roles` (Weave role keys; leave it out
-to exercise the group-slug fallback), and optional `minor`, `guardian_verified`, `demographics_answered`,
+`slack_id`, optional `slack_member`, `groups` (group slugs), `roles` (Weave app role keys; leave it out
+to exercise the group-slug fallback), optional `patches` (patch slug -> patch role keys; leave it out for a
+token without the `patches` scope), and optional `minor`, `guardian_verified`, `demographics_answered`,
 `us_resident` and `verification_status` (leave them out for "Weave didn't say").
 Sign-in and the directory lookups translate them with the same `RoleMapping` the live client uses.
-Tests change a user mid-test with `set_roles`, `set_active`, `set_minor`, `set_guardian_verified`,
+Tests change a user mid-test with `set_roles` (also for `patches`), `set_active`, `set_minor`, `set_guardian_verified`,
 `set_demographics_answered`, `set_verification_status` or `remove_user`. The app
 refuses stub mode in production.
 """
@@ -18,7 +19,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlencode
@@ -33,6 +34,9 @@ STUB_QUILT_TOKEN = "stub-quilt-token"
 STUB_STASH_TOKEN = "stub-stash-token"
 #: The stub accepts `<prefix>:<sub>` as a Krater CLI token for that fixture user.
 STUB_CLI_TOKEN_PREFIX = "stub-cli-token"
+
+#: `set_roles` leaves `patches` as it is unless the test passes it.
+_KEEP = object()
 
 #: The bundled fixture, used whenever `settings.weave_stub_users_file` is blank.
 DEFAULT_STUB_USERS_FILE = Path(__file__).parent / "stub_users.json"
@@ -51,6 +55,9 @@ class StubUser:
     groups: tuple[str, ...]
     roles: tuple[str, ...] | None  # None: Weave sends no `roles` field
     active: bool
+    # Patch slug -> patch role keys, kept as Weave would send it (a malformed value stays malformed).
+    # None: Weave sends no `patches` field.
+    patches: object = None
     minor: bool | None = None  # None: Weave sends no `minor` field
     guardian_verified: bool | None = None  # None: Weave sends no `guardian_verified` field
     demographics_answered: bool | None = None  # None: Weave sends no `demographics_answered` field
@@ -87,6 +94,7 @@ class StubWeaveClient:
                 groups=tuple(entry.get("groups", [])),
                 roles=None if raw_roles is None else tuple(raw_roles),
                 active=entry.get("active", True),
+                patches=entry.get("patches"),
                 minor=entry.get("minor"),
                 guardian_verified=entry.get("guardian_verified"),
                 demographics_answered=entry.get("demographics_answered"),
@@ -125,8 +133,13 @@ class StubWeaveClient:
         return None if user is None else self._record(user)
 
     def list_users_with_role(self, role: str) -> list[WeaveUser]:
-        records = (self._record(user) for user in self._users_by_sub.values())
-        return [record for record in records if role in record.roles]
+        # Like Weave's `?role=<key>`, this lists by app role (and, as before, the group fallback), not by patch role:
+        # a user who holds the role only in `patches` is left out, as Weave leaves them out.
+        return [
+            self._record(user)
+            for user in self._users_by_sub.values()
+            if role in self._mapping.krater_roles(roles=user.roles, groups=user.groups)
+        ]
 
     def quilt_token(self) -> str:
         self.quilt_token_requests += 1
@@ -173,6 +186,7 @@ class StubWeaveClient:
         roles: Iterable[str] | None = (),
         groups: Iterable[str] = (),
         active: bool = True,
+        patches: object = None,
         minor: bool | None = None,
         guardian_verified: bool | None = None,
         demographics_answered: bool | None = None,
@@ -181,8 +195,9 @@ class StubWeaveClient:
         slack_required: bool | None = None,
         code_of_conduct_required: bool | None = None,
     ) -> None:
-        """Add or replace a user. `roles` are Weave role keys (`None` for no `roles` field at all),
-        `groups` are group slugs, and `minor`, `guardian_verified`, `demographics_answered` or
+        """Add or replace a user. `roles` are Weave app role keys (`None` for no `roles` field at all),
+        `groups` are group slugs, `patches` maps a patch slug to patch role keys (`None` for no `patches` field),
+        and `minor`, `guardian_verified`, `demographics_answered` or
         `verification_status` is `None` when Weave sends no such field. A put user has passed ID verification
         unless the test says otherwise."""
         self._users_by_sub[sub] = StubUser(
@@ -195,6 +210,7 @@ class StubWeaveClient:
             groups=tuple(groups),
             roles=None if roles is None else tuple(roles),
             active=active,
+            patches=_copy_patches(patches),
             minor=minor,
             guardian_verified=guardian_verified,
             demographics_answered=demographics_answered,
@@ -204,13 +220,24 @@ class StubWeaveClient:
             code_of_conduct_required=code_of_conduct_required,
         )
 
-    def set_roles(self, sub: str, roles: Iterable[str] | None, *, groups: Iterable[str] | None = None) -> None:
-        """Change what Weave says `sub` holds: Weave role keys (`None` for no `roles` field at all) and,
-        optionally, group slugs. For tests that revoke or grant a role mid-test."""
+    def set_roles(
+        self,
+        sub: str,
+        roles: Iterable[str] | None,
+        *,
+        groups: Iterable[str] | None = None,
+        patches: object = _KEEP,
+    ) -> None:
+        """Change what Weave says `sub` holds: Weave app role keys (`None` for no `roles` field at all) and,
+        optionally, group slugs and the `patches` value (`None` for no `patches` field). For tests that revoke
+        or grant a role mid-test. Krater holds the union of app and patch roles, so revoking a role a user holds
+        both ways takes both."""
         user = self._users_by_sub[sub]
         changes: dict = {"roles": None if roles is None else tuple(roles)}
         if groups is not None:
             changes["groups"] = tuple(groups)
+        if patches is not _KEEP:
+            changes["patches"] = _copy_patches(patches)
         self._users_by_sub[sub] = dataclasses.replace(user, **changes)
 
     def set_active(self, sub: str, active: bool) -> None:
@@ -255,7 +282,7 @@ class StubWeaveClient:
             email_verified=user.email_verified,
             slack_id=user.slack_id,
             slack_member=user.slack_member,
-            roles=self._mapping.krater_roles(roles=user.roles, groups=user.groups),
+            roles=self._mapping.krater_roles(roles=user.roles, groups=user.groups, patches=user.patches),
             active=user.active,
             minor=user.minor,
             guardian_verified=user.guardian_verified,
@@ -265,6 +292,14 @@ class StubWeaveClient:
             slack_required=user.slack_required,
             code_of_conduct_required=user.code_of_conduct_required,
         )
+
+
+def _copy_patches(patches: object) -> object:
+    """A copy of a `patches` value, so a test changing its own dict later doesn't change the stub. A malformed
+    value is kept as it is, for tests of the fail-closed rule."""
+    if isinstance(patches, Mapping):
+        return {slug: list(keys) if isinstance(keys, list | tuple) else keys for slug, keys in patches.items()}
+    return patches
 
 
 __all__ = ["DEFAULT_STUB_USERS_FILE", "STUB_QUILT_TOKEN", "StubUser", "StubWeaveClient"]

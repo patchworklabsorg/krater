@@ -146,7 +146,7 @@ def test_authorization_url_uses_s256_pkce_and_the_roles_scopes(live_client: Live
     assert params["response_type"] == ["code"]
     assert params["client_id"] == [CLIENT_ID]
     assert params["redirect_uri"] == [REDIRECT_URI]
-    assert params["scope"] == ["openid profile email groups roles slack"]
+    assert params["scope"] == ["openid profile email groups roles slack patches"]
     assert params["state"] == ["s1"]
     assert params["nonce"] == ["n1"]
     assert params["code_challenge_method"] == ["S256"]
@@ -208,6 +208,46 @@ def test_exchange_code_falls_back_to_groups_without_a_roles_claim(
 
     assert identity.roles == frozenset({GROUP_MEMBER, GROUP_ADMIN})
     assert identity.slack_member is None
+
+
+def test_the_authorization_url_asks_for_the_patches_scope(live_client: LiveWeaveClient) -> None:
+    url = live_client.authorization_url(state="s1", nonce="n1", code_verifier="a" * 64, redirect_uri=REDIRECT_URI)
+
+    assert "patches" in parse_qs(urlparse(url).query)["scope"][0].split()
+
+
+def test_exchange_code_maps_the_patches_claim(
+    fake_weave: FakeWeave, live_client: LiveWeaveClient, rsa_key: RSAKey
+) -> None:
+    fake_weave.id_token = _id_token(
+        rsa_key,
+        roles=[],
+        patches={"ganymede": ["krater:admin", "lead", "quilt:viewer"], "europa": ["krater:reviewer"]},
+    )
+
+    identity = live_client.exchange_code(code="c1", code_verifier="v", redirect_uri=REDIRECT_URI, nonce=GOOD_NONCE)
+
+    assert identity.roles == frozenset({GROUP_MEMBER, GROUP_ADMIN})
+
+
+def test_exchange_code_unions_the_roles_and_patches_claims(
+    fake_weave: FakeWeave, live_client: LiveWeaveClient, rsa_key: RSAKey
+) -> None:
+    fake_weave.id_token = _id_token(rsa_key, roles=["reviewer"], patches={"ganymede": ["krater:admin"]})
+
+    identity = live_client.exchange_code(code="c1", code_verifier="v", redirect_uri=REDIRECT_URI, nonce=GOOD_NONCE)
+
+    assert identity.roles == frozenset({GROUP_MEMBER, GROUP_REVIEWER, GROUP_ADMIN})
+
+
+def test_exchange_code_ignores_a_malformed_patches_claim(
+    fake_weave: FakeWeave, live_client: LiveWeaveClient, rsa_key: RSAKey
+) -> None:
+    fake_weave.id_token = _id_token(rsa_key, roles=["reviewer"], patches={"ganymede": "krater:admin"})
+
+    identity = live_client.exchange_code(code="c1", code_verifier="v", redirect_uri=REDIRECT_URI, nonce=GOOD_NONCE)
+
+    assert identity.roles == frozenset({GROUP_MEMBER, GROUP_REVIEWER})
 
 
 @pytest.mark.parametrize("email_verified", [False, "true", None], ids=["false", "string", "absent"])
@@ -529,6 +569,31 @@ def test_a_fresh_lookup_skips_the_cache_and_refreshes_it(fake_weave: FakeWeave, 
     assert cached == fresh
     lookups = [r for r in fake_weave.requests if r.url.path == "/api/v1/directory/users/PWLDIR0001"]
     assert len(lookups) == 2
+
+
+def test_get_user_reads_patch_roles_from_the_directory_record(
+    fake_weave: FakeWeave, live_client: LiveWeaveClient
+) -> None:
+    fake_weave.directory_users["PWLDIR0001"] = {
+        **DIRECTORY_USER,
+        "roles": [],
+        "patches": {"ganymede": ["krater:admin", "krater:reviewer"]},
+    }
+
+    user = live_client.get_user("PWLDIR0001", fresh=True)
+
+    assert user is not None and user.roles == frozenset({GROUP_MEMBER, GROUP_REVIEWER, GROUP_ADMIN})
+
+
+def test_a_fresh_lookup_sees_a_patch_role_removed(fake_weave: FakeWeave, live_client: LiveWeaveClient) -> None:
+    admin = {**DIRECTORY_USER, "roles": [], "patches": {"ganymede": ["krater:admin"]}}
+    fake_weave.directory_users["PWLDIR0001"] = admin
+    live_client.get_user("PWLDIR0001")
+
+    fake_weave.directory_users["PWLDIR0001"] = {**DIRECTORY_USER, "roles": [], "patches": {"ganymede": []}}
+    fresh = live_client.get_user("PWLDIR0001", fresh=True)
+
+    assert fresh is not None and fresh.roles == frozenset({GROUP_MEMBER})
 
 
 def test_list_users_with_role_sends_the_weave_role_key(fake_weave: FakeWeave, live_client: LiveWeaveClient) -> None:

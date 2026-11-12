@@ -155,3 +155,46 @@ def test_set_us_resident_changes_the_record(stub_client: StubWeaveClient) -> Non
     record = stub_client.get_user("PWLMEMBERONE")
     assert record is not None
     assert record.us_resident is True
+
+
+def test_the_fixture_has_a_reviewer_by_patch_role_only(stub_client: StubWeaveClient) -> None:
+    # PWLPATCHREVIEWER holds no app role: only `krater:reviewer` in the `ganymede` patch. Its `europa` keys and
+    # `lead`, `quilt:viewer` give nothing.
+    record = stub_client.get_user("PWLPATCHREVIEWER")
+
+    assert record is not None
+    assert record.roles == frozenset({GROUP_MEMBER, GROUP_REVIEWER})
+
+
+def test_sign_in_reads_the_patches_field(stub_client: StubWeaveClient) -> None:
+    identity = stub_client.exchange_code(
+        code="PWLPATCHREVIEWER", code_verifier="v", redirect_uri="http://testserver/auth/callback", nonce="n"
+    )
+
+    assert identity.roles == frozenset({GROUP_MEMBER, GROUP_REVIEWER})
+
+
+def test_list_users_with_role_lists_by_app_role_only_like_weave(stub_client: StubWeaveClient) -> None:
+    # Weave's `?role=<key>` filter knows app roles only, so a patch-only reviewer is not listed.
+    reviewers = {u.sub for u in stub_client.list_users_with_role(GROUP_REVIEWER)}
+
+    assert "PWLPATCHREVIEWER" not in reviewers
+
+
+def test_set_roles_changes_patches_only_when_asked(stub_client: StubWeaveClient) -> None:
+    stub_client.set_roles("PWLPATCHREVIEWER", ["admin"])
+    kept = stub_client.get_user("PWLPATCHREVIEWER")
+    stub_client.set_roles("PWLPATCHREVIEWER", [], patches=None)
+    cleared = stub_client.get_user("PWLPATCHREVIEWER")
+
+    assert kept is not None and kept.roles == frozenset({GROUP_MEMBER, GROUP_REVIEWER, GROUP_ADMIN})
+    assert cleared is not None and cleared.roles == frozenset({GROUP_MEMBER})
+
+
+def test_put_user_copies_the_patches_value(stub_client: StubWeaveClient) -> None:
+    patches = {"ganymede": ["krater:admin"]}
+    stub_client.put_user("PWLPUT", patches=patches)
+    patches["ganymede"].clear()
+
+    record = stub_client.get_user("PWLPUT")
+    assert record is not None and record.roles == frozenset({GROUP_MEMBER, GROUP_ADMIN})

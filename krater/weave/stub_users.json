@@ -8,7 +8,8 @@
     "slack_id": "U0001MEMBER",
     "minor": false,
     "groups": [],
-    "roles": []
+    "roles": [],
+    "patches": {}
   },
   {
     "sub": "PWLMEMBERTWO",
@@ -50,6 +51,18 @@
     "minor": false,
     "groups": ["krater-reviewers", "krater-admins"],
     "roles": ["reviewer", "admin"]
+  },
+  {
+    "sub": "PWLPATCHREVIEWER",
+    "name": "Pat Patchrole",
+    "email": "pat@example.com",
+    "email_verified": true,
+    "verification_status": "verified",
+    "slack_id": "U0008PATCH",
+    "minor": false,
+    "groups": [],
+    "roles": [],
+    "patches": {"ganymede": ["krater:reviewer", "lead", "quilt:viewer"], "europa": ["krater:admin"]}
   },
   {
     "sub": "PWLNOROLE",

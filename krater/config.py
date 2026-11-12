@@ -58,9 +58,13 @@ class Settings(BaseSettings):
     weave_cli_loopback: bool = False
 
     # How Weave's answers map onto Krater's roles `ganymede:reviewer` and `ganymede:admin`. Everyone Weave lets use
-    # Krater is `ganymede:member`, with no role in Weave. The `roles` claim (Krater's app-defined role keys in Weave)
-    # is the source of truth. Only when Weave sends no `roles` at all does Krater fall back to these group slugs.
-    # See `krater.weave.roles`.
+    # Krater is `ganymede:member`, with no role in Weave. Krater holds the union of two sources (see
+    # `krater.weave.roles`): the patch role keys it holds in the patch `weave_patch` (the `patches` claim), and the
+    # legacy app role keys (the `roles` claim). Only when Weave sends no `roles` at all does Krater fall back to the
+    # group slugs.
+    weave_patch: str = "ganymede"
+    weave_patch_role_reviewer: str = "krater:reviewer"
+    weave_patch_role_admin: str = "krater:admin"
     weave_role_reviewer: str = "reviewer"
     weave_role_admin: str = "admin"
     weave_group_reviewer: str = "krater-reviewers"

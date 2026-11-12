@@ -15,6 +15,10 @@ Krater depends on this Weave work. All of it is merged on Weave `main`:
 - app-defined roles: [patchworklabsorg/weave#165](https://github.com/patchworklabsorg/weave/pull/165);
 - the directory API: [patchworklabsorg/weave#166](https://github.com/patchworklabsorg/weave/pull/166).
 
+Patch roles (the `patches` scope and claim) need
+[patchworklabsorg/weave#288](https://github.com/patchworklabsorg/weave/pull/288), which is not merged yet. See
+"Patch roles" below for the deploy order.
+
 Verification before funding reads the directory fields `verification_status`, `minor` and `guardian_verified` (see
 "Verification before funding" below). Weave `main` sends all three. A Weave without `verification_status` holds every
 project's budget and compute. The demographics gate reads the field
@@ -30,7 +34,8 @@ everyone Weave lets use the Krater app is a Ganymede member. An admin must add `
 | Discovery, JWKS, RS256 id_tokens | Verifying the id_token |
 | Claim `sub` | The user row. `sub` is the user's `p_id` (Patchwork ID), e.g. `PWL5A1B2C3D4` |
 | Claims `name`, `email` | The signed-in name in the session cookie; never stored (see "Member data" below) |
-| Claim `roles` (scope `roles`) | Krater's app-defined role keys the user holds |
+| Claim `patches` (scope `patches`) | The patch role keys the user holds, per patch. Krater reads its own patch, `ganymede` |
+| Claim `roles` (scope `roles`) | Krater's app-defined role keys the user holds (legacy, see "Patch roles") |
 | Claim `groups` (scope `groups`) | Group slugs linked to the Krater app; the fallback when `roles` is absent |
 | Claims `slack_id`, `slack_member` (scope `slack`) | Mapping Slack clicks to users, and the Slack membership gate |
 | The client_credentials grant, scope `directory` | Krater's own token for the directory API |
@@ -41,7 +46,7 @@ everyone Weave lets use the Krater app is a Ganymede member. An admin must add `
 | `GET /api/v1/directory/users?role=<key>` | "Everyone with role X", e.g. reviewers to invite to Slack channels |
 | A second, public app for the `krater` CLI; `GET /oauth/token/info` and `GET /oauth/userinfo` with a member's CLI token | Checking the CLI's tokens (docs/compute/cli.md) |
 
-Krater asks for the sign-in scopes `openid profile email groups roles slack`.
+Krater asks for the sign-in scopes `openid profile email groups roles slack patches`.
 
 ## Member data
 
@@ -66,11 +71,14 @@ content they wrote (proposals, reviews), which belongs to their projects.
 1. Register Krater as a **confidential** OAuth app at `/admin/oauth_applications`.
 2. Set the redirect URI to `https://<krater-host>/auth/callback`. Add `http://localhost:<port>/auth/callback` for
    development.
-3. Give the app the scopes `openid profile email groups roles slack directory`. An admin must add `directory` to the
-   Krater app's scopes, or the directory API answers 403. Add `quilt` to send events to Quilt
+3. Give the app the scopes `openid profile email groups roles slack patches directory`. An admin must add `directory`
+   to the Krater app's scopes, or the directory API answers 403. Without `patches` in the app's scopes, Weave refuses
+   Krater's sign-in request with `invalid_scope`, and the directory leaves out `patches`. Add `quilt` to send events to Quilt
    ([quilt-integration.md](quilt-integration.md)) and `stash` to archive submitted links in Stash
    ([stash-integration.md](stash-integration.md)); each is a client_credentials scope of the same app.
-4. On the Krater app page, a Weave superadmin creates the roles `reviewer` and `admin`.
+4. Link the Krater app to the patch `ganymede`. On that patch, a Weave superadmin creates the patch roles
+   `krater:reviewer` and `krater:admin`. Until the follow-up in "Patch roles" ships, the app roles `reviewer` and
+   `admin` on the Krater app page still count too.
 5. Give those roles to the reviewer and admin groups (or people) in Weave. Members need no role: the app's access
    policy decides who can use Krater (on staging, everyone who can sign in to Weave).
 6. Optional: link the groups `krater-reviewers` and `krater-admins` to the Krater app. Krater only
@@ -80,24 +88,81 @@ content they wrote (proposals, reviews), which belongs to their projects.
 
 ## Roles
 
-Weave sends the role keys a user holds for Krater in the `roles` claim and in each directory record. **`roles` is the
-source of truth.** `krater.weave.roles.RoleMapping` translates them to Krater's internal names:
+Weave sends a user's Krater roles two ways, in the id_token and in each directory record:
 
-| Weave role key (setting) | Group slug fallback (setting) | Krater role |
-| --- | --- | --- |
-| `reviewer` (`KRATER_WEAVE_ROLE_REVIEWER`) | `krater-reviewers` (`KRATER_WEAVE_GROUP_REVIEWER`) | `ganymede:reviewer` |
-| `admin` (`KRATER_WEAVE_ROLE_ADMIN`) | `krater-admins` (`KRATER_WEAVE_GROUP_ADMIN`) | `ganymede:admin` |
+- the `patches` claim: the patch role keys the user holds in each patch, for example
+  `{"ganymede": ["krater:admin", "krater:reviewer", "lead", "quilt:viewer"]}`;
+- the `roles` claim (legacy): the app role keys the user holds on the Krater app, with the group slugs as a fallback.
+
+**Krater holds the union of both.** `krater.weave.roles.RoleMapping` is the one place that translates them to
+Krater's internal names:
+
+| Patch role key in `ganymede` (setting) | App role key (setting) | Group slug fallback (setting) | Krater role |
+| --- | --- | --- | --- |
+| `krater:reviewer` (`KRATER_WEAVE_PATCH_ROLE_REVIEWER`) | `reviewer` (`KRATER_WEAVE_ROLE_REVIEWER`) | `krater-reviewers` (`KRATER_WEAVE_GROUP_REVIEWER`) | `ganymede:reviewer` |
+| `krater:admin` (`KRATER_WEAVE_PATCH_ROLE_ADMIN`) | `admin` (`KRATER_WEAVE_ROLE_ADMIN`) | `krater-admins` (`KRATER_WEAVE_GROUP_ADMIN`) | `ganymede:admin` |
+
+The patch slug is `KRATER_WEAVE_PATCH` (default `ganymede`).
 
 Rules:
 
-- Everyone Weave signs in or returns holds `ganymede:member`, whatever `roles` says.
+- Everyone Weave signs in or returns holds `ganymede:member`, whatever `roles` or `patches` says.
+- Krater reads only its own patch in `patches`, and only the keys in the table. Other patches give nothing. Other keys
+  in `ganymede` give nothing: `lead` (the governance patch lead), `quilt:viewer`, or a bare `reviewer`. Every app of a
+  patch gets the same claim, so Krater's keys carry the `krater:` prefix.
+- `patches` absent (no `patches` scope) or `{}` means no patch role. A malformed value counts as no patch role: not an
+  object, a value for `ganymede` that is not a list, or a list with a non-string entry. This fails closed for the
+  patch roles only. The app roles still count.
 - `roles: []` means "no reviewer or admin role". Krater does not fall back to groups for an empty list.
 - Krater uses the group slugs only when the `roles` field is absent. Weave leaves it out when the token has no `roles`
   scope. Weave's `groups` also include groups linked through a role assignment.
 - A `roles` value that isn't a list counts as no roles, so a malformed answer fails closed. Unknown keys (such as an
   old `member` role) are ignored.
 - The internal names (`ganymede:*`) stay inside Krater. The `Actor`, approval policies and review snapshots use them.
-  Nothing outside `krater.weave` sees Weave's keys or slugs.
+  Nothing outside `krater.weave` sees Weave's keys, slugs or patch slug.
+
+### Patch roles
+
+Weave moves app-specific roles from each app to the app's patch
+([patchworklabsorg/weave#288](https://github.com/patchworklabsorg/weave/pull/288)). Krater's `reviewer` and `admin`
+app roles become the patch roles `krater:reviewer` and `krater:admin` in `ganymede`. The maintainer approved the move.
+
+During the move, Krater holds the union of the patch roles and the app roles (with the group fallback when `roles` is
+absent). Nothing changes for anyone until the Weave import runs, and nobody loses access during the switch.
+
+```mermaid
+flowchart LR
+  P["patches claim: ganymede"] --> M[RoleMapping]
+  R["roles claim, or groups when roles is absent"] --> M
+  M --> U["union + ganymede:member"]
+```
+
+Deploy order:
+
+1. Weave #288 merges and deploys.
+2. In Weave, add `patches` to the scopes of the Krater app.
+3. Run the Weave import, first as a dry run, then with `APPLY=1`:
+
+   ```sh
+   bin/rails patches:import_app_roles APP=<krater app> PATCH=ganymede PREFIX=krater ACTOR=<superadmin email> \
+     GROUP_MAP=krater-reviewers:reviewer,krater-admins:admin
+   bin/rails patches:import_app_roles APP=<krater app> PATCH=ganymede PREFIX=krater ACTOR=<superadmin email> \
+     GROUP_MAP=krater-reviewers:reviewer,krater-admins:admin APPLY=1
+   ```
+
+4. Deploy Krater.
+
+If Krater deploys before its Weave app lists `patches`, Weave refuses every Krater sign-in request with
+`invalid_scope`. Actions keep working, because the directory only leaves `patches` out.
+
+**While the union holds, removing someone's reviewer or admin access takes both:** remove the app role (or the group)
+and the patch role.
+
+Follow-up, in a later PR, once the import ran: remove the app roles and the fallback groups from `RoleMapping`, the
+settings and this page, so the patch roles are the only source. Before that, `list_users_with_role` needs a new
+source too. It calls `GET /api/v1/directory/users?role=<key>`, and Weave's filter knows app roles only, so a person
+who holds a role only as a patch role is not listed (no reviewer invite to Slack channels, no admin access to boxes
+through `box_access`). Weave's directory needs a patch role filter first.
 
 ## The directory API
 
@@ -114,16 +179,17 @@ Endpoints:
 
 - `GET /api/v1/directory/users/{sub}` answers
   `{sub, name, email, email_verified, slack_id, slack_member, slack_required, code_of_conduct_required, groups, roles,
-  active, minor, guardian_verified, verification_status, demographics_answered, us_resident, us_residency_checked_on}`. A 404 means the user is unknown or may not use Krater:
+  patches, active, minor, guardian_verified, verification_status, demographics_answered, us_resident, us_residency_checked_on}`. A 404 means the user is unknown or may not use Krater:
   Krater treats them as not a member. Only `active: true` counts as active. `minor`, `guardian_verified`,
   `demographics_answered`, `us_resident`, `slack_required` and `code_of_conduct_required` are booleans that older
   Weave versions leave out (the last two came in weave#274). Krater reads a value that
   isn't a boolean as missing. `us_resident` is also null when the member has no standing residency result.
   `verification_status` is a string (`needs_submission`, `pending`, `verified` or `ineligible`); Krater reads anything
-  else as missing. Krater doesn't read `us_residency_checked_on`.
+  else as missing. Krater doesn't read `us_residency_checked_on`. Weave sends `patches` only when the Krater app's
+  scopes list `patches`; Krater reads it as in "Roles".
 - `GET /api/v1/directory/users?role=<key>` (or `?group=<slug>`, which Krater doesn't use) answers
   `{"users": [...]}`, sorted by `sub`. Send exactly one parameter. A role or group that isn't linked to Krater answers
-  404: Krater treats it as an empty list and logs a warning.
+  404: Krater treats it as an empty list and logs a warning. The filter knows app roles only (see "Patch roles").
 
 `get_user` answers are cached for 60 seconds for page views only: every state-changing action (`fresh_actor` on
 anything but a GET/HEAD, and Slack clicks) asks with `fresh=True`, which skips the cache. Any other failure (no answer, a 5xx, malformed JSON) raises
@@ -275,7 +341,8 @@ Only the submission is gated. Saving a draft is not. A completion asks for no bu
 
 ### Disabling someone
 
-Do it in Weave: remove their Krater roles or their access to the Krater app, and revoke their tokens. The next action
+Do it in Weave: remove their Krater roles (both the app role and the patch role, see "Patch roles") or their access
+to the Krater app, and revoke their tokens. The next action
 they take in Krater is refused straight away: actions never use the directory cache. Pages they already have open
 can keep showing what they could see for up to 60 seconds. Their boxes keep their SSH keys until the box stops; an
 admin can cancel them from the project's Compute page.
@@ -284,14 +351,16 @@ admin can cancel them from the project's Compute page.
 
 `KRATER_WEAVE_MODE=stub` (refused in production) replaces Weave with `krater/weave/stub_users.json`. Each fixture
 user has the fields a real Weave sends: `sub`, `name`, `email`, `email_verified`, `slack_id`, optional
-`slack_member`, `groups` (slugs), `roles` (keys) and optional `minor`, `guardian_verified`,
+`slack_member`, `groups` (slugs), `roles` (keys), optional `patches` (patch slug to keys) and optional `minor`, `guardian_verified`,
 `verification_status`, `demographics_answered` and `us_resident`. Every fixture user has
 `verification_status: "verified"`, and `put_user` defaults to it too. No fixture user has `demographics_answered`, so the gate lets them all submit and logs a
 warning. One user
 (`PWLREVIEWERTWO`) has no `roles` field, to exercise the group fallback. `PWLMINORONE` is a minor without a verified
 guardian, `PWLMINORVERIFIED` is a minor with one, and `PWLMEMBERTWO` has no `minor` field. The stub client answers the
-directory lookups from the same fixture with the same `RoleMapping`.
+directory lookups from the same fixture with the same `RoleMapping`. `PWLPATCHREVIEWER` is a reviewer through the
+patch role `krater:reviewer` only, and `PWLMEMBERONE` has `patches: {}`. Like Weave, the stub's
+`list_users_with_role` lists by app role, so it leaves `PWLPATCHREVIEWER` out.
 
-Tests change what Weave says mid-test with `StubWeaveClient.set_roles`, `set_active`, `set_minor`,
+Tests change what Weave says mid-test with `StubWeaveClient.set_roles` (with `patches=` for patch roles), `set_active`, `set_minor`,
 `set_guardian_verified`, `set_verification_status`, `set_demographics_answered`, `remove_user` and `put_user`. The
 `weave_stub` fixture in `tests/conftest.py` is the stub the test app uses.

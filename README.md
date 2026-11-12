@@ -61,6 +61,7 @@ The full stack (Postgres, a one-shot migration, the portal and the worker) also 
 `docker compose up --build`.
 
 Every Patchwork member Weave lets use Krater is a member and can submit a proposal. Weave owns the other roles: a
-Weave admin gives people or groups Krater's app roles `reviewer` and `admin`, and Krater reads them at sign-in and re-checks them with Weave's directory API before every action. In stub mode (the default for
+Weave admin gives people or groups the Ganymede patch roles `krater:reviewer` and `krater:admin` (during the move,
+Krater's old app roles `reviewer` and `admin` count too), and Krater reads them at sign-in and re-checks them with Weave's directory API before every action. In stub mode (the default for
 development) the fixture users in `krater/weave/stub_users.json` carry their roles. See `docs/weave-integration.md`.
 
