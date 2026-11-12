@@ -15,7 +15,8 @@ script as `args` (`krater/compute/launch.py`). The bootstrap:
    ends a machine, by destroying it (or the runner stops it, below).
 
 Checked locally on 2026-10-11 with alpine (busybox wget), python:3.12-slim (Python only) and debian:bookworm-slim
-(none: it prints why and waits, and Krater's runner start deadline fails the job).
+(none: it prints why and waits; Krater's runner start deadline then tries other machines, and fails the job after
+three).
 
 The runner then:
 
