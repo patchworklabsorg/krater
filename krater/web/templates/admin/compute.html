@@ -50,9 +50,28 @@
       {{ switch.paused_reason }}
     </p>
     <p>
-      Krater starts nothing and has stopped every running machine. Queued jobs wait and get this time back on their
-      max wait. Stopped boxes stay stopped, and are still destroyed after the box destroy time.
+      {% if switch.paused_mode == "regular" %}
+        A regular stop: Krater starts nothing, and each running machine saves its work (a job's checkpoints, a box's
+        /workspace) and then stops, or stops anyway after the box sync deadline.
+      {% else %}
+        An emergency stop: Krater starts nothing and stopped every running machine without waiting for a save.
+      {% endif %}
+      Queued jobs wait and get this time back on their max wait. Stopped boxes stay stopped, and are still destroyed
+      after the box destroy time.
     </p>
+    {% if switch.paused_mode == "regular" %}
+      <form method="post" action="/admin/compute/stop" class="form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="mode" value="emergency">
+        <div class="field">
+          <label for="emergency-reason">Reason for stopping now, without saving (required)</label>
+          <textarea id="emergency-reason" name="reason" rows="2"></textarea>
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="button button--danger">Emergency stop: don't wait for saves</button>
+        </div>
+      </form>
+    {% endif %}
     <form method="post" action="/admin/compute/start" class="form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="field">
@@ -74,11 +93,18 @@
       <p class="muted">Compute is off on this server (<code>KRATER_COMPUTE_MODE=off</code>), so nothing runs either way.</p>
     {% endif %}
     <p>
-      Stops all of Krater Compute within a minute: no new machines, no searches, and every running machine stopped.
-      A batch job's machine is destroyed and the job goes back in the queue; it carries on from its last checkpoint
-      in storage when compute is back on. A running box saves /workspace and stops. Use it when spend looks wrong,
-      Vast misbehaves, or anything else needs everything to stop now.
+      Stops all of Krater Compute: no new machines, no searches, and every running machine stopped. A batch job's
+      machine is destroyed and the job goes back in the queue; it carries on from its last checkpoint in storage when
+      compute is back on. A running box stops, keeping its disk.
     </p>
+    <ul>
+      <li><strong>Stop and save</strong>: each running job first uploads its checkpoints, and each box /workspace;
+        a machine stops once it has, or after the box sync deadline. For planned work, or when spend just needs to
+        stop soon.</li>
+      <li><strong>Emergency stop</strong>: every machine stops within a minute, without saving: a job loses what it
+        wrote since its last timed sync (every 10 minutes by default). For when Vast misbehaves or something must
+        stop now.</li>
+    </ul>
     <form method="post" action="/admin/compute/stop" class="form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="field">
@@ -87,7 +113,8 @@
         {% if switch_errors.reason %}<p class="field-error">{{ switch_errors.reason }}</p>{% endif %}
       </div>
       <div class="form-actions">
-        <button type="submit" class="button button--danger">Stop all compute</button>
+        <button type="submit" name="mode" value="regular" class="button button--primary">Stop and save</button>
+        <button type="submit" name="mode" value="emergency" class="button button--danger">Emergency stop</button>
       </div>
     </form>
   {% endif %}

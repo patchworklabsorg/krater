@@ -11,6 +11,7 @@ from krater.compute import runner_api
 from krater.config import get_settings
 from krater.models import (
     AuditEvent,
+    ComputeEvent,
     ComputeInstanceState,
     ComputeJobState,
     ComputeSettings,
@@ -41,6 +42,10 @@ def _settings_row(db_session) -> ComputeSettings:
     return db_session.get(ComputeSettings, 1)
 
 
+def _events_text(db_session, job) -> str:
+    return " ".join(db_session.scalars(sa.select(ComputeEvent.message).where(ComputeEvent.job_id == job.id)))
+
+
 def _audits(db_session, action):
     return list(db_session.scalars(sa.select(AuditEvent).where(AuditEvent.action == action)))
 
@@ -48,12 +53,14 @@ def _audits(db_session, action):
 # -- The stop switch -----------------------------------------------------------------------------------------------
 
 
-def test_stopping_compute_destroys_a_jobs_machine_and_requeues_the_job(
+def test_an_emergency_stop_destroys_a_jobs_machine_at_once_and_requeues_the_job(
     db_session, member, admin, project, client, fake
 ) -> None:  # noqa: F811
     job, row = _running_job(db_session, member, project, client, fake)
 
-    compute_halt.pause(db_session, admin, reason="spend looks wrong", now=NOW + timedelta(minutes=2))
+    compute_halt.pause(
+        db_session, admin, reason="spend looks wrong", now=NOW + timedelta(minutes=2), mode=compute_halt.STOP_EMERGENCY
+    )
     _pass(db_session, client, NOW + timedelta(minutes=3))
 
     assert row.state is ComputeInstanceState.DESTROYED and row.destroy_reason == "compute stopped"
@@ -61,6 +68,87 @@ def test_stopping_compute_destroys_a_jobs_machine_and_requeues_the_job(
     assert job.state is ComputeJobState.QUEUED
     assert "stopped Krater Compute" in job.state_reason
     assert "halted" in _events(db_session, job)
+
+
+def _heartbeat(db_session, row, minute):
+    return runner_api.heartbeat(db_session, row, {"gpu_util": 90}, now=NOW + timedelta(minutes=minute))
+
+
+def test_a_regular_stop_saves_a_jobs_checkpoints_before_destroying_its_machine(
+    db_session, member, admin, project, client, fake
+) -> None:  # noqa: F811
+    job, row = _running_job(db_session, member, project, client, fake)
+
+    compute_halt.pause(db_session, admin, reason="planned work", now=NOW + timedelta(minutes=2))
+    _pass(db_session, client, NOW + timedelta(minutes=3))
+    assert row.state is ComputeInstanceState.RUNNING and row.provider_instance_id in fake.instances
+    assert "saving its checkpoints first" in job.state_reason
+    assert _heartbeat(db_session, row, 3).sync is True
+
+    runner_api.synced(db_session, row, now=NOW + timedelta(minutes=3, seconds=20))
+    assert _heartbeat(db_session, row, 4).sync is False
+    _pass(db_session, client, NOW + timedelta(minutes=4))
+
+    assert row.state is ComputeInstanceState.DESTROYED and row.destroy_reason == "compute stopped"
+    assert job.state is ComputeJobState.QUEUED
+    halted = db_session.scalars(
+        sa.select(ComputeEvent).where(ComputeEvent.job_id == job.id, ComputeEvent.kind == "halted")
+    ).one()
+    assert halted.payload["saved"] is True and "saved first" in halted.message
+
+
+def test_a_regular_stop_stops_a_job_that_never_confirms_after_the_deadline(
+    db_session, member, admin, project, client, fake
+) -> None:  # noqa: F811
+    job, row = _running_job(db_session, member, project, client, fake)
+    compute_halt.pause(db_session, admin, reason="r", now=NOW + timedelta(minutes=2))
+    _pass(db_session, client, NOW + timedelta(minutes=3))
+
+    _pass(db_session, client, NOW + timedelta(minutes=12))  # the box sync deadline (10 minutes) isn't up
+    assert row.state is ComputeInstanceState.RUNNING
+
+    _pass(db_session, client, NOW + timedelta(minutes=13))
+    assert row.state is ComputeInstanceState.DESTROYED and job.state is ComputeJobState.QUEUED
+    assert "weren't confirmed saved" in _events_text(db_session, job)
+
+
+def test_an_emergency_stop_cuts_a_regular_stops_save_short(db_session, member, admin, project, client, fake) -> None:  # noqa: F811
+    job, row = _running_job(db_session, member, project, client, fake)
+    compute_halt.pause(db_session, admin, reason="r", now=NOW + timedelta(minutes=2))
+    _pass(db_session, client, NOW + timedelta(minutes=3))
+    assert row.state is ComputeInstanceState.RUNNING
+
+    compute_halt.pause(
+        db_session,
+        admin,
+        reason="Vast is billing oddly",
+        now=NOW + timedelta(minutes=3, seconds=30),
+        mode=compute_halt.STOP_EMERGENCY,
+    )
+    _pass(db_session, client, NOW + timedelta(minutes=4))
+
+    assert row.state is ComputeInstanceState.DESTROYED
+    assert _settings_row(db_session).paused_mode == compute_halt.STOP_EMERGENCY
+    try:
+        compute_halt.pause(
+            db_session, admin, reason="again", now=NOW + timedelta(minutes=5), mode=compute_halt.STOP_EMERGENCY
+        )
+    except InvalidState:
+        pass
+    else:
+        raise AssertionError("stopped twice")
+
+
+def test_a_job_saving_for_a_stop_that_ends_carries_on(db_session, member, admin, project, client, fake) -> None:  # noqa: F811
+    job, row = _running_job(db_session, member, project, client, fake)
+    compute_halt.pause(db_session, admin, reason="r", now=NOW + timedelta(minutes=2))
+    _pass(db_session, client, NOW + timedelta(minutes=3))
+
+    compute_halt.resume(db_session, admin, reason="false alarm", now=NOW + timedelta(minutes=3, seconds=30))
+    _pass(db_session, client, NOW + timedelta(minutes=4))
+
+    assert row.state is ComputeInstanceState.RUNNING and row.stop_requested_at is None
+    assert _heartbeat(db_session, row, 4).sync is False
 
 
 def test_while_stopped_nothing_is_searched_or_rented(db_session, member, admin, project, client, fake) -> None:  # noqa: F811
@@ -107,6 +195,19 @@ def test_a_running_box_saves_its_workspace_and_stops_when_compute_is_stopped(
 
     assert row.state is ComputeInstanceState.STOPPED and job.state is ComputeJobState.STOPPED
     assert row.provider_instance_id in fake.instances  # its disk is kept
+
+
+def test_an_emergency_stop_stops_a_running_box_without_waiting_for_a_save(
+    db_session, member, admin, project, client, fake
+) -> None:  # noqa: F811
+    job, row = _running_box(db_session, member, project, client, fake)
+
+    compute_halt.pause(db_session, admin, reason="r", now=NOW + timedelta(minutes=3), mode=compute_halt.STOP_EMERGENCY)
+    _pass(db_session, client, NOW + timedelta(minutes=3))
+
+    assert row.state is ComputeInstanceState.STOPPED and job.state is ComputeJobState.STOPPED
+    assert "not confirmed saved" in job.state_reason
+    assert row.provider_instance_id in fake.instances  # its disk, with /workspace, is kept
 
 
 def test_a_box_cant_be_resumed_while_compute_is_stopped(
@@ -221,7 +322,9 @@ def test_by_default_four_machines_run_at_once(db_session, member, project, clien
 
     states = [job.state for job in jobs]
     assert states.count(ComputeJobState.STARTING) == 4
-    assert "its limit" in jobs[-1].state_reason
+    # Queued in the same instant: which one waits is arbitrary.
+    (waiting,) = [job for job in jobs if job.state is not ComputeJobState.STARTING]
+    assert "its limit" in waiting.state_reason
 
 
 # -- Idle GPU warning ----------------------------------------------------------------------------------------------

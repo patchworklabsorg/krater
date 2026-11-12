@@ -213,7 +213,7 @@ func Run(ctx context.Context, cfg Config, apiHTTP, storageHTTP *http.Client, gpu
 		return 0, nil
 	}
 	if info.Command == "" {
-		heartbeatLoop(ctx, api, seconds(info.HeartbeatSeconds, 60), gpu, nil)
+		heartbeatLoop(ctx, api, seconds(info.HeartbeatSeconds, 60), gpu, nil, nil)
 		return 0, nil
 	}
 
@@ -280,7 +280,9 @@ func Run(ctx context.Context, cfg Config, apiHTTP, storageHTTP *http.Client, gpu
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		heartbeatLoop(loops, api, seconds(info.HeartbeatSeconds, 60), gpu, func() { stop("Krater asked to stop the job") })
+		heartbeatLoop(loops, api, seconds(info.HeartbeatSeconds, 60), gpu,
+			func() { stop("Krater asked to stop the job") },
+			func() { saveCheckpoints(loops, api, checkpoints) })
 	}()
 	go func() {
 		defer wg.Done()
@@ -340,7 +342,28 @@ func Run(ctx context.Context, cfg Config, apiHTTP, storageHTTP *http.Client, gpu
 // finalPushWindow bounds the retries of the final upload after the command exits.
 var finalPushWindow = 5 * time.Minute
 
-func heartbeatLoop(ctx context.Context, api *API, every time.Duration, gpu func() (float64, bool), stop func()) {
+// saveCheckpoints uploads the checkpoints now and confirms it: Krater asks before stopping all compute (a regular
+// stop), then destroys the machine. Confirm only a save that happened; on failure Krater keeps asking until its
+// deadline, and then stops the machine anyway.
+func saveCheckpoints(ctx context.Context, api *API, checkpoints *Syncer) {
+	err := retry(ctx, boxSaveWindow, func() error {
+		_, err := checkpoints.Push(ctx)
+		return err
+	})
+	if err != nil {
+		logf("saving the checkpoints failed, NOT confirming the save to Krater: %v", err)
+		return
+	}
+	if err := api.Synced(ctx); err != nil {
+		logf("could not confirm the save: %v", err)
+		return
+	}
+	logf("saved the checkpoints; Krater is stopping this machine")
+}
+
+// heartbeatLoop reports the machine's state every `every`. `stop` runs when Krater says the job has ended, and `save`
+// when it asks for the checkpoints before stopping the machine; either may be nil.
+func heartbeatLoop(ctx context.Context, api *API, every time.Duration, gpu func() (float64, bool), stop, save func()) {
 	sampler := newGPUSampler(gpu)
 	sampler.take() // so the first heartbeat already carries a sample
 	go sampler.run(ctx, 15*time.Second)
@@ -352,13 +375,17 @@ func heartbeatLoop(ctx context.Context, api *API, every time.Duration, gpu func(
 			beat["gpu_util"] = util
 		}
 		addNetUse(beat)
-		shouldStop, err := api.Heartbeat(ctx, beat)
+		reply, err := api.HeartbeatReply(ctx, beat)
+		shouldStop := err == nil && reply.Stop
 		var denied *ErrDenied
 		switch {
 		case errors.As(err, &denied):
 			shouldStop = true
 		case err != nil && ctx.Err() == nil:
 			logf("heartbeat failed: %v", err)
+		}
+		if err == nil && reply.Sync && !shouldStop && save != nil {
+			save()
 		}
 		if shouldStop {
 			if stop != nil {

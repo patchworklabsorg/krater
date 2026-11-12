@@ -42,6 +42,8 @@ type fakeKrater struct {
 	secrets  map[string]string
 	refuse   string
 	synced   int
+	// The stored checkpoint ckpt.txt when the runner confirmed a save.
+	ckptAtSync string
 	// Storage answers 503 to this many PUTs before working, to stand in for a transient storage outage.
 	storageFails int
 	// The job asked for project inputs; inputsGone: Krater refuses the list, as when they were deleted.
@@ -122,6 +124,7 @@ func (f *fakeKrater) handle(w http.ResponseWriter, r *http.Request) {
 		f.writeJSON(w, reply)
 	case path == "/runner/v1/synced":
 		f.synced++
+		f.ckptAtSync = string(f.objects["checkpoints/ckpt.txt"])
 		f.writeJSON(w, map[string]any{"ok": true})
 	case path == "/runner/v1/exit":
 		f.exitCodes = append(f.exitCodes, int(body["exit_code"].(float64)))
@@ -238,6 +241,22 @@ func TestRunReportsTheExitCodeAndUploadsCheckpointsAndOutputs(t *testing.T) {
 	}
 	if string(f.objects["checkpoints/ckpt.txt"]) != "step\n" || string(f.objects["outputs/eval/score.txt"]) != "0.93\n" {
 		t.Errorf("objects: %v", keys(f.objects))
+	}
+}
+
+func TestAJobAskedToSaveUploadsItsCheckpointsBeforeConfirming(t *testing.T) {
+	// A regular stop of all compute: Krater asks for the checkpoints while the command runs, then ends the job.
+	f := newFakeKrater(t)
+	f.command = `echo step-7 > "$KRATER_CHECKPOINT_DIR/ckpt.txt"; sleep 30`
+	f.syncAt = 2
+	f.stopAfter = 4
+	cfg := f.cfg(t)
+
+	if _, err := Run(context.Background(), cfg, http.DefaultClient, http.DefaultClient, noGPU); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if f.synced != 1 || f.ckptAtSync != "step-7\n" {
+		t.Errorf("synced %d with checkpoint %q; want one save of step-7", f.synced, f.ckptAtSync)
 	}
 }
 

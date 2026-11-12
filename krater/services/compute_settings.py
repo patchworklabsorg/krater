@@ -131,7 +131,8 @@ POLICY_FIELDS: tuple[PolicyField, ...] = (
     PolicyField(
         "box_sync_deadline_minutes",
         "Box sync deadline",
-        "Before stopping a box, Krater asks its runner to save /workspace, and stops it anyway after this long.",
+        "Before stopping a box (or a job, on a regular stop of all compute), Krater asks its runner to save "
+        "/workspace (the checkpoints), and stops it anyway after this long.",
         "minutes",
         1,
         120,

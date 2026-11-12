@@ -8,11 +8,15 @@ usual destroy time still runs. Members can still queue jobs; they wait, with the
 Two things halt it:
 
 - **The stop switch** (`pause`/`resume`): an admin, with a reason, from `/admin/compute`. It holds until an admin
-  turns compute back on.
+  turns compute back on. A **regular** stop first has each running job save its checkpoints (and each box
+  /workspace), giving up on that after the policy's box sync deadline; an **emergency** stop destroys batch machines
+  and stops boxes at once (a box's disk still holds /workspace). An admin can turn a regular stop into an emergency
+  one while it's saving.
 - **A spending cap** (`ComputeSettings.org_daily_cap_cents`, `org_monthly_cap_cents`; 0 = off, the default): Krater's
   spend across every project since the start of the UTC day or month. It lifts by itself when the period rolls over,
   or when an admin raises the cap. Spend is Krater's own estimate (`krater.compute.spend`), which the hourly
-  reconciliation corrects to Vast's charges, so it can trail them by up to an hour.
+  reconciliation corrects to Vast's charges, so it can trail them by up to an hour. A cap stops as a regular stop
+  does: the minutes spent saving cost little next to the work they keep.
 
 The scheduler decides once per pass (`halt_reason`) and records it (`ComputeSettings.halted_since`, `halt_reason`)
 so the portal can say why without recomputing spend. When a halt ends, every queued job gets the halted time back on
@@ -41,6 +45,11 @@ AUDIT_RESUME = "compute_resumed"
 #: What members read while an admin has stopped compute. The admin's own reason is for admins only.
 PAUSED_REASON = "an admin has stopped Krater Compute for now"
 
+#: The stop switch's modes (`ComputeSettings.paused_mode`).
+STOP_REGULAR = "regular"
+STOP_EMERGENCY = "emergency"
+STOP_MODES = (STOP_REGULAR, STOP_EMERGENCY)
+
 
 def _row(session: Session) -> ComputeSettings:
     compute_settings.global_policy(session)  # creates the row if it was ever deleted
@@ -55,14 +64,23 @@ def _require_admin_and_reason(actor: Actor, reason: str) -> str:
     return reason.strip()
 
 
-def pause(session: Session, actor: Actor, *, reason: str, now: datetime) -> None:
-    """Turn the stop switch on. The scheduler's next pass (within a minute) stops every running machine."""
+def pause(session: Session, actor: Actor, *, reason: str, now: datetime, mode: str = STOP_REGULAR) -> None:
+    """Turn the stop switch on. The scheduler's next pass (within a minute) starts stopping every running machine:
+    after saving work for a regular stop, at once for an emergency one. An emergency stop while a regular one holds
+    makes it an emergency stop."""
     reason = _require_admin_and_reason(actor, reason)
+    if mode not in STOP_MODES:
+        raise ValidationFailed({"mode": "Choose a regular or an emergency stop."})
     row = _row(session)
     if row.paused_at is not None:
+        if mode == STOP_EMERGENCY and row.paused_mode == STOP_REGULAR:
+            row.paused_mode = STOP_EMERGENCY
+            audit.record(session, actor, AUDIT_PAUSE, payload={"mode": mode, "escalated": True}, reason=reason)
+            session.flush()
+            return
         raise InvalidState("Krater Compute is already stopped.")
-    row.paused_at, row.paused_reason, row.paused_by_id = now, reason, actor.user.id
-    audit.record(session, actor, AUDIT_PAUSE, payload={}, reason=reason)
+    row.paused_at, row.paused_reason, row.paused_by_id, row.paused_mode = now, reason, actor.user.id, mode
+    audit.record(session, actor, AUDIT_PAUSE, payload={"mode": mode}, reason=reason)
     session.flush()
 
 
@@ -74,7 +92,7 @@ def resume(session: Session, actor: Actor, *, reason: str, now: datetime) -> Non
     if row.paused_at is None:
         raise InvalidState("Krater Compute isn't stopped.")
     stopped_for = now - row.paused_at
-    row.paused_at, row.paused_reason, row.paused_by_id = None, None, None
+    row.paused_at, row.paused_reason, row.paused_by_id, row.paused_mode = None, None, None, None
     audit.record(
         session, actor, AUDIT_RESUME, payload={"stopped_minutes": int(stopped_for.total_seconds() // 60)}, reason=reason
     )
@@ -161,6 +179,13 @@ def halt_reason(session: Session, now: datetime) -> str | None:
     return None
 
 
+def saves_first(session: Session) -> bool:
+    """Whether the halt in force lets running machines save their work before they stop: every halt but an
+    emergency stop (or a stop from before stops had modes)."""
+    row = _row(session)
+    return row.paused_at is None or row.paused_mode == STOP_REGULAR
+
+
 def record(session: Session, reason: str | None, *, now: datetime) -> bool:
     """Store this pass's decision. When a halt ends, give every queued job the halted time back on its max wait.
     Returns whether compute is halted. The caller commits."""
@@ -211,6 +236,9 @@ __all__ = [
     "AUDIT_PAUSE",
     "AUDIT_RESUME",
     "PAUSED_REASON",
+    "STOP_EMERGENCY",
+    "STOP_MODES",
+    "STOP_REGULAR",
     "CapStatus",
     "cap_statuses",
     "current",
@@ -220,6 +248,7 @@ __all__ = [
     "month_start",
     "pause",
     "record",
+    "saves_first",
     "require_running",
     "resume",
     "spend_since",

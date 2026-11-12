@@ -97,6 +97,7 @@ def _switch_view(db_session: Session) -> dict:
     return {
         "paused_at": row.paused_at,
         "paused_reason": row.paused_reason,
+        "paused_mode": row.paused_mode or compute_halt.STOP_EMERGENCY,
         "halted_since": row.halted_since,
         "halt_reason": row.halt_reason,
         "compute_on": get_settings().compute_on,
@@ -225,8 +226,9 @@ async def stop_all_compute(
 ):
     form = await request.form()
     reason = str(form.get("reason", ""))
+    mode = str(form.get("mode", compute_halt.STOP_REGULAR))
     try:
-        compute_halt.pause(db_session, actor, reason=reason, now=datetime.now(UTC))
+        compute_halt.pause(db_session, actor, reason=reason, now=datetime.now(UTC), mode=mode)
     except ValidationFailed as exc:
         db_session.rollback()
         return _global_page(request, db_session, switch_errors=exc.errors, switch_reason=reason, status_code=422)
@@ -235,11 +237,14 @@ async def stop_all_compute(
         flash(request, str(exc), "error")
         return RedirectResponse("/admin/compute", status_code=303)
     db_session.commit()
-    flash(
-        request,
-        "Compute stopped. Within a minute Krater stops every running machine and starts nothing new.",
-        "success",
-    )
+    if mode == compute_halt.STOP_EMERGENCY:
+        message = "Emergency stop. Within a minute Krater stops every running machine, without saving."
+    else:
+        message = (
+            "Compute stopped. Within a minute Krater starts nothing new and asks every running machine to save its "
+            "work; each stops once it has, or after the box sync deadline."
+        )
+    flash(request, message, "success")
     return RedirectResponse("/admin/compute", status_code=303)
 
 
