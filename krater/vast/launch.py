@@ -10,6 +10,12 @@ whose ENTRYPOINT is `/docker-entrypoint.sh`, ran the member's command.
 A box launches in Vast's SSH mode, where Vast sets up sshd and `onstart` is a startup script run after its init.
 Checked on staging (2026-10-11) with plain `ubuntu:24.04`: Vast brings its own sshd, the startup script runs and
 starts the runner, authorized_keys holds only the keys the runner installs, and 22/tcp is mapped to a public port.
+
+A bid is sent with `cancel_unavail: true`. Vast's default for an interruptible rental is false: when the machine can't
+start it at once, Vast makes the instance anyway, answers `success: false`, and leaves it stopped. On staging
+(2026-11-12) that happened 13 times, all bids, never on demand. The two machines it kept happening on were one host's,
+and one of them was later deverified with no usable CPU cores. Vast billed those instances disk only, never GPU. With
+`cancel_unavail` Vast refuses instead (410 `no_such_ask`): nothing is made, and the next pass tries another machine.
 """
 
 from __future__ import annotations
@@ -33,6 +39,7 @@ def create_request(launch: Launch) -> CreateInstance:
             env=launch.env,
             runtype=BOX_RUNTYPE,
             onstart=launch.bootstrap,
+            cancel_unavail=launch.bid_price is not None,
         )
     return CreateInstance(
         image=launch.image,
@@ -43,4 +50,5 @@ def create_request(launch: Launch) -> CreateInstance:
         runtype="args",
         onstart=ENTRYPOINT,
         args=("-c", launch.bootstrap),
+        cancel_unavail=launch.bid_price is not None,
     )

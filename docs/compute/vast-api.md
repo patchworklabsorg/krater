@@ -64,6 +64,13 @@ $0.019 in all.
   its label on the next pass, like a lost answer (a 4xx is still a refusal). That path is tested against FakeVast
   only, since the answer didn't come back after the fix. Until then the sweep destroyed each such machine within a
   minute; Vast's charges for them carry no project (the reconciliation flags them as unknown).
+- **Why a bid comes back `success: false` (staging, 2026-11-12).** Vast's `cancel_unavail` defaults to false for an
+  interruptible rental, so a bid the machine can't start at once is made anyway, answered `success: false`, and left
+  stopped (`actual_status: loading`). All 13 seen that day were bids, never on demand. The two machines it kept
+  happening on (39238 and 156491) were one host's (79466), and 39238 was later `deverified` with
+  `cpu_cores_effective: 0`. Vast billed those instances disk only, no GPU. Krater now sends `cancel_unavail: true`
+  with every bid, so Vast answers 410 `no_such_ask` and makes nothing. The scheduler keeps that machine from every
+  job for an hour (`UNAVAILABLE_WINDOW`; the same answer comes when someone else rented the offer first).
 - **The container starts before Vast says `running`.** The runner reported in 20–40 s after the create, while
   `actual_status` was still empty; Vast showed `running` 30–60 s later.
 - **Charges are current while a machine runs**, as the spike found: the watchdog saw them rise every minute.

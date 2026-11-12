@@ -3,6 +3,7 @@ pauses, moves, runtime limits and cancelling."""
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -810,6 +811,54 @@ def test_a_machine_vast_refused_and_left_stopped_is_dropped_at_once(db_session, 
     assert new.attempt == 2 and new.provider_machine_id != row.provider_machine_id
     assert job.state is ComputeJobState.STARTING
     assert job.queued_at == NOW
+
+
+def _unavailable_on(fake, machine: str):
+    """A client whose creates on `machine` get Vast's answer to a bid sent with `cancel_unavail` that can't start."""
+    bodies: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "PUT" and "/asks/" in request.url.path:
+            bodies.append(json.loads(request.content))
+            offer = request.url.path.rstrip("/").rsplit("/", 1)[-1]
+            if any(str(key) == offer and str(o["machine_id"]) == machine for key, o in fake.offers.items()):
+                return httpx.Response(410, json={"success": False, "error": "no_such_ask", "msg": "unavailable"})
+        return fake.handle(request)
+
+    refusing = fake.client()
+    refusing._http = httpx.Client(transport=httpx.MockTransport(handler))
+    return refusing, bodies
+
+
+def test_a_bid_its_machine_cant_start_is_refused_and_that_machine_avoided(
+    db_session,  # noqa: F811
+    member,  # noqa: F811
+    project,  # noqa: F811
+    fake,  # noqa: F811
+) -> None:
+    """With `cancel_unavail` Vast makes nothing and answers 410 `no_such_ask`. The machine is kept from every job for
+    UNAVAILABLE_WINDOW, so the job doesn't keep asking for the same cheapest offer."""
+    refusing, bodies = _unavailable_on(fake, "501")
+    first = _submit(db_session, member, project, target_microusd=100_000)
+    _pass(db_session, refusing)
+
+    row = _instance(db_session, first)
+    assert bodies[0]["cancel_unavail"] is True
+    assert row.state is ComputeInstanceState.CREATE_FAILED and row.destroy_reason == scheduler.UNAVAILABLE
+    assert row.provider_machine_id == "501" and fake.instances == {}
+    assert first.state is ComputeJobState.QUEUED and "create_refused" in _events(db_session, first)
+
+    _pass(db_session, refusing, NOW + timedelta(minutes=1))
+    assert _instance(db_session, first).provider_machine_id not in ("501", None)
+
+    second = _submit(db_session, member, project, now=NOW + timedelta(minutes=2), target_microusd=100_000)
+    _pass(db_session, refusing, NOW + timedelta(minutes=2))
+    assert _instance(db_session, second).provider_machine_id not in ("501", None)  # 501 is still the cheapest
+
+    # Past the window it's tried again: the same answer comes when someone else rented the offer first.
+    third = _submit(db_session, member, project, now=NOW + timedelta(hours=2), target_microusd=100_000)
+    _pass(db_session, fake.client(), NOW + timedelta(hours=2))
+    assert _instance(db_session, third).provider_machine_id == "501"
 
 
 def test_a_create_refused_but_started_is_kept(db_session, member, project, fake) -> None:  # noqa: F811
