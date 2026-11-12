@@ -172,12 +172,7 @@ def _cost_parts(job: ComputeJob) -> dict[str, int] | None:
     costs = job_costs.breakdown(job)
     if not costs.split_known:
         return None
-    parts = costs.part_cents()
-    return {
-        "gpu": parts.get("GPU", 0),
-        "disk": parts.get("Disk", 0),
-        "data": sum(cents for label, cents in parts.items() if label not in ("GPU", "Disk")),
-    }
+    return costs.notice_cents(job.spend_cents or 0)
 
 
 def _mbps(value: float | None) -> int | None:

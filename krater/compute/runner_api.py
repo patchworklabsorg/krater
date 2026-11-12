@@ -148,11 +148,20 @@ def start(session: Session, instance: ComputeInstance, *, now: datetime, setting
     instance.runner_started_at = now
     instance.last_heartbeat_at = now
     resumed = instance.attempt > 1 or instance.runner_starts > 1
+    ran_before = instance.runner_starts > 1 or any(
+        other.runner_starts > 0 for other in job.instances if other.attempt < instance.attempt
+    )
+    if not resumed:
+        said = "The runner started."
+    elif ran_before:
+        said = "The runner started. Resuming."
+    else:  # KRATER_RESUMED is still 1, as documented for any later attempt, but nothing ran before to resume from
+        said = f"The runner started (attempt {instance.attempt}; no earlier attempt got this far)."
     _event(
         session,
         instance,
         "runner_started",
-        "The runner started." + (" Resuming." if resumed else ""),
+        said,
         now=now,
         runner_starts=instance.runner_starts,
     )

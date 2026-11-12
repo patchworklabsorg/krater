@@ -162,6 +162,14 @@ def test_while_stopped_nothing_is_searched_or_rented(db_session, member, admin, 
     assert fake.search_bodies == [] and fake.instances == {}
 
 
+def test_a_job_queued_while_compute_is_stopped_says_so_at_once(db_session, member, admin, project) -> None:  # noqa: F811
+    compute_halt.pause(db_session, admin, reason="r", now=NOW)
+
+    job = _submit(db_session, member, project)
+
+    assert job.state_reason == f"Waiting: {compute_halt.PAUSED_REASON}."
+
+
 def test_turning_compute_back_on_gives_queued_jobs_the_stopped_time_back(
     db_session, member, admin, project, client, fake
 ) -> None:  # noqa: F811

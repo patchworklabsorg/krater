@@ -104,8 +104,15 @@ class JobEstimate:
 
 
 def _hours(hours: Decimal) -> str:
-    value = float(hours)
-    return f"{value:g} hour" + ("" if value == 1 else "s")
+    """A max runtime for people: "20 minutes", "1 hour", "1 hour 30 minutes", "8 hours" (not "0.333333 hours")."""
+    minutes = max(round(hours * 60), 1 if hours > 0 else 0)
+    whole, rest = divmod(minutes, 60)
+    parts = []
+    if whole:
+        parts.append(f"{whole} hour" + ("" if whole == 1 else "s"))
+    if rest or not whole:
+        parts.append(f"{rest} minute" + ("" if rest == 1 else "s"))
+    return " ".join(parts)
 
 
 def market_price(session: Session, job: _Shape, *, now: datetime) -> MarketPrice | None:
@@ -175,6 +182,30 @@ class Breakdown:
     # Krater's estimate split by part only covers machines rented since the split was kept (2026-11-12).
     split_known: bool
     charged: bool
+
+    def notice_cents(self, total_cents: int) -> dict[str, int]:
+        """GPU, disk and data (everything else) in cents that add up to `total_cents`, the job's spend, which is
+        rounded up once. Rounding each part up on its own made a $0.01 job read "GPU $0.01, disk $0.01, data $0.02"
+        (staging, 2026-11-12). Split by each part's share, Vast's figure where it has one; leftover cents go to the
+        largest remainders."""
+        micro = {
+            line.label: line.charged_microusd if line.charged_microusd is not None else line.estimate_microusd
+            for line in self.lines
+        }
+        weights = {
+            "gpu": micro.get("GPU", 0),
+            "disk": micro.get("Disk", 0),
+            "data": sum(amount for label, amount in micro.items() if label not in ("GPU", "Disk")),
+        }
+        whole = sum(weights.values())
+        if total_cents <= 0 or whole <= 0:
+            return {"gpu": max(total_cents, 0), "disk": 0, "data": 0}
+        shares = {name: divmod(total_cents * weight, whole) for name, weight in weights.items()}
+        cents = {name: share for name, (share, _) in shares.items()}
+        by_remainder = sorted(weights, key=lambda name: shares[name][1], reverse=True)
+        for name in by_remainder[: total_cents - sum(cents.values())]:
+            cents[name] += 1
+        return cents
 
     def part_cents(self) -> dict[str, int]:
         """Each part in cents, Vast's figure where it has one: for the job-ended notice."""

@@ -58,6 +58,15 @@ def test_the_estimate_is_an_upper_bound_at_the_max_runtime(db_session) -> None:
     assert "finish sooner" in estimate.summary()
 
 
+def test_a_runtime_under_an_hour_reads_in_minutes(db_session) -> None:
+    """It read "its full 0.333333 hours" (staging, 2026-11-12)."""
+    short = job_costs.estimate(db_session, _spec(max_runtime_minutes=20), transfer_cap_microusd_per_gb=CAP, now=NOW)
+    longer = job_costs.estimate(db_session, _spec(max_runtime_minutes=90), transfer_cap_microusd_per_gb=CAP, now=NOW)
+
+    assert "its full 20 minutes" in short.summary()
+    assert "its full 1 hour 30 minutes" in longer.summary()
+
+
 def test_the_members_data_estimate_is_counted_at_the_cap(db_session) -> None:
     estimate = job_costs.estimate(
         db_session, _spec(data_in_gb=500, data_out_gb=100), transfer_cap_microusd_per_gb=CAP, now=NOW
@@ -131,6 +140,27 @@ def test_the_breakdown_puts_krater_and_vast_side_by_side() -> None:
     assert lines["Other"] == (0, 500)
     assert costs.charged and costs.split_known
     assert costs.part_cents()["GPU"] == 61
+
+
+def test_the_notices_parts_add_up_to_the_jobs_cost() -> None:
+    """Staging, 2026-11-12: a $0.01 job read "GPU $0.01, disk $0.01, data $0.02": each part was rounded up alone."""
+    job = ComputeJob(name="short")
+    job.instances = [
+        _instance(
+            1,
+            accrued_microusd=5_000,
+            est_gpu_microusd=4_000,
+            est_disk_microusd=300,
+            est_image_microusd=1_000,
+            est_transfer_out_microusd=6,
+        )
+    ]
+    costs = job_costs.breakdown(job)
+
+    assert costs.notice_cents(1) == {"gpu": 1, "disk": 0, "data": 0}
+    parts = costs.notice_cents(350)
+    assert sum(parts.values()) == 350 and parts["gpu"] > parts["data"] > parts["disk"]
+    assert costs.notice_cents(0) == {"gpu": 0, "disk": 0, "data": 0}
 
 
 def test_machines_from_before_the_split_say_it_isnt_known() -> None:
