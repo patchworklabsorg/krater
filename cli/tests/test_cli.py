@@ -1295,6 +1295,33 @@ def test_show_gives_the_ssh_command_only_while_the_box_runs(http, fake, state, s
     assert any(line.startswith("  ssh: krater ssh 22222222  (ssh -p 10483 root@1.2.3.4)") for line in said) is shown
 
 
+@pytest.mark.parametrize(
+    ("smoke", "state", "line"),
+    [
+        (None, "succeeded", None),
+        (1, "running", "  smoke test: the command is stopped after 1 minute of running"),
+        (
+            5,
+            "succeeded",
+            (
+                "  smoke test: the command is stopped after 5 minutes of running;"
+                " `krater rerun 22222222 --no-smoke` queues the full run"
+            ),
+        ),
+    ],
+)
+def test_show_says_a_job_is_a_smoke_test(http, fake, smoke, state, line) -> None:
+    _login(http, [])
+    _show_ready(fake, JOB)
+    fake.details[JOB].update(smoke_minutes=smoke, state=state)
+    said: list[str] = []
+
+    run(["show", JOB], http=http, say=said.append)
+
+    smoke_lines = [s for s in said if s.startswith("  smoke test")]
+    assert smoke_lines == ([line] if line else [])
+
+
 # --- review fixes: transient errors, prices, refresh, terminal output, logout ---------------------------------------------
 
 

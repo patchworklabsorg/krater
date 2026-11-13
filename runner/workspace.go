@@ -168,7 +168,9 @@ func (s *Syncer) pushWorkspace(ctx context.Context) (int, error) {
 			continue
 		}
 		if err := errs[i]; err != nil {
-			logf("uploading %s failed: %v", e.Path, err)
+			if ctx.Err() == nil { // a cancelled push is the caller's doing, not a failed upload
+				logf("uploading %s failed: %v", e.Path, err)
+			}
 			if firstErr == nil {
 				firstErr = fmt.Errorf("uploading %s: %w", e.Path, err)
 			}

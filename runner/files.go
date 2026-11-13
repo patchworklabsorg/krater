@@ -250,7 +250,10 @@ func (s *Syncer) Push(ctx context.Context) (int, error) {
 	for i, name := range names {
 		if err := errs[i]; err != nil {
 			// Keep going: one refused file (the project's storage quota, say) mustn't stop the others.
-			logf("uploading %s failed: %v", name, err)
+			if ctx.Err() == nil {
+				// Not when the caller cancelled it (the command ended mid-sync): the final push uploads it again.
+				logf("uploading %s failed: %v", name, err)
+			}
 			if firstErr == nil {
 				firstErr = fmt.Errorf("uploading %s: %w", name, err)
 			}
