@@ -293,6 +293,11 @@ class ComputeEvent(UUIDPrimaryKeyMixin, Base):
     message: Mapped[str] = mapped_column(sa.Text, nullable=False)
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
     at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
+    # The order events were recorded in, from a sequence. Pages list a job's events by this, not `at`: the events of
+    # one scheduler pass share the time the pass began, which can be before the job was even queued.
+    seq: Mapped[int] = mapped_column(
+        sa.BigInteger, server_default=sa.text("nextval('compute_events_seq')"), nullable=False
+    )
 
     def __repr__(self) -> str:
         return f"<ComputeEvent {self.kind} job={self.job_id}>"

@@ -193,7 +193,7 @@ def _job_json(job: ComputeJob, *, detail: bool = False, session: Session | None 
             }
         )
         events = session.scalars(
-            sa.select(ComputeEvent).where(ComputeEvent.job_id == job.id).order_by(ComputeEvent.at.desc()).limit(50)
+            sa.select(ComputeEvent).where(ComputeEvent.job_id == job.id).order_by(ComputeEvent.seq.desc()).limit(50)
         )
         data["events"] = [{"at": _iso(e.at), "kind": e.kind, "message": e.message} for e in events]
         data["estimate"] = _estimate_json(session, job.project, job)

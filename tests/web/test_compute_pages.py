@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from krater.config import get_settings
 from krater.models import (
+    ComputeEvent,
     ComputeInstance,
     ComputeInstanceState,
     ComputeJob,
@@ -143,6 +144,22 @@ def test_compute_is_held_until_the_team_is_verified(
     )
     weave_stub.set_verification_status(MEMBER_SUB, "verified")
     assert "guardian-banner" not in client.get(f"/projects/{project.id}/compute/new").text
+
+
+def test_a_jobs_page_lists_events_in_the_order_they_happened(client: TestClient, login_as, project, db_session) -> None:
+    """A scheduler pass stamps its events with the time it began: before the job was queued, and all the same."""
+    member = login_as(MEMBER_SUB)
+    job = _job(db_session, project, member)
+    queued_at = db_session.scalars(sa.select(ComputeEvent.at).where(ComputeEvent.job_id == job.id)).one()
+    for message in ("First try", "Second try", "Rented it"):
+        db_session.add(
+            ComputeEvent(job_id=job.id, kind="x", message=message, payload={}, at=queued_at - timedelta(seconds=5))
+        )
+        db_session.flush()
+
+    page = client.get(f"/projects/{project.id}/compute/{job.id}").text
+
+    assert page.index("Rented it") < page.index("Second try") < page.index("First try") < page.rindex("Queued.")
 
 
 def test_a_bad_form_is_shown_again_with_the_errors(client: TestClient, login_as, project, db_session) -> None:
