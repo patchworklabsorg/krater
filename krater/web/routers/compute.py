@@ -37,6 +37,7 @@ from krater.services import (
     compute_jobs,
     compute_settings,
     job_costs,
+    live_prices,
     people,
     price_history,
     project_secrets,
@@ -224,6 +225,7 @@ def _form_page(
     estimate=None,
     source: ComputeJob | None = None,
     quote: dict | None = None,
+    live_table: dict | None = None,
 ):
     settings = get_settings()
     policy = compute_settings.effective_policy(db_session, project)
@@ -247,6 +249,7 @@ def _form_page(
             "transfer_warning": transfer_warning,
             "estimate": estimate,
             "quote": quote,
+            "live_table": live_table,
             "source": source,
             "escalations": ESCALATION_LABELS,
             "errors": errors or {},
@@ -274,11 +277,15 @@ def new_job(
     project = _project(db_session, actor, project_id)
     if not _is_team(actor, project):
         raise NotAllowed("Only the project's team can run jobs on its budget.")
-    if from_job is None:
-        return _form_page(request, db_session, project, weave_client)
+    source = None if from_job is None else _job(db_session, project, from_job)
+    # Opening the form searches Vast again for the "Cheapest now" column, if it's stale (`live_prices.TABLE_FRESH`).
+    live_table = live_quote.start_table(db_session)
+    if source is None:
+        return _form_page(request, db_session, project, weave_client, live_table=live_table)
     # "Run again": the same job's fields, to queue as they are or change first. Only a job of this project.
-    source = _job(db_session, project, from_job)
-    return _form_page(request, db_session, project, weave_client, posted=_posted_from(source), source=source)
+    return _form_page(
+        request, db_session, project, weave_client, posted=_posted_from(source), source=source, live_table=live_table
+    )
 
 
 def _verification(session: Session, weave_client: WeaveClient, project: Project) -> dict:
@@ -378,7 +385,17 @@ async def submit_job(
                 inputs_bytes=compute_jobs.inputs_size(store, project, spec),
             )
             quote = live_quote.start(db_session, project, spec)
-            return _form_page(request, db_session, project, weave_client, posted=posted, estimate=estimate, quote=quote)
+            live_table = live_quote.start_table(db_session)
+            return _form_page(
+                request,
+                db_session,
+                project,
+                weave_client,
+                posted=posted,
+                estimate=estimate,
+                quote=quote,
+                live_table=live_table,
+            )
         job = compute_jobs.submit_job(
             db_session,
             actor,
@@ -416,6 +433,21 @@ async def submit_job(
     db_session.commit()
     flash(request, "Queued. It starts when an offer at or under your price appears.", "success")
     return RedirectResponse(f"/projects/{project.id}/compute/{job.id}", status_code=303)
+
+
+@router.get("/projects/{project_id}/compute/live-prices")
+def live_table_status(
+    project_id: uuid.UUID,
+    db_session: Annotated[Session, Depends(get_session)],
+    actor: Annotated[Actor, Depends(session_actor)],
+):
+    """The form's "Cheapest now" column as it stands, for the form to poll (static/js/compute-form.js). The team
+    only."""
+    _require_compute()
+    project = _project(db_session, actor, project_id)
+    if not _is_team(actor, project):
+        raise NotAllowed("Only the project's team can run jobs on its budget.")
+    return live_prices.view_table(db_session)
 
 
 @router.get("/projects/{project_id}/compute/quotes/{key}")

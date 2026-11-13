@@ -113,6 +113,9 @@ What Krater does about it:
   is one search of 8 rows for the job's shape, run by the worker, reused for 2 minutes. It's skipped when less than
   half the quota is left, and Krater also counts its own (`live_price_usage`): at most 400 a UTC day, about 3,200
   rows, which holds even before the worker has seen Vast's quota headers.
+- The form's **Cheapest now** column (`live_prices.check_table`, task `live_table`) searches each tracked GPU model and
+  rental type with 4 rows, 1.5 s apart, when the form is opened and the column is over 5 minutes old: 36 searches,
+  about 150 rows. The same half-quota guard, and its own cap of 864 searches a UTC day (about 24 refreshes).
 - After each scheduler pass and price-history run the worker saves the quota (`vast_search_quota`), which
   `/admin/compute` shows. Under a quarter left, and used up, each write an `AuditEvent`
   (`compute_search_quota_low`, `compute_search_quota_exhausted`) and log an error, once per day.

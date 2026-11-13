@@ -10,6 +10,10 @@ Searches count against Vast's daily quota of search rows, which the scheduler ne
 when less than `QUOTA_RESERVE` of the quota is left, or when Krater's own daily count (`DAILY_SEARCHES`, kept in
 `live_price_usage`) is used up: that holds even when Vast's quota headers haven't been seen.
 
+The form's price table also gets a "Cheapest now" column (`request_table`, `check_table`, `view_table`): opening the
+form asks the worker to search each GPU model and rental type again, at most every `TABLE_FRESH`, a few rows each,
+and the page fills the column in as answers come back. These count under their own daily cap.
+
 Vast is only called from the worker (its key never reaches the portal); the portal only reads and writes rows here.
 """
 
@@ -17,6 +21,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 
@@ -25,10 +31,11 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from krater.compute import offers
-from krater.models import ComputeJobKind, LivePriceUsage, LiveQuote
-from krater.providers import ComputeProvider, ProviderError
+from krater.models import ComputeJobKind, LivePrice, LivePriceUsage, LiveQuote
+from krater.providers import ComputeProvider, ProviderError, ProviderRateLimitedError
+from krater.services import compute_settings
 from krater.services.compute_settings import ComputePolicy
-from krater.vast import RentalType, microusd_to_usd
+from krater.vast import RentalType, microusd_to_usd, usd_to_microusd
 
 #: A check this recent answers again without searching.
 QUOTE_FRESH = timedelta(minutes=2)
@@ -40,8 +47,19 @@ QUOTE_ROWS = 8
 #: The share of Vast's daily search quota live checks leave for the scheduler (as the price history does).
 QUOTA_RESERVE = 0.5
 PURPOSE_QUOTE = "quote"
-#: Krater's own cap on live searches a UTC day, by purpose: at most `QUOTE_ROWS` rows each.
-DAILY_SEARCHES = {PURPOSE_QUOTE: 400}
+PURPOSE_TABLE = "table"
+#: The form's "Cheapest now" column is searched again when the form is opened and it's older than this.
+TABLE_FRESH = timedelta(minutes=5)
+#: A refresh asked for this recently and not finished isn't asked for again (a whole table takes about a minute).
+TABLE_PENDING = timedelta(minutes=3)
+#: Rows a table search asks for, cheapest first: only the cheapest is shown.
+TABLE_ROWS = 4
+#: Seconds between a refresh's searches: Vast rate-limits bursts of about 30.
+TABLE_PAUSE_SECONDS = 1.5
+#: Krater's own cap on live searches a UTC day, by purpose: a quote is one search of `QUOTE_ROWS` rows (about 3,200
+#: rows a day at most); a full table is a search of `TABLE_ROWS` rows per GPU model and rental type, so 864 is about
+#: 24 refreshes of 18 models (about 3,500 rows). Vast's quota was 20,000 rows a day on staging.
+DAILY_SEARCHES = {PURPOSE_QUOTE: 400, PURPOSE_TABLE: 864}
 
 
 @dataclass(frozen=True)
@@ -194,6 +212,130 @@ def check(session: Session, client: ComputeProvider, key: str, *, now: datetime)
     return row
 
 
+def _waiting(row: LivePrice) -> bool:
+    return row.checked_at is None or row.checked_at < row.requested_at
+
+
+def request_table(session: Session, gpu_names: list[str], rental_types: tuple[str, ...], *, now: datetime) -> bool:
+    """Mark the form's "Cheapest now" rows stale since `TABLE_FRESH` as wanted, creating missing ones, and say whether
+    the worker should refresh them now (`False` while all are fresh, or a refresh asked for within `TABLE_PENDING` is
+    still going). Flushes; the caller commits before deferring the refresh."""
+    rows = {(row.gpu_name, row.rental_type): row for row in session.scalars(sa.select(LivePrice))}
+    stale: list[tuple[tuple[str, str], LivePrice | None]] = []
+    for wanted in ((gpu, rental) for gpu in gpu_names for rental in rental_types):
+        row = rows.get(wanted)
+        if row is not None and row.checked_at is not None and now - row.checked_at < TABLE_FRESH:
+            continue
+        if row is not None and _waiting(row) and now - row.requested_at < TABLE_PENDING:
+            return False
+        stale.append((wanted, row))
+    if not stale:
+        return False
+    for (gpu, rental), row in stale:
+        if row is None:
+            session.add(LivePrice(gpu_name=gpu, rental_type=rental, requested_at=now))
+        else:
+            row.requested_at = now
+    session.flush()
+    return True
+
+
+def check_table(
+    session: Session,
+    client: ComputeProvider,
+    *,
+    disk_gb: int,
+    clock: Callable[[], datetime],
+    on_row: Callable[[], None] = lambda: None,
+    pause_seconds: float = TABLE_PAUSE_SECONDS,
+    sleep: Callable[[float], None] = time.sleep,
+) -> int:
+    """Search Vast for every "Cheapest now" row that's waiting, `pause_seconds` apart, calling `on_row` (the worker
+    commits there, so the page fills in as it goes). A quota refusal or a rate limit ends the run, marking the rows
+    left with why; another failure marks only its row. Returns the searches made."""
+    policy = compute_settings.global_policy(session)
+    waiting = [
+        row
+        for row in session.scalars(sa.select(LivePrice).order_by(LivePrice.gpu_name, LivePrice.rental_type))
+        if _waiting(row)
+    ]
+    searched = 0
+    for i, row in enumerate(waiting):
+        now = clock()
+        why_not = refusal(session, client, PURPOSE_TABLE, 1, now=now)
+        if why_not is not None:
+            _give_up(waiting[i:], why_not, now=now)
+            on_row()
+            return searched
+        if searched and pause_seconds:
+            sleep(pause_seconds)
+        query = offers.shape_query(
+            rental_type=row.rental_type,
+            gpu_names=(row.gpu_name,),
+            min_gpu_ram_gb=None,
+            num_gpus=1,
+            disk_gb=disk_gb,
+            box=False,
+            reliability_floor=policy.reliability_floor,
+            transfer_cap_microusd_per_gb=policy.transfer_cap_microusd_per_gb,
+            limit=TABLE_ROWS,
+            order_by_price=True,
+        )
+        count_searches(session, PURPOSE_TABLE, 1, now=now)
+        searched += 1
+        try:
+            found = client.search_offers(query)
+        except ProviderRateLimitedError:
+            _give_up(waiting[i:], "Vast asked Krater to slow down. Try again in a few minutes.", now=clock())
+            on_row()
+            return searched
+        except ProviderError:
+            _give_up([row], "Vast didn't answer Krater's search.", now=clock())
+            on_row()
+            continue
+        # The hourly table's measure (`price_history.summarize`): 1-GPU offers on hosts Krater would rent, GPU price
+        # plus disk, no bid margin.
+        costs = sorted(
+            usd_to_microusd(offer.full_hourly(row.rental_type, disk_gb))
+            for offer in found
+            if offer.num_gpus == 1 and offers.within_transfer_cap(offer, policy.transfer_cap_microusd_per_gb)
+        )
+        row.cheapest_microusd = costs[0] if costs else None
+        row.error = None
+        row.checked_at = clock()
+        session.flush()
+        on_row()
+    return searched
+
+
+def _give_up(rows: list[LivePrice], why: str, *, now: datetime) -> None:
+    for row in rows:
+        row.error, row.checked_at, row.cheapest_microusd = why, now, None
+
+
+def view_table(session: Session) -> dict:
+    """The "Cheapest now" column as the form shows and polls it: `rows` by `"gpu|rental"`, each with `status`
+    (`checking`, `ready` or `unavailable`), `text` and `at` (its check time), plus `note` (why rows weren't
+    searched, if any) and `done`."""
+    rows = {}
+    note = None
+    for row in session.scalars(sa.select(LivePrice)):
+        if _waiting(row):
+            shown = {"status": "checking", "text": "checking…", "at": ""}
+        elif row.error:
+            note = note or row.error
+            shown = {"status": "unavailable", "text": "not checked", "at": row.checked_at.strftime("%H:%M:%S UTC")}
+        else:
+            text = "none" if row.cheapest_microusd is None else _rate(row.cheapest_microusd)
+            shown = {"status": "ready", "text": text, "at": row.checked_at.strftime("%H:%M:%S UTC")}
+        rows[f"{row.gpu_name}|{row.rental_type}"] = shown
+    return {
+        "rows": rows,
+        "note": note,
+        "done": all(shown["status"] != "checking" for shown in rows.values()),
+    }
+
+
 def _rate(microusd: int) -> str:
     return f"${microusd_to_usd(microusd):.4f}/h"
 
@@ -233,15 +375,20 @@ def view(row: LiveQuote) -> dict:
 __all__ = [
     "DAILY_SEARCHES",
     "PURPOSE_QUOTE",
+    "PURPOSE_TABLE",
     "QUOTA_RESERVE",
     "QUOTE_FRESH",
     "QUOTE_ROWS",
+    "TABLE_FRESH",
     "Shape",
     "check",
+    "check_table",
     "count_searches",
     "find",
     "refusal",
     "request",
+    "request_table",
     "shape_of",
     "view",
+    "view_table",
 ]

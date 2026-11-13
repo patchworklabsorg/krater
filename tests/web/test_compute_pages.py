@@ -18,6 +18,7 @@ from krater.models import (
     ComputeJobState,
     ComputeOutbid,
     GpuPriceSample,
+    LivePrice,
     LiveQuote,
 )
 from krater.registry import FakeRegistry, get_registry
@@ -408,6 +409,50 @@ def test_the_forms_prices_say_when_krater_checked_them(client: TestClient, login
     assert "Checked 41 minutes ago." in page
     assert "rents the cheapest offer that fits it then" in page
     assert "Cheapest then" in page and "Cheaper offers (10th to 50th percentile)" in page
+
+
+def test_opening_the_form_checks_the_cheapest_prices_now(
+    client: TestClient, login_as, project, db_session, monkeypatch
+) -> None:
+    """Paul, 2026-11-13: the snapshot wasn't current when he rented. Opening the form searches Vast again."""
+    from krater.web import live_quote
+
+    kicks: list[int] = []
+    monkeypatch.setattr(live_quote, "kick_live_table", lambda: kicks.append(1))
+    db_session.add(
+        GpuPriceSample(
+            sampled_at=datetime.now(UTC) - timedelta(minutes=41),
+            gpu_name="A100 SXM4",
+            rental_type="ondemand",
+            num_gpus=1,
+            disk_gb=32,
+            offer_count=4,
+            truncated=False,
+            min_microusd=551_100,
+            p10_microusd=551_100,
+            median_microusd=780_900,
+        )
+    )
+    db_session.flush()
+    login_as(MEMBER_SUB)
+
+    page = client.get(f"/projects/{project.id}/compute/new").text
+
+    assert kicks == [1]
+    assert "Cheapest now" in page and 'data-live="A100 SXM4|ondemand"' in page and "checking…" in page
+    url = f"/projects/{project.id}/compute/live-prices"
+    assert f'data-url="{url}"' in page
+    client.get(f"/projects/{project.id}/compute/new")
+    assert kicks == [1]  # already asked for
+
+    row = db_session.get(LivePrice, ("A100 SXM4", "ondemand"))
+    row.checked_at, row.cheapest_microusd = datetime.now(UTC), 404_400
+    db_session.flush()
+    answer = client.get(url).json()
+    assert answer["rows"]["A100 SXM4|ondemand"]["text"] == "$0.4044/h"
+
+    login_as(OTHER_MEMBER_SUB)
+    assert client.get(url).status_code == 404
 
 
 def test_price_history_draws_the_chart_and_a_table(client: TestClient, db_session) -> None:

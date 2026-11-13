@@ -32,7 +32,7 @@ from krater.models.gpu_price import GpuPrice
 from krater.models.gpu_price_sample import GpuPriceSample
 from krater.models.held_grant import HeldGrant
 from krater.models.image_inspection import ImageInspection
-from krater.models.live_price import LivePriceUsage, LiveQuote
+from krater.models.live_price import LivePrice, LivePriceUsage, LiveQuote
 from krater.models.ops_alert import OpsAlert, WorkerHeartbeat
 from krater.models.ospool_grant import OspoolGrant, OspoolUsageDay
 from krater.models.project import Project
@@ -84,6 +84,7 @@ __all__ = [
     "ComputeWaitSample",
     "GpuOfferObservation",
     "ImageSize",
+    "LivePrice",
     "LivePriceUsage",
     "LiveQuote",
     "ProjectStatus",

@@ -47,9 +47,43 @@
     setTimeout(ask, 1500);
   }
 
+  // The price table's "Cheapest now" column: opening the form asked the worker to search Vast again for each row,
+  // and this asks for the answers every 3 seconds for up to 2 minutes, filling in rows as they come back
+  // (krater/services/live_prices.py).
+  function pollTable() {
+    var table = document.querySelector('[data-role="live-table"]');
+    if (!table || table.getAttribute("data-done") === "1" || !window.fetch) return;
+    var note = document.querySelector('[data-role="live-note"]');
+    var tries = 0;
+    function show(answer) {
+      Object.keys(answer.rows || {}).forEach(function (key) {
+        var cell = table.querySelector('[data-live="' + key.replace(/"/g, '\\"') + '"]');
+        if (!cell) return;
+        cell.querySelector('[data-part="text"]').textContent = answer.rows[key].text;
+        cell.querySelector('[data-part="at"]').textContent = answer.rows[key].at;
+      });
+      if (note && answer.note) {
+        note.textContent = answer.note;
+        note.hidden = false;
+      }
+    }
+    function ask() {
+      tries += 1;
+      fetch(table.getAttribute("data-url"), { headers: { Accept: "application/json" }, credentials: "same-origin" })
+        .then(function (response) { return response.ok ? response.json() : null; })
+        .then(function (answer) {
+          if (answer) show(answer);
+          if ((!answer || !answer.done) && tries < 40) setTimeout(ask, 3000);
+        })
+        .catch(function () { if (tries < 40) setTimeout(ask, 3000); });
+    }
+    setTimeout(ask, 2000);
+  }
+
   function start() {
     init();
     pollQuote();
+    pollTable();
   }
 
   if (document.readyState === "loading") {

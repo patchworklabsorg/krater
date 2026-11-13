@@ -10,9 +10,9 @@ from sqlalchemy.orm import Session
 
 from krater.config import get_settings
 from krater.models import Project
-from krater.services import compute_settings, live_prices
+from krater.services import compute_settings, live_prices, price_history
 from krater.services.compute_jobs import JobSpec
-from krater.worker.app import kick_live_quote
+from krater.worker.app import kick_live_quote, kick_live_table
 
 
 def start(session: Session, project: Project, spec: JobSpec) -> dict | None:
@@ -28,6 +28,22 @@ def start(session: Session, project: Project, spec: JobSpec) -> dict | None:
     if needs_check:
         kick_live_quote(key)
     return {**shown, "key": key}
+
+
+def start_table(session: Session) -> dict | None:
+    """Ask the worker to refresh the form's "Cheapest now" column if it's stale, and return it as it stands
+    (`live_prices.view_table`); `None` when compute isn't on Vast. Commits."""
+    settings = get_settings()
+    if settings.compute_mode != "vast":
+        return None
+    needs = live_prices.request_table(
+        session, settings.price_history_gpus, price_history.RENTAL_TYPES, now=datetime.now(UTC)
+    )
+    shown = live_prices.view_table(session)
+    session.commit()
+    if needs:
+        kick_live_table()
+    return shown
 
 
 def poll(session: Session, key: str) -> dict | None:
