@@ -1305,8 +1305,10 @@ def test_wait_rides_out_a_5xx_a_429_and_a_dropped_connection(http, fake, capsys)
     code, said, sleeps = _wait(http)
 
     assert code == 0 and said == ["nb: succeeded"]
-    assert sleeps == [5, 10, 20, 40]  # a growing pause, starting at the interval
-    assert capsys.readouterr().err.count("trying again") == 1
+    # The 503 and the refused connection are tried again at once by the API client (1 s, then 2 s, as for a
+    # deploy); the 429 and the timeout by `wait`, with a growing pause starting at its interval.
+    assert sleeps == [1.0, 2.0, 5, 10]
+    assert capsys.readouterr().err.count("trying again") == 2
 
 
 def test_wait_backs_off_no_further_than_a_minute(http, fake) -> None:
@@ -1351,7 +1353,8 @@ def test_logs_follow_rides_out_a_5xx_too(http, fake) -> None:
 
     code, said = _follow(http, fake, [lambda: None, lambda: None])
 
-    assert code == 0 and said == ["a", "nb: succeeded", "sleeps=[5, 10]"]
+    # The API client rides both out itself (a deploy's moment of 502s), before `logs -f` has to.
+    assert code == 0 and said == ["a", "nb: succeeded", "sleeps=[1.0, 2.0]"]
 
 
 @pytest.mark.parametrize("price", ["nan", "NaN", "inf", "$snan"])
