@@ -32,7 +32,7 @@ import sys
 import time
 import webbrowser
 from collections.abc import Callable, Sequence
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_CEILING, Decimal, InvalidOperation
 from urllib.parse import quote
 
 import httpx
@@ -283,7 +283,7 @@ def _parser() -> argparse.ArgumentParser:
         help="leave alone a local file that has the same size (default: fetch everything again)",
     )
     for action, text in (
-        ("cancel", "cancel a job or box (its machine is destroyed)"),
+        ("cancel", "cancel a job or box (its machine is destroyed; a box isn't saved first and can't be brought back)"),
         ("stop", "stop a box (it saves /workspace first)"),
         ("resume", "start a stopped box again on the same machine"),
         ("move", "start a stopped box on another machine from its saved /workspace"),
@@ -351,6 +351,33 @@ def _checked_at(prices: list[dict]) -> str:
 
 def _money(value: str | None) -> str:
     return f"${value}" if value is not None else "-"
+
+
+def _per_day(usd_per_hour: str) -> str:
+    """An hourly rate as dollars a day, rounded up to the cent."""
+    cents = (Decimal(usd_per_hour) * 24 * 100).to_integral_value(rounding=ROUND_CEILING)
+    return f"${cents / 100:.2f}"
+
+
+def _when(iso: str) -> str:
+    return iso[:16].replace("T", " ") + " UTC"
+
+
+def _box_lines(box: dict, ident: str) -> list[str]:
+    """What `krater show` says about a box's saved /workspace and, when stopped, its end."""
+    lines = []
+    if box.get("destroy_at"):
+        lines.append(
+            f"destroyed at {_when(box['destroy_at'])} unless resumed (`krater resume {ident}`); "
+            f"`krater cancel {ident}` ends the disk charge now. Once destroyed, it can't be brought back"
+        )
+    saved = box.get("workspace_saved_at")
+    lines.append(
+        f"/workspace saved {_when(saved) if saved else 'not yet'}: Krater saves it every "
+        f"{box.get('workspace_save_minutes', 10)} minutes while the box runs and before it stops; nothing else on "
+        "the machine is saved"
+    )
+    return lines
 
 
 def _size(count: int) -> str:
@@ -956,13 +983,24 @@ def run(
                 )
             machine = job.get("machine")
             if machine:
-                say(f"  machine: {machine['gpu']} at {_money(machine['usd_per_hour'])}/h, {machine['state']}")
+                now_rate = machine.get("usd_per_hour_now")  # absent from a Krater before it
+                if machine["state"] == "stopped" and now_rate is not None:
+                    say(
+                        f"  machine: {machine['gpu']}, stopped: {_money(now_rate)}/h while stopped, only its disk "
+                        f"(about {_per_day(now_rate)} a day); {_money(machine['usd_per_hour'])}/h running"
+                    )
+                else:
+                    say(f"  machine: {machine['gpu']} at {_money(machine['usd_per_hour'])}/h, {machine['state']}")
                 # Only while it runs: a stopped box keeps its old address, which no longer answers.
                 if machine.get("ssh_host") and job["kind"] == "box" and job["state"] == "running":
                     say(
                         f"  ssh: krater ssh {resolve.short(job['id'])}  "
                         f"(ssh -p {machine['ssh_port']} root@{machine['ssh_host']})"
                     )
+            box = job.get("box")
+            if box:
+                for line in _box_lines(box, short(job["id"])):
+                    say(f"  {line}")
             for event in job.get("events", [])[:10]:
                 say(f"  {event['at'][:19].replace('T', ' ')}  {event['message']}")
 
@@ -1027,6 +1065,11 @@ def run(
                 )
             else:
                 say(f"{job['name']}: {job['state']}" + (f" - {job['state_reason']}" if job["state_reason"] else ""))
+                if args.command == "cancel" and job["kind"] == "box":
+                    say(
+                        "  Its machine is destroyed with its disk and saved /workspace, without a last save; "
+                        "it can't be brought back."
+                    )
 
         out(job, acted)
     elif args.command == "ssh":

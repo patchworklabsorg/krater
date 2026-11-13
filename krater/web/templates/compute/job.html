@@ -170,14 +170,38 @@
       <h2>Machine</h2>
       <dl class="details">
         <dt>GPU</dt><dd>{{ instance.gpu_name }}</dd>
-        <dt>Price</dt><dd>{{ instance.full_microusd | rate }} ({{ "bid" if instance.interruptible else "on demand" }})</dd>
+        <dt>Price</dt>
+        <dd>
+          {% if box and instance.state.value == "stopped" %}
+            <strong>{{ box.rate_microusd | rate }} while stopped</strong> (about {{ box.day_cents | dollars }} a day): only
+            its disk bills, not the GPU. Running, it's {{ instance.full_microusd | rate }}
+            ({{ "bid" if instance.interruptible else "on demand" }}).
+          {% else %}
+            {{ instance.full_microusd | rate }} ({{ "bid" if instance.interruptible else "on demand" }})
+          {% endif %}
+        </dd>
         {% if instance.transfer_in_microusd_per_gb is not none %}
           <dt>Data transfer</dt>
           <dd>{{ instance.transfer_in_microusd_per_gb | per_tb }} in, {{ instance.transfer_out_microusd_per_gb | per_tb }} out, billed per GB on top</dd>
         {% endif %}
         <dt>State</dt><dd>{{ instance.state.value }}</dd>
-        {% if instance.last_synced_at %}<dt>Workspace saved</dt><dd>{{ instance.last_synced_at.strftime("%Y-%m-%d %H:%M UTC") }}</dd>{% endif %}
+        {% if box and box.destroy_at %}
+          <dt>Destroyed</dt>
+          <dd>at {{ box.destroy_at.strftime("%Y-%m-%d %H:%M UTC") }} unless you resume it: the machine and its disk go,
+            and the box can't be brought back</dd>
+        {% endif %}
+        {% if box %}
+          <dt>Workspace saved</dt>
+          <dd>{{ box.saved_at.strftime("%Y-%m-%d %H:%M UTC") if box.saved_at else "not yet" }}</dd>
+        {% endif %}
       </dl>
+      {% if box %}
+        <p class="muted">Krater saves <code>/workspace</code> every {{ box.save_minutes }} minutes while the box runs and
+          before it stops it, and puts it back when the box resumes or starts on another machine. Nothing else on the
+          machine is saved (packages installed elsewhere, files in <code>/root</code>). Once the box is destroyed, its
+          saved <code>/workspace</code> can't be restored or downloaded, so keep what matters somewhere else too (a git
+          repository, say).</p>
+      {% endif %}
       {% if job.kind.value == "box" and instance.ssh_host and instance.ssh_port %}
         <h3>Connect</h3>
         <p><code>ssh -p {{ instance.ssh_port }} root@{{ instance.ssh_host }}</code></p>
@@ -243,6 +267,18 @@
           </form>
         {% endif %}
       </div>
+      {% if can_cancel and box and instance %}
+        <p class="muted">
+          {% if job.state.value == "stopped" %}
+            Cancel destroys the stopped machine and its disk now, which ends the disk charge. The box and its saved
+            <code>/workspace</code> can't be brought back.
+          {% else %}
+            Cancel destroys the machine at once, without saving <code>/workspace</code> first: work since its last save
+            ({{ box.saved_at.strftime("%H:%M UTC") if box.saved_at else "none yet" }}) is lost, and the box can't be
+            brought back.{% if can_stop %} To keep your work, stop the box instead.{% endif %}
+          {% endif %}
+        </p>
+      {% endif %}
     </section>
   {% endif %}
 </aside>

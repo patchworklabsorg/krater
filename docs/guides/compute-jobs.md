@@ -49,8 +49,8 @@ There are two kinds of work:
 | --- | --- | --- |
 | What it is | Runs one command, then the machine is destroyed | A workspace you SSH into |
 | Good for | Training runs, batch inference, data processing, sweeps | Exploring, debugging, notebooks, building your image |
-| Ends when | The command exits, you cancel it, or it hits its max runtime | You cancel it. It stops itself when idle and can be resumed |
-| What's kept | Checkpoints, outputs and the log, in Krater's storage | `/workspace`, in Krater's storage, between sessions |
+| Ends when | The command exits, you cancel it, or it hits its max runtime | You cancel it, or it stays stopped for 24 hours. It stops itself when idle and can be resumed |
+| What's kept | Checkpoints, outputs and the log, in Krater's storage | `/workspace`, in Krater's storage, while the box exists. Not after it's destroyed |
 
 Machines are either **interruptible** or **on demand**:
 
@@ -400,7 +400,7 @@ when Krater moves it to another machine.
 | **starting** | A machine is rented and pulling your image. The disk bills from now; the GPU from when it runs |
 | **running** | Your command is running |
 | **paused** | The interruptible machine was outbid. See [Choosing a price](#choosing-a-price) for what happens next |
-| **stopped** | A box that was stopped (idle, or you stopped it). Its disk is kept until it's resumed or destroyed |
+| **stopped** | A box that was stopped (idle, or you stopped it). Its disk is kept, and only the disk bills, until it's resumed or destroyed (after 24 hours by default) |
 | **succeeded** | The command exited with 0. The machine is destroyed within a minute or so |
 | **failed** | The command exited with another code, ran past its max runtime, or the machine never got going. The reason is on the page |
 | **cancelled** | You (or an admin) cancelled it, or it gave up waiting |
@@ -417,12 +417,15 @@ Open the job from your project's **Compute** page. It shows:
 - **Output**: the end of what the command printed, updated every minute, with a link to the whole log;
 - **Files**: checkpoints, outputs and logs, to download;
 - **What happened**: every step, with times: queued, rented, started, outbid, bid raised, moved, finished;
-- **Machine**: the GPU and price it was rented at, and for a box, how to connect;
+- **Machine**: the GPU and price it was rented at, and for a box, how to connect, when `/workspace` was last saved,
+  and, once it's stopped, what it costs while stopped and when it will be destroyed;
 - **Actions**: **Run again** (the form, filled in from this job), **Cancel** (and for a box: **Stop**, **Resume**,
   **Start it elsewhere**).
 
 **Cancel** destroys the machine within a minute or so. Anything not yet uploaded is lost, so let a job finish if you
-want its last outputs.
+want its last outputs. Cancelling a box ends it for good: its machine, its disk and its saved `/workspace` go, with no
+last save first, and it can't be resumed or moved. To keep a box's work, **Stop** it instead (that saves `/workspace`
+first). Cancelling a stopped box is how you stop paying for its disk before the 24 hours are up.
 
 ### What Krater does on its own
 
@@ -488,9 +491,13 @@ it into a job.
 ### Your workspace
 
 - **Keep your work in `/workspace`.** Krater saves it to storage every 10 minutes and before it stops the box, and
-  restores it when the box starts on a new machine. Anything outside `/workspace` (installed packages, files in
-  `/root`) is lost when the box moves or is destroyed. Install into `/workspace` (for example a virtual environment at
-  `/workspace/venv`) or put it in your image.
+  restores it when the box starts on a new machine. The job page shows when it was last saved. Anything outside
+  `/workspace` (installed packages, files in `/root`) is lost when the box moves or is destroyed. Install into
+  `/workspace` (for example a virtual environment at `/workspace/venv`) or put it in your image.
+- **The saved copy is for this box only.** It's restored onto the box's next machine, but you can't download it, and a
+  new box (even **Run again**) starts with an empty `/workspace`. Once the box is destroyed (you cancelled it, or it
+  stayed stopped for 24 hours) it can't be brought back. Keep code in a git repository and push often, and copy out
+  results you need (`scp`, or upload them somewhere) before you end a box.
 - **What's kept:** files with their permissions (so scripts stay executable) and modification times, symlinks, empty
   folders, and any file name. A file you delete is deleted from the saved copy too, at the next save. A virtual
   environment works after a move as long as the new machine's image has the same Python at the same path (its
@@ -500,17 +507,21 @@ it into a job.
 ### Idle stop
 
 A box with no GPU or CPU use and no open SSH session for 30 minutes (by default) is **stopped**: Krater saves
-`/workspace`, then stops the machine. The GPU stops billing; the disk still does, a little.
+`/workspace`, then stops the machine. The GPU stops billing; the disk still does, at the disk part of the box's
+price: about $0.20 a day for 32 GB, more for a bigger disk. The job page and `krater show` give the exact figure
+while it's stopped, and that cost counts against your project's budget like any other.
 
 - **Resume box** starts it again on the same machine, with everything on its disk. This only works if that machine's
   GPU is still free.
 - **Start it elsewhere from the saved workspace** rents a new machine and restores `/workspace`. Use it when resume
   can't get the GPU back.
-- A box that stays stopped for 24 hours (by default) is **destroyed**, disk and all. Its saved `/workspace` is still
-  in storage.
+- **Cancel** destroys it now, which ends the disk charge. Nothing is saved first, and it can't be brought back.
+- A box that stays stopped for 24 hours (by default) is **destroyed**, disk and saved `/workspace` and all, and can't
+  be brought back. The job page and `krater show` say when.
 
-Krater posts in the project's Slack channel, mentioning you, when it stops your box for being idle and an hour before
-it destroys a stopped one. A stop you asked for posts nothing.
+Krater posts in the project's Slack channel, mentioning you, when it stops your box for being idle (with what it
+costs while stopped and when it will be destroyed) and an hour before it destroys a stopped one. A stop you asked for
+posts nothing.
 
 A long-running process that keeps the GPU or CPU busy counts as use, so a training run in a box keeps it up. An open
 SSH session counts too, so close your session when you're done, or the box keeps spending.
@@ -764,6 +775,8 @@ Only rank 0 should write checkpoints and outputs.
 | Box won't resume | Its old machine's GPU is taken. Use **Start it elsewhere from the saved workspace** |
 | `ssh: Permission denied (publickey)` | Your key isn't on the box. Add it under **SSH keys**: a running box picks up key changes within a few minutes. Check you're connecting as `root` with the matching private key |
 | Packages gone after a box restart | Only `/workspace` is kept. Install into `/workspace` or into your image |
+| A stopped box is still spending | Its disk bills until it's resumed or destroyed. Cancel it to stop that now (it can't be brought back), or let Krater destroy it after 24 hours |
+| My old box's files are gone | A destroyed box's `/workspace` can't be restored or downloaded, and a new box starts empty. Keep code in git and copy out results before a box ends |
 | A warning about data transfer | Your estimate could cost a big share of your budget. Check the numbers before you confirm |
 | All machines stopped at once | The budget ran out. Ask for more with an amendment |
 

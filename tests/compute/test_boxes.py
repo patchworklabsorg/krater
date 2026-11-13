@@ -262,7 +262,7 @@ def test_a_stopped_box_is_destroyed_after_the_destroy_time_with_a_warning_first(
     _pass(db_session, client, NOW + timedelta(minutes=5, hours=24))
 
     assert row.state is ComputeInstanceState.DESTROYED
-    assert job.state is ComputeJobState.CANCELLED and "saved workspace is kept" in job.state_reason
+    assert job.state is ComputeJobState.CANCELLED and "with its disk and saved workspace" in job.state_reason
 
 
 def test_a_silent_runner_stops_a_box_instead_of_destroying_it(db_session, member, project, client, fake) -> None:  # noqa: F811
@@ -395,6 +395,9 @@ def test_an_idle_stop_and_the_destroy_are_noticed_for_slack_but_a_members_stop_i
     (stopped,) = _notices(db_session, compute_jobs.AUDIT_BOX_STOPPED)
     assert stopped.payload["job_name"] == job.name and stopped.payload["synced"] is True
     assert "idle" in stopped.payload["reason"]
+    # What the Slack notice needs to say what the box costs while stopped and when it goes.
+    assert stopped.payload["disk_microusd"] == row.disk_microusd
+    assert stopped.payload["stopped_at"] == row.stopped_at.isoformat()
 
     _pass(db_session, client, NOW + timedelta(minutes=35, hours=23, seconds=30))
     (soon,) = _notices(db_session, compute_jobs.AUDIT_BOX_DESTROY_SOON)

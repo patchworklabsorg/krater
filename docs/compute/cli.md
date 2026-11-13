@@ -174,6 +174,11 @@ any teammate who can launch on the project); `krater logs --raw` prints it as it
 address already) or stopped gets a message pointing at `krater show`. On Windows it runs `ssh` as a child process
 and exits with its exit code (replacing the process would detach it from the console).
 
+For a box, `krater show` also says when `/workspace` was last saved, and for a stopped one what it costs while
+stopped (only its disk: the API's `machine.usd_per_hour_now`) and when Krater destroys it (`box.destroy_at`). Against
+a Krater without those fields it prints the old machine line. `krater cancel` on a box says that its disk and saved
+`/workspace` go with it.
+
 ## How sign-in works
 
 The CLI is a public OAuth client of Weave (it can't keep a secret), so it uses the authorization code flow with PKCE

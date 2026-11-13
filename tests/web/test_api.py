@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import sqlalchemy as sa
@@ -10,7 +10,15 @@ from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 from krater.config import get_settings
-from krater.models import ComputeEvent, ComputeJob, ComputeJobState, ComputeOutbid
+from krater.models import (
+    ComputeEvent,
+    ComputeInstance,
+    ComputeInstanceState,
+    ComputeJob,
+    ComputeJobKind,
+    ComputeJobState,
+    ComputeOutbid,
+)
 from krater.registry import FakeRegistry, get_registry
 from krater.services import project_secrets
 from krater.weave import StubWeaveClient
@@ -93,6 +101,49 @@ def test_a_member_sees_their_projects_and_queues_a_job(client: TestClient, proje
     assert listed[0]["target_usd_per_hour"] == "0.0700"
     detail = client.get(f"/api/v1/jobs/{job.id}", headers=_as(MEMBER_SUB)).json()
     assert detail["events"][0]["kind"] == "queued" and detail["machine"] is None
+
+
+def test_a_stopped_box_says_what_it_costs_now_when_it_is_destroyed_and_when_it_was_saved(
+    client: TestClient, project, db_session
+) -> None:
+    client.post(f"/api/v1/projects/{project.id}/jobs", json=JOB, headers=_as(MEMBER_SUB))
+    job = db_session.scalars(sa.select(ComputeJob)).one()
+    job.kind, job.command, job.state = ComputeJobKind.BOX, None, ComputeJobState.STOPPED
+    db_session.add(
+        ComputeInstance(
+            job_id=job.id,
+            attempt=1,
+            label="krater-job-x-1",
+            provider_instance_id=123,
+            state=ComputeInstanceState.STOPPED,
+            provider_offer_id="1",
+            gpu_name="RTX 3060",
+            interruptible=True,
+            gpu_microusd=55_000,
+            disk_microusd=8_767,
+            stopped_at=datetime(2026, 11, 13, 9, 30, tzinfo=UTC),
+            last_synced_at=datetime(2026, 11, 13, 9, 29, tzinfo=UTC),
+        )
+    )
+    db_session.flush()
+
+    detail = client.get(f"/api/v1/jobs/{job.id}", headers=_as(MEMBER_SUB)).json()
+
+    assert detail["machine"]["usd_per_hour"] == "0.0638"  # what it costs running, as before
+    assert detail["machine"]["usd_per_hour_now"] == "0.0088"  # stopped: the disk only
+    assert detail["box"] == {
+        "destroy_at": "2026-11-14T09:30:00+00:00",
+        "destroy_after_hours": 24,
+        "workspace_saved_at": "2026-11-13T09:29:00+00:00",
+        "workspace_save_minutes": 10,
+    }
+
+
+def test_a_job_has_no_box_details(client: TestClient, project, db_session) -> None:
+    client.post(f"/api/v1/projects/{project.id}/jobs", json=JOB, headers=_as(MEMBER_SUB))
+    job = db_session.scalars(sa.select(ComputeJob)).one()
+
+    assert "box" not in client.get(f"/api/v1/jobs/{job.id}", headers=_as(MEMBER_SUB)).json()
 
 
 def test_an_estimate_starts_a_live_price_check_the_cli_can_poll(
