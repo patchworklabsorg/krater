@@ -2120,7 +2120,10 @@ def test_run_passes_the_project_secrets_set_in_this_shell_by_name(http, fake, tm
     _run_local([PROJECT, "--image", "x", "--command", "go", "--dir", str(tmp_path)], http, docker, said)
 
     assert docker.runs[0].env_names == ["HF_TOKEN"]
-    assert "Not set in this shell, so the job won't have them (Krater can't send their values here): WANDB_KEY." in said
+    assert (
+        "1 of the project's 2 secrets is not set in this shell, so the job won't have them (Krater can't send their "
+        f"values here). Set them under the same names; `krater secrets list {PROJECT}` lists them." in said
+    )
     args = docker.runs[0].docker_args("c")
     assert "hf_local" not in " ".join(args) and args[args.index("HF_TOKEN") - 1] == "-e"
 

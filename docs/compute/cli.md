@@ -112,7 +112,7 @@ submit.
   `/krater/outputs` and `/krater/checkpoints` (`--dir` moves them). Project inputs can't be downloaded, so
   `--input-dir FOLDER` gives a local folder as `$KRATER_INPUT_DIR` (read-only). Secret values can't be read back, so
   given a project it passes each secret that is set in this shell under the same name (`-e NAME`, never the value in
-  argv) and lists the ones that aren't. A sweep runs one job (`--index N`, default 0); `--resumed` sets
+  argv) and says how many aren't set (a count: code scanning treats the names as secret). A sweep runs one job (`--index N`, default 0); `--resumed` sets
   `KRATER_RESUMED=1`; `--local-gpu` adds `--gpus all`; `--docker podman` uses Podman. It needs no sign-in unless
   given a project, and exits with the command's exit code, explaining 125, 126, 127 and 137.
 - **`krater submit --smoke`** (`--smoke-minutes N`, 1 to 30, default 5; the job form's "Smoke test first") queues

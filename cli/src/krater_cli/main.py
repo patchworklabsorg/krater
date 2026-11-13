@@ -713,12 +713,13 @@ def _run_here(
             )
     names = _project_env_names(http, args.project, say) if args.project else []
     passed = [name for name in names if name in os.environ]
-    unset = [name for name in names if name not in os.environ]
+    unset = len(names) - len(passed)
     if unset:
+        # A count, not the names: code scanning treats anything from the secrets list as a secret.
         say(
-            "Not set in this shell, so the job won't have them (Krater can't send their values here): "
-            + ", ".join(unset)
-            + "."
+            f"{unset} of the project's {len(names)} secrets {'is' if unset == 1 else 'are'} not set in this shell, "
+            "so the job won't have them (Krater can't send their values here). Set them under the same names; "
+            f"`krater secrets list {args.project}` lists them."
         )
     folder = args.dir or os.path.join("krater-local", re.sub(r"[^A-Za-z0-9_.-]+", "-", body["name"]).strip("-."))
     checkpoints = os.path.join(folder, "checkpoints")
