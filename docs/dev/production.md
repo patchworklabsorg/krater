@@ -16,8 +16,10 @@ Section 1 (DNS, Weave, Slack, Vast) applies to both. The image builds for amd64 
 
 ### 0.1 On weft (NixOS)
 
-There's no registry image. `krater-build` fetches one pushed commit of this repo, builds it on weft with this
-repo's `Dockerfile` and tags it `krater:<sha>`. Staging deploys itself: the `Deploy` workflow
+CI's `image` job builds this repo's `Dockerfile` for each commit on `main` and pushes
+`ghcr.io/patchworklabsorg/krater:<full sha>`. `krater-build` on weft pulls that image for the commit in `source-rev`
+and tags it `krater:<sha>`. When the pull fails (an older commit, or the registry is down), it fetches the commit and
+builds it on weft as before, at low CPU and disk priority, so a build no longer stalls the sites on weft. Staging deploys itself: the `Deploy` workflow
 (`.github/workflows/deploy.yml`) runs after `CI` passes on `main`, joins the tailnet as `tag:ci-krater` and runs
 these steps over SSH (port 2222) as the `krater-deploy` user. Its key may only run that deploy command, which
 also puts the old commit back in `source-rev` if the build fails. It deploys only the tip of `main`: if the tip's CI
@@ -44,7 +46,7 @@ all its CI checks passed. The deploy then does these steps:
 
 1. It dumps the `krater` schema to `/var/lib/krater-prod/backups` on weft (`krater-prod-backup`, the last 14 dumps).
    If the dump fails, nothing deploys.
-2. It builds the image, then restarts the portal, which runs the migrations. The worker restarts with it.
+2. It pulls (or builds) the image, then restarts the portal, which runs the migrations. The worker restarts with it.
 3. It waits up to 2 minutes for `/healthz` and `/healthz/worker` to return 200. If they do not, it starts the
    previous version again. The previous version does not migrate: the database is at a newer revision than its
    code knows, so it starts on the newer schema as it is (section 0.3).

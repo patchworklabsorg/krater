@@ -4,10 +4,11 @@ name: Deploy
 # tested commit on main goes out. Run it by hand from the Actions tab to deploy the tip of main again.
 # Production is not deployed from here yet.
 #
-# There's no registry image: the NixOS module (patchworklabsorg/infra, modules/krater) builds the image on
-# weft from the commit written to /var/lib/krater/source-rev. This workflow writes that file, builds while
-# the running site keeps serving, then restarts krater-web, which migrates and starts; krater-worker follows
-# it. See docs/dev/production.md.
+# CI's `image` job pushes ghcr.io/patchworklabsorg/krater:<sha> for each commit on main. The NixOS module
+# (patchworklabsorg/infra, modules/krater) pulls it on weft for the commit written to
+# /var/lib/krater/source-rev, or builds it from source when the pull fails. This workflow writes that file,
+# fetches or builds while the running site keeps serving, then restarts krater-web, which migrates and
+# starts; krater-worker follows it. See docs/dev/production.md.
 #
 # weft is on the tailnet only. The job joins it as an ephemeral tag:ci-krater node with Tailscale workload
 # identity federation (no Tailscale secret is stored here), then uses sshd on port 2222 as krater-deploy.

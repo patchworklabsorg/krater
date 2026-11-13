@@ -71,3 +71,36 @@ jobs:
           test -z "$(gofmt -l .)"
           go vet ./...
           go test -race ./...
+
+  image:
+    # The portal's image for weft, built here rather than on weft, whose builds starved the host for minutes
+    # (2026-11-12). Pushed for each commit on main as ghcr.io/patchworklabsorg/krater:<full sha>; the infra
+    # repo's krater-build pulls it and falls back to building from source when it isn't there. As a check
+    # run of the commit, the staging Deploy (after CI) and the production follow timer (all checks green)
+    # both wait for it. Nothing secret goes in: the source is public, and settings come at run time.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/${{ github.repository }}:${{ github.sha }}
+          # krater-build on weft checks this label against the commit it asked for.
+          labels: |
+            org.patchworklabs.krater.rev=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
