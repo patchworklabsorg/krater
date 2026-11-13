@@ -225,13 +225,19 @@ def _form_page(
 ):
     settings = get_settings()
     policy = compute_settings.effective_policy(db_session, project)
+    latest = price_history.latest(db_session)
+    # The newest sample's time: the table is Krater's hourly check, not live prices, and says so.
+    sampled_at = max((sample.sampled_at for sample in latest), default=None)
+    age_minutes = None if sampled_at is None else max(0, int((datetime.now(UTC) - sampled_at).total_seconds() // 60))
     return templates.TemplateResponse(
         request,
         "compute/new.html",
         {
             "project": project,
             "gpus": settings.price_history_gpus,
-            "latest": price_history.latest(db_session),
+            "latest": latest,
+            "prices_sampled_at": sampled_at,
+            "prices_age_minutes": age_minutes,
             "cap_cents": hourly_cap_cents(project, settings),
             "transfer_cap_per_tb": compute_settings.format_value(
                 compute_settings.FIELDS_BY_NAME["transfer_cap_microusd_per_gb"], policy.transfer_cap_microusd_per_gb

@@ -257,11 +257,14 @@ nothing queued. It shows:
 
 ### Look at the market first
 
-- The **Prices right now** table on the form shows, for each GPU, the cheapest 1-GPU offer and the typical range, for
-  interruptible and on-demand machines.
+- The **Prices at ...** table on the form shows, for each GPU, the cheapest 1-GPU offer and the range of the cheaper
+  offers (10th to 50th percentile), for interruptible and on-demand machines, as of Krater's last hourly check of
+  Vast. It isn't live: prices move between checks, and for a GPU with only a few offers the cheapest can be rented by
+  someone else within minutes. When your job starts, Krater searches Vast again and rents the cheapest offer that fits
+  it at that moment.
 - [GPU price history](/pricing/history) shows each GPU's cheapest price and typical range over the last day, week or
   month. Pick a price from it, not from a guess.
-- `krater prices --gpu 4090` shows the same from a terminal.
+- `krater prices --gpu 4090` shows the same from a terminal, with the time of the check.
 
 Prices there are for one GPU with 32 GB of disk. For 4 GPUs, expect roughly 4 times the price; more disk adds a little.
 

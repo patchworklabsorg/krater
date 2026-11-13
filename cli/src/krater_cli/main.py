@@ -172,7 +172,9 @@ def _parser() -> argparse.ArgumentParser:
         help="queue it even if its data transfer could cost a large share of the budget, without asking",
     )
     submit.add_argument(
-        "--estimate", action="store_true", help="only say what it may cost and what this shape costs now; queue nothing"
+        "--estimate",
+        action="store_true",
+        help="only say what it may cost and what this shape cost in the last day; queue nothing",
     )
     submit.add_argument(
         "--input",
@@ -261,7 +263,7 @@ def _parser() -> argparse.ArgumentParser:
     inputs_rm.add_argument("project", help=project_help)
     inputs_rm.add_argument("name")
 
-    prices = commands.add_parser("prices", help="what an hour costs now, per GPU model")
+    prices = commands.add_parser("prices", help="what an hour cost at Krater's last hourly price check, per GPU model")
     prices.add_argument("--all", action="store_true", help="include models nobody is offering right now")
     prices.add_argument("--gpu", help="only models whose name contains this (any case)")
     return parser
@@ -273,6 +275,17 @@ def _table(rows: list[list[str]], say: Callable[[str], None]) -> None:
     widths = [max(len(str(row[i])) for row in rows) for i in range(len(rows[0]))]
     for row in rows:
         say("  ".join(str(cell).ljust(width) for cell, width in zip(row, widths, strict=True)).rstrip())
+
+
+def _checked_at(prices: list[dict]) -> str:
+    """When Krater last checked these prices: it samples Vast hourly, so they aren't live. A job rents the cheapest
+    offer that fits it when it starts."""
+    times = [p["sampled_at"] for p in prices if p.get("sampled_at")]
+    if not times:
+        return "At Krater's last hourly price check"
+    newest = max(times)
+    clock = newest[11:16] if len(newest) >= 16 else newest
+    return f"At Krater's hourly price check of {clock} UTC"
 
 
 def _money(value: str | None) -> str:
@@ -366,7 +379,7 @@ def _explain_prices(krater: Krater, args: argparse.Namespace, say: Callable[[str
         chosen = [p for p in prices if p["offers"]]
     chosen.sort(key=_cheapest_first)
     if chosen:
-        say(f"Right now, per hour, {RENTAL_WORDS[rental]}:")
+        say(f"{_checked_at(chosen)}, per hour, {RENTAL_WORDS[rental]}:")
         _table(
             [["GPU", "CHEAPEST", "MEDIAN", "OFFERS"]]
             + [
@@ -782,6 +795,7 @@ def run(
 
         def render_prices() -> None:
             if listed:
+                say(f"{_checked_at(listed)}, per hour:")
                 _table(
                     [["GPU", "RENTAL", "CHEAPEST", "MEDIAN", "OFFERS"]]
                     + [

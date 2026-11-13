@@ -13,7 +13,7 @@ from krater.web.csrf import register_csrf_template_global
 from krater.web.estimator_form import summary_text_from_dict
 from krater.web.flash import register_flash_template_global
 from krater.web.money import format_cents, format_per_tb, format_rate
-from krater.web.textfmt import format_size, markdown, nl2br
+from krater.web.textfmt import format_size, markdown, minutes_ago, nl2br
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
@@ -25,6 +25,7 @@ templates.env.filters["rate"] = format_rate
 templates.env.filters["per_tb"] = format_per_tb
 templates.env.filters["filesize"] = format_size
 templates.env.filters["nl2br"] = nl2br
+templates.env.filters["minutes_ago"] = minutes_ago
 templates.env.filters["markdown"] = markdown
 templates.env.filters["estimate_summary"] = summary_text_from_dict
 
