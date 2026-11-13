@@ -31,6 +31,7 @@ from krater.models.compute_job import ACTIVE_JOB_STATES
 from krater.registry import Registry, RegistryError, get_registry, parse_reference
 from krater.services import (
     box_access,
+    boxes,
     clearance,
     compute_files,
     compute_inputs,
@@ -501,6 +502,18 @@ def job_page(
     estimate = job_costs.estimate(
         db_session, job, transfer_cap_microusd_per_gb=policy.transfer_cap_microusd_per_gb, now=now
     )
+    instance = live[-1] if live else None
+    box = None
+    if is_box:
+        rate = boxes.hourly_rate_microusd(instance) if instance is not None else 0
+        box = {
+            "rate_microusd": rate,
+            "day_cents": boxes.per_day_cents(rate),
+            "destroy_at": boxes.destroy_at(instance, policy.box_destroy_hours),
+            "destroy_hours": policy.box_destroy_hours,
+            "saved_at": boxes.last_saved(job),
+            "save_minutes": boxes.WORKSPACE_SAVE_MINUTES,
+        }
     can_read_files = compute_files.can_read(actor, project)
     files, log, files_error = [], None, False
     if can_read_files:
@@ -517,7 +530,8 @@ def job_page(
             "project": project,
             "job": job,
             "events": events,
-            "instance": live[-1] if live else None,
+            "instance": instance,
+            "box": box,
             "transfer_charged_cents": -(-sum(charged) // compute_jobs.MICROUSD_PER_CENT) if charged else None,
             "estimate": estimate,
             "costs": job_costs.breakdown(job),

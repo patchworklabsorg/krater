@@ -1322,6 +1322,58 @@ def test_show_says_a_job_is_a_smoke_test(http, fake, smoke, state, line) -> None
     assert smoke_lines == ([line] if line else [])
 
 
+def test_show_says_what_a_stopped_box_costs_and_when_it_goes(http, fake) -> None:
+    _login(http, [])
+    _show_ready(fake, JOB)
+    fake.details[JOB]["state"] = "stopped"
+    fake.details[JOB]["machine"].update(state="stopped", usd_per_hour_now="0.0088")
+    fake.details[JOB]["box"] = {
+        "destroy_at": "2026-11-14T09:30:00+00:00",
+        "destroy_after_hours": 24,
+        "workspace_saved_at": "2026-11-13T09:29:00+00:00",
+        "workspace_save_minutes": 10,
+    }
+    said: list[str] = []
+
+    run(["show", JOB], http=http, say=said.append)
+
+    assert (
+        "  machine: RTX 3060, stopped: $0.0088/h while stopped, only its disk (about $0.22 a day); $0.0800/h running"
+        in said
+    )
+    assert (
+        "  destroyed at 2026-11-14 09:30 UTC unless resumed (`krater resume 22222222`); "
+        "`krater cancel 22222222` ends the disk charge now. Once destroyed, it can't be brought back"
+    ) in said
+    assert any(
+        line.startswith("  /workspace saved 2026-11-13 09:29 UTC: Krater saves it every 10 minutes") for line in said
+    )
+
+
+def test_show_against_an_older_krater_keeps_the_old_machine_line(http, fake) -> None:
+    _login(http, [])
+    _show_ready(fake, JOB)
+    fake.details[JOB]["machine"]["state"] = "stopped"
+    said: list[str] = []
+
+    run(["show", JOB], http=http, say=said.append)
+
+    assert "  machine: RTX 3060 at $0.0800/h, stopped" in said
+    assert not any("/workspace saved" in line for line in said)
+
+
+def test_cancelling_a_box_says_it_cannot_be_brought_back(http, fake) -> None:
+    _login(http, [])
+    fake.details[JOB]["state"] = "cancelled"
+    said: list[str] = []
+
+    assert run(["cancel", JOB], http=http, say=said.append) == 0
+
+    assert said[-1] == (
+        "  Its machine is destroyed with its disk and saved /workspace, without a last save; it can't be brought back."
+    )
+
+
 # --- review fixes: transient errors, prices, refresh, terminal output, logout ---------------------------------------------
 
 

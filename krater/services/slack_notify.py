@@ -18,6 +18,7 @@ import logging
 import re
 import uuid
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
@@ -36,7 +37,7 @@ from krater.models import (
     SlackNotification,
     User,
 )
-from krater.services import compute_settings, compute_watch, funding_holds, grants, ospool_grants, teams
+from krater.services import boxes, compute_settings, compute_watch, funding_holds, grants, ospool_grants, teams
 from krater.services.actor import GROUP_REVIEWER
 from krater.services.budget_alerts import AUDIT_BUDGET_TEARDOWN, AUDIT_BUDGET_WARNING
 from krater.services.compute_jobs import (
@@ -794,20 +795,33 @@ def _box_message(session: Session, slack_client: SlackClient, event: AuditEvent,
         )
     elif event.action == AUDIT_BOX_STOPPED:
         saved = "/workspace is saved" if payload.get("synced") else "/workspace may not have saved"
+        disk = payload.get("disk_microusd")  # absent from notices queued before Krater sent it
+        cost = (
+            f" While it's stopped only its disk bills: ${Decimal(int(disk)) / Decimal(1_000_000):.4f}/h, about "
+            f"{_format_cents(boxes.per_day_cents(int(disk)))} a day; cancel it to end that sooner."
+            if disk is not None
+            else ""
+        )
+        at = ""
+        if payload.get("stopped_at") and hours:
+            when = datetime.fromisoformat(payload["stopped_at"]) + timedelta(hours=int(hours))
+            at = f" at {when.astimezone(UTC).strftime('%Y-%m-%d %H:%M')} UTC"
         text = (
             f":zzz: *Box stopped*: {who}, your box *{name}* stopped ({_escape_mrkdwn(payload.get('reason', ''))}); "
-            f"{saved}. <{link}|Resume it> within {hours} hours, or Krater destroys it."
+            f"{saved}.{cost} <{link}|Resume it> within {hours} hours, or Krater destroys it{at}, disk and saved "
+            "/workspace, and it can't be brought back."
         )
     elif event.action == AUDIT_BOX_DESTROY_SOON:
         at = payload.get("destroy_at", "")[:16].replace("T", " ")
         text = (
             f":hourglass_flowing_sand: *Box destroyed soon*: {who}, your stopped box *{name}* will be destroyed at "
-            f"{at} UTC unless you <{link}|resume it>."
+            f"{at} UTC unless you <{link}|resume it>. Its disk and saved /workspace go with it and can't be brought "
+            "back, so copy out anything you need first."
         )
     else:
         text = (
-            f":wastebasket: *Box destroyed*: {who}, your box *{name}* was stopped for {hours} hours and is gone. "
-            "Its last saved /workspace is kept."
+            f":wastebasket: *Box destroyed*: {who}, your box *{name}* was stopped for {hours} hours and is gone, "
+            "with its disk and saved /workspace."
         )
     plain = re.sub(r"<[^|>]*\|([^>]*)>", r"\1", text)  # links as their words, for the notification
     return [{"type": "section", "text": {"type": "mrkdwn", "text": text}}], plain

@@ -27,6 +27,7 @@ from krater.db import get_session
 from krater.models import ComputeEscalation, ComputeEvent, ComputeJob, ComputeJobKind, ComputeOutbid, Project, User
 from krater.registry import Registry, get_registry
 from krater.services import (
+    boxes,
     compute_files,
     compute_inputs,
     compute_jobs,
@@ -189,11 +190,21 @@ def _job_json(job: ComputeJob, *, detail: bool = False, session: Session | None 
             else {
                 "gpu": row.gpu_name,
                 "usd_per_hour": _rate(row.gpu_microusd + row.disk_microusd),
+                # What it costs in its current state: a stopped box bills only its disk.
+                "usd_per_hour_now": _rate(boxes.hourly_rate_microusd(row)),
                 "state": row.state.value,
                 "ssh_host": row.ssh_host,
                 "ssh_port": row.ssh_port,
             }
         )
+        if job.kind is ComputeJobKind.BOX:
+            policy = compute_settings.effective_policy(session, job.project)
+            data["box"] = {
+                "destroy_at": _iso(boxes.destroy_at(row, policy.box_destroy_hours)),
+                "destroy_after_hours": policy.box_destroy_hours,
+                "workspace_saved_at": _iso(boxes.last_saved(job)),
+                "workspace_save_minutes": boxes.WORKSPACE_SAVE_MINUTES,
+            }
         events = session.scalars(
             sa.select(ComputeEvent).where(ComputeEvent.job_id == job.id).order_by(ComputeEvent.seq.desc()).limit(50)
         )

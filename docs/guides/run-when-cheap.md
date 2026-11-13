@@ -82,7 +82,8 @@ POSIX shell and one of curl, wget or Python. Its own entrypoint isn't run, so pu
   checkpoint.
 - **Single machine only:** a job runs on one machine with up to 8 GPUs.
 - **Interactive work:** use a box instead of a job. It's an SSH workspace that stops itself when idle and keeps
-  `/workspace` between sessions. Add your SSH key under **SSH keys** first. For Jupyter, start it in the box and
+  `/workspace` between sessions, until the box is destroyed. A stopped box still pays for its disk, about $0.20 a day
+  for 32 GB, until you resume or cancel it, or Krater destroys it after 24 hours. Add your SSH key under **SSH keys** first. For Jupyter, start it in the box and
   tunnel to it: `ssh -L 8888:localhost:8888 -p <port> root@<host>`, then open `http://localhost:8888`. When Krater
   stops your box for being idle, and an hour before a stopped box is destroyed, it tells you in the project's Slack
   channel.

@@ -320,6 +320,58 @@ def test_a_box_page_shows_how_to_connect_and_can_be_stopped(client: TestClient, 
     assert job.instances[0].stop_requested_at is not None
 
 
+def _box(db_session, project, member, state: ComputeInstanceState) -> ComputeJob:
+    job = _job(db_session, project, member, kind=ComputeJobKind.BOX, command=None)
+    job.state = ComputeJobState.STOPPED if state is ComputeInstanceState.STOPPED else ComputeJobState.RUNNING
+    db_session.add(
+        ComputeInstance(
+            job_id=job.id,
+            attempt=1,
+            label="krater-job-x-1",
+            provider_instance_id=123,
+            state=state,
+            provider_offer_id="1",
+            gpu_name="RTX 3060",
+            interruptible=True,
+            gpu_microusd=55_000,
+            disk_microusd=8_767,
+            stopped_at=datetime(2026, 11, 13, 9, 30, tzinfo=UTC) if state is ComputeInstanceState.STOPPED else None,
+            last_synced_at=datetime(2026, 11, 13, 9, 29, tzinfo=UTC),
+        )
+    )
+    db_session.flush()
+    return job
+
+
+def test_a_stopped_box_page_says_what_it_costs_now_and_when_it_is_destroyed(
+    client: TestClient, login_as, project, db_session
+) -> None:
+    member = login_as(MEMBER_SUB)
+    job = _box(db_session, project, member, ComputeInstanceState.STOPPED)
+
+    page = " ".join(client.get(f"/projects/{project.id}/compute/{job.id}").text.split())
+
+    assert "$0.0088/h while stopped" in page and "about $0.22 a day" in page  # 8,767 µ$/h × 24, rounded up
+    assert "Running, it's $0.0638/h" in page
+    assert "at 2026-11-14 09:30 UTC unless you resume it" in page  # 24 hours after it stopped
+    assert "2026-11-13 09:29 UTC" in page  # the last save of /workspace
+    assert "Cancel destroys the stopped machine and its disk now, which ends the disk charge" in page
+
+
+def test_a_running_box_page_says_cancel_loses_work_since_the_last_save(
+    client: TestClient, login_as, project, db_session
+) -> None:
+    member = login_as(MEMBER_SUB)
+    job = _box(db_session, project, member, ComputeInstanceState.RUNNING)
+
+    page = " ".join(client.get(f"/projects/{project.id}/compute/{job.id}").text.split())
+
+    assert "while stopped" not in page and "unless you resume it" not in page
+    assert "work since its last save (09:29 UTC) is lost" in page
+    assert "To keep your work, stop the box instead." in page
+    assert "every 10 minutes while the box runs" in page
+
+
 def test_cancel_from_the_job_page(client: TestClient, login_as, project, db_session) -> None:
     member = login_as(MEMBER_SUB)
     job = _job(db_session, project, member)

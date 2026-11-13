@@ -191,6 +191,11 @@ def _event(session: Session, job: ComputeJob, kind: str, message: str, *, now: d
     )
 
 
+def _stopped(row: ComputeInstance) -> dict:
+    """What the "Box stopped" notice tells its owner: what the box costs while stopped (its disk) and from when."""
+    return {"disk_microusd": row.disk_microusd, "stopped_at": row.stopped_at.isoformat() if row.stopped_at else None}
+
+
 def _dollars(microusd: int) -> str:
     return f"${microusd_to_usd(microusd).quantize(Decimal('0.0001'))}/h"
 
@@ -1103,7 +1108,9 @@ class Scheduler:
                 "not in storage: resume it to carry on."
             )
             _event(self.session, job, "self_stopped", job.state_reason, now=self.now, instance=row)
-            self._box_notice(compute_jobs.AUDIT_BOX_STOPPED, job, reason="it lost contact with Krater", synced=False)
+            self._box_notice(
+                compute_jobs.AUDIT_BOX_STOPPED, job, reason="it lost contact with Krater", synced=False, **_stopped(row)
+            )
             return
         row.state = ComputeInstanceState.PAUSED
         row.paused_since = self.now
@@ -1183,7 +1190,7 @@ class Scheduler:
         job.state_reason = f"Stopped ({reason}); /workspace {saved}. Resume it to carry on."
         _event(self.session, job, "stopped", f"Stopped the box: {reason}.", now=self.now, instance=row, synced=synced)
         if not reason.startswith(compute_jobs.MEMBER_STOP_PREFIX):
-            self._box_notice(compute_jobs.AUDIT_BOX_STOPPED, job, reason=reason, synced=synced)
+            self._box_notice(compute_jobs.AUDIT_BOX_STOPPED, job, reason=reason, synced=synced, **_stopped(row))
 
     def _box_notice(self, action: str, job: ComputeJob, **details) -> None:
         """An audit event the Slack sync posts to the project channel, mentioning the box's owner."""
@@ -1258,7 +1265,7 @@ class Scheduler:
             _finish(
                 job,
                 ComputeJobState.CANCELLED,
-                f"Destroyed after {policy.box_destroy_hours} hours stopped. Its last saved workspace is kept.",
+                f"Destroyed after {policy.box_destroy_hours} hours stopped, with its disk and saved workspace.",
                 now=self.now,
             )
             self._destroy(row, "stopped too long")

@@ -900,6 +900,62 @@ def test_box_notices_mention_the_owner_in_the_project_channel_once(db_session: S
     assert "<!channel>" not in text  # the box's name is escaped
 
 
+@pytest.mark.parametrize("new_fields", [True, False])
+def test_a_box_stopped_notice_says_what_it_costs_while_stopped_and_when_it_goes(
+    db_session: Session, member: Actor, new_fields: bool
+) -> None:
+    from krater.services.compute_jobs import AUDIT_BOX_STOPPED
+
+    project = new_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=5000)
+    slack_client = FakeSlackClient()
+    project.slack_channel_id = slack_client.create_channel("ganymede-rover-test")
+    payload = {
+        "job_id": "j",
+        "job_name": "notebook",
+        "owner_id": str(member.user.id),
+        "destroy_after_hours": 24,
+        "reason": "idle for 30 minutes",
+        "synced": True,
+    }
+    if new_fields:  # a notice queued by a Krater from before them has neither
+        payload |= {"disk_microusd": 8_767, "stopped_at": "2026-11-13T09:30:00+00:00"}
+    db_session.add(AuditEvent(actor_id=None, action=AUDIT_BOX_STOPPED, project_id=project.id, payload=payload))
+    db_session.flush()
+
+    slack_notify.sync_box_notifications(db_session, slack_client)
+
+    (message,) = slack_client.messages.values()
+    text = message["blocks"][0]["text"]["text"]
+    assert "within 24 hours, or Krater destroys it" in text and "can't be brought back" in text
+    if new_fields:
+        assert "only its disk bills: $0.0088/h, about $0.22 a day" in text
+        assert "destroys it at 2026-11-14 09:30 UTC" in text
+    else:
+        assert "disk bills" not in text and " UTC" not in text
+
+
+def test_box_destroyed_notices_do_not_promise_the_workspace_is_kept(db_session: Session, member: Actor) -> None:
+    from krater.services.compute_jobs import AUDIT_BOX_DESTROY_SOON, AUDIT_BOX_DESTROYED
+
+    project = new_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=5000)
+    slack_client = FakeSlackClient()
+    project.slack_channel_id = slack_client.create_channel("ganymede-rover-test")
+    base = {"job_id": "j", "job_name": "notebook", "owner_id": str(member.user.id), "destroy_after_hours": 24}
+    for action, extra in (
+        (AUDIT_BOX_DESTROY_SOON, {"destroy_at": "2026-11-14T09:30:00+00:00"}),
+        (AUDIT_BOX_DESTROYED, {}),
+    ):
+        db_session.add(AuditEvent(actor_id=None, action=action, project_id=project.id, payload=base | extra))
+    db_session.flush()
+
+    slack_notify.sync_box_notifications(db_session, slack_client)
+
+    texts = [m["blocks"][0]["text"]["text"] for m in slack_client.messages.values()]
+    assert len(texts) == 2 and not any("is kept" in t for t in texts)
+    assert any("copy out anything you need first" in t for t in texts)
+    assert any("with its disk and saved /workspace" in t for t in texts)
+
+
 def _box_notice(db_session: Session, project, member: Actor, name: str) -> AuditEvent:
     from krater.services.compute_jobs import AUDIT_BOX_STOPPED
 
