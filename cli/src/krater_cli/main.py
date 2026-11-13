@@ -353,6 +353,23 @@ def _money(value: str | None) -> str:
     return f"${value}" if value is not None else "-"
 
 
+#: What each action leaves on a job, to tell after a timeout whether it went through: the states it leads to, and the
+#: events it (or what follows it soon after) records, newest first in the job's events.
+_ACTION_SIGNS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
+    "cancel": (frozenset({"cancelled"}), frozenset({"cancelled"})),
+    "stop": (frozenset({"stopped"}), frozenset({"stop_requested", "synced", "stopped"})),
+    "resume": (frozenset({"running"}), frozenset({"resume_requested", "resumed"})),
+    "move": (frozenset({"queued", "starting", "running"}), frozenset({"move_requested", "requeued"})),
+}
+
+
+def _took_effect(job: dict, action: str) -> bool:
+    """Whether `job` shows that `action` was done: a state it leads to, or its event as the newest one."""
+    states, kinds = _ACTION_SIGNS[action]
+    events = job.get("events") or []
+    return job["state"] in states or (bool(events) and events[0].get("kind") in kinds)
+
+
 def _per_day(usd_per_hour: str) -> str:
     """An hourly rate as dollars a day, rounded up to the cent."""
     cents = (Decimal(usd_per_hour) * 24 * 100).to_integral_value(rounding=ROUND_CEILING)
@@ -363,8 +380,10 @@ def _when(iso: str) -> str:
     return iso[:16].replace("T", " ") + " UTC"
 
 
-def _box_lines(box: dict, ident: str) -> list[str]:
+def _box_lines(box: dict, ident: str, *, ended: bool = False) -> list[str]:
     """What `krater show` says about a box's saved /workspace and, when stopped, its end."""
+    if ended:
+        return ["destroyed: its disk and saved /workspace are gone and can't be brought back"]
     lines = []
     if box.get("destroy_at"):
         lines.append(
@@ -999,7 +1018,7 @@ def run(
                     )
             box = job.get("box")
             if box:
-                for line in _box_lines(box, short(job["id"])):
+                for line in _box_lines(box, short(job["id"]), ended=job["state"] in follow.FINISHED_STATES):
                     say(f"  {line}")
             for event in job.get("events", [])[:10]:
                 say(f"  {event['at'][:19].replace('T', ' ')}  {event['message']}")
@@ -1054,7 +1073,20 @@ def run(
     elif args.command == "download":
         return _download(krater, http, resolve.resolve_job(krater, args.job), args, say)
     elif args.command in ("cancel", "stop", "resume", "move"):
-        job = krater.post(f"/jobs/{resolve.resolve_job(krater, args.job)}/{args.command}")
+        job_id = resolve.resolve_job(krater, args.job)
+        try:
+            job = krater.post(f"/jobs/{job_id}/{args.command}")
+        except httpx.TimeoutException:
+            # Krater may have done it and only been slow to answer (a slow Weave check of who you are, say). Asking
+            # again could act twice, so look at the job instead of guessing.
+            job = krater.get(f"/jobs/{job_id}")
+            if not _took_effect(job, args.command):
+                say(
+                    f"Krater didn't answer in time, and {job['name']} ({job['state']}) shows no sign of the "
+                    f"{args.command}. Try again."
+                )
+                return 1
+            say(f"Krater was slow to answer, but the {args.command} went through.")
 
         def acted() -> None:
             if args.command == "stop" and job["state"] == "running":
@@ -1349,7 +1381,8 @@ def report(exc: Exception) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> None:
-    with httpx.Client(timeout=30.0) as http:
+    # A change (stop, cancel, submit) checks you with Weave first, up to four calls of 10 s each when Weave is slow.
+    with httpx.Client(timeout=httpx.Timeout(60.0, connect=10.0)) as http:
         try:
             code = run(sys.argv[1:] if argv is None else argv, http=http)
         except (auth.AuthError, ResolveError, KraterError, httpx.HTTPError) as exc:

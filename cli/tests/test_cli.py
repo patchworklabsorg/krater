@@ -46,6 +46,8 @@ def job_row(job_id: str, name: str, *, state: str = "running", project: str = PR
 class Fake:
     def __init__(self) -> None:
         self.requests: list[httpx.Request] = []
+        #: When set, an action (cancel, stop ...) applies these fields to the job, then times out.
+        self.slow_action: dict | None = None
         self.authorize_query: dict | None = None
         self.valid_access = {"access-1"}
         self.refreshes = 0
@@ -225,6 +227,10 @@ class Fake:
             return httpx.Response(201, json=job)
         acted = re.fullmatch(r"/jobs/([0-9a-f-]{36})/(cancel|stop|resume|move)", path)
         if acted and request.method == "POST":
+            if self.slow_action is not None:
+                # Krater took too long to answer: it did the action (or not), and the client gave up waiting.
+                self.details[acted.group(1)].update(self.slow_action)
+                raise httpx.ReadTimeout("timed out", request=request)
             return httpx.Response(200, json=self.details[acted.group(1)])
         if re.fullmatch(r"/jobs/[0-9a-f-]{36}", path):
             detail = self.details.get(path.rsplit("/", 1)[1])
@@ -1372,6 +1378,46 @@ def test_cancelling_a_box_says_it_cannot_be_brought_back(http, fake) -> None:
     assert said[-1] == (
         "  Its machine is destroyed with its disk and saved /workspace, without a last save; it can't be brought back."
     )
+
+
+def test_a_stop_that_times_out_but_went_through_says_so(http, fake) -> None:
+    _login(http, [])
+    fake.slow_action = {"events": [{"at": "2026-11-13T16:59:37+00:00", "kind": "stop_requested", "message": "x"}]}
+    said: list[str] = []
+
+    assert run(["stop", JOB], http=http, say=said.append) == 0
+
+    assert said[0] == "Krater was slow to answer, but the stop went through."
+    assert said[1].startswith("nb: stopping. Its /workspace is saved first")
+    assert sum(r.method == "POST" and r.url.path.endswith("/stop") for r in fake.requests) == 1  # never sent twice
+
+
+def test_a_cancel_that_times_out_without_effect_says_to_try_again(http, fake) -> None:
+    _login(http, [])
+    fake.slow_action = {}  # nothing changed: still running
+    said: list[str] = []
+
+    assert run(["cancel", JOB], http=http, say=said.append) == 1
+
+    assert said == ["Krater didn't answer in time, and nb (running) shows no sign of the cancel. Try again."]
+
+
+def test_show_says_an_ended_box_is_gone_not_that_it_is_saved(http, fake) -> None:
+    _login(http, [])
+    _show_ready(fake, JOB)
+    fake.details[JOB]["state"] = "cancelled"
+    fake.details[JOB]["box"] = {
+        "destroy_at": None,
+        "destroy_after_hours": 24,
+        "workspace_saved_at": "2026-11-13T09:29:00+00:00",
+        "workspace_save_minutes": 10,
+    }
+    said: list[str] = []
+
+    run(["show", JOB], http=http, say=said.append)
+
+    assert "  destroyed: its disk and saved /workspace are gone and can't be brought back" in said
+    assert not any("Krater saves it every" in line for line in said)
 
 
 # --- review fixes: transient errors, prices, refresh, terminal output, logout ---------------------------------------------
