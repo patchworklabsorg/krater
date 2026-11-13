@@ -932,6 +932,16 @@ def run(
                 + (f" - {job['state_reason']}" if job["state_reason"] else "")
             )
             say(f"  image {job['image']}; {_job_price(job, long=True)}")
+            smoke = job.get("smoke_minutes")
+            if smoke:
+                say(
+                    f"  smoke test: the command is stopped after {local.minutes(smoke)} of running"
+                    + (
+                        f"; `krater rerun {resolve.short(job['id'])} --no-smoke` queues the full run"
+                        if job["state"] == "succeeded"
+                        else ""
+                    )
+                )
             say(
                 f"  spent ${job['spend_cents'] / 100:.2f}"
                 + (f"; exit code {job['exit_code']}" if job["exit_code"] is not None else "")

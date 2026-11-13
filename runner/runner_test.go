@@ -553,6 +553,35 @@ func TestOneRefusedFileDoesNotStopTheOthers(t *testing.T) {
 	}
 }
 
+func TestACancelledPushDoesNotLogAFailedUpload(t *testing.T) {
+	// The command's end cancels a periodic log sync mid-upload; the final push uploads it again, so the log mustn't
+	// claim an upload failed.
+	f := newFakeKrater(t)
+	cfg := f.cfg(t)
+	os.MkdirAll(cfg.CheckpointDir, 0o755)
+	os.WriteFile(filepath.Join(cfg.CheckpointDir, "a.pt"), []byte("a"), 0o644)
+	api := &API{BaseURL: f.server.URL, Token: f.token, HTTP: http.DefaultClient}
+	s := NewSyncer(api, "checkpoints", cfg.CheckpointDir, http.DefaultClient)
+	var logged strings.Builder
+	log.SetOutput(&logged)
+	defer log.SetOutput(os.Stderr)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	n, err := s.Push(ctx)
+
+	if n != 0 || err == nil {
+		t.Errorf("Push = %d, %v; want nothing pushed and an error", n, err)
+	}
+	if strings.Contains(logged.String(), "failed") {
+		t.Errorf("log: %s", logged.String())
+	}
+	// Uncancelled, the same file goes up.
+	if n, err := s.Push(context.Background()); n != 1 || err != nil {
+		t.Errorf("Push after = %d, %v; want 1, nil", n, err)
+	}
+}
+
 func TestAJobGetsTheProjectSecretsInItsEnvironmentAndTheLogNeverShowsThem(t *testing.T) {
 	f := newFakeKrater(t)
 	f.secrets = map[string]string{"HF_TOKEN": "hf_s3cret", "KRATER_JOB_TOKEN": "spoofed", "bad-name": "x"}

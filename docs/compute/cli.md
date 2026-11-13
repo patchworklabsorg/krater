@@ -124,7 +124,8 @@ submit.
   Nothing else about the job changes (its wait, price and max runtime are the full run's), so `rerun --no-smoke`
   queues exactly the full run. A sweep's smoke test queues only its first job, and says to run the same `submit`
   without `--smoke` for the whole sweep. Against a Krater from before smoke tests (which would ignore
-  the field and run the whole job) the CLI cancels the job at once and says so. `krater run --smoke` does the same
+  the field and run the whole job) the CLI cancels the job at once and says so. `krater jobs` and `krater show` mark
+  a smoke test, and `show` gives the `rerun --no-smoke` line once it has passed. `krater run --smoke` does the same
   stop on this computer.
 
 ### Data transfer
