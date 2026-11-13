@@ -536,7 +536,7 @@ def run(
             say("Give Krater's address: krater login --url https://<your Krater>")
             return 2
         creds = auth.login(args.url, http=http, open_browser=not args.no_browser, prompt=prompt, say=say)
-        me = Krater(http).get("/me")
+        me = Krater(http, sleep=sleep).get("/me")
         say(f"Signed in to {creds['url']} as {me['name']}.")
         return 0
     if args.command == "logout":
@@ -547,7 +547,7 @@ def run(
             say("Couldn't tell Weave to revoke your tokens; they stay valid there until they expire.")
         return 0
 
-    krater = Krater(http)
+    krater = Krater(http, sleep=sleep)
 
     def out(data: dict, render: Callable[[], None]) -> None:
         if args.json:

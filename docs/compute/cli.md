@@ -134,6 +134,11 @@ most 60 s) and tries again, so a blip can't look like a failed job. Any other
 error (a 4xx, an expired sign-in) still ends it with exit code 1. With `--timeout`, an outage that lasts past it
 ends the wait with 124.
 
+Every command also waits out a deploy (`krater_cli.api`): a read or an estimate that gets a 502, 503 or 504 from
+Krater's proxy, and any request that couldn't connect at all, is tried again after 1, 2, 4 and 8 s. A submit or
+another change that gets a 502 is never sent again, because Krater may already have done it: check with
+`krater jobs` before submitting again.
+
 Output is printed with terminal control characters and escape sequences removed (a job's output can come from
 any teammate who can launch on the project); `krater logs --raw` prints it as it is.
 
