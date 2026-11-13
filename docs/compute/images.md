@@ -3,6 +3,25 @@
 Members name a public container image for each job or box (`ghcr.io/me/train:v3`, `ubuntu:24.04`). Krater doesn't
 store images: the rented machine pulls the image from its registry. What Krater does with images:
 
+## Checked when the job is queued
+
+The form, the API's submit and its estimate (so the CLI too) check the image before anything is queued
+(`krater.services.compute_jobs.image_error` and `check_image`):
+
+- **The name.** A web address is refused, naming the image when it's a Docker Hub or GitHub package page
+  (`https://hub.docker.com/r/pytorch/pytorch` → `pytorch/pytorch`); a pasted `docker pull X` gets `X`; anything else
+  must parse as Docker does (`krater.registry.parse_reference`).
+- **The registry's answer.** `resolve_digest` (below): a 404, or a 401 or 403 to an anonymous token, is
+  `ImageUnavailable`, and the job is refused with the registry's words. In production (2026-11-12) a box named the
+  guide's example `ghcr.io/you/train:v1` with a full stop after it, and the scheduler rented three machines for it.
+  A registry that can't be asked (down, 429, a host Krater won't reach) lets the job through: the scheduler then
+  fails it as soon as a machine's pull is refused (`docs/compute/scheduler.md`). The app keeps one registry client,
+  so an expired anonymous token is replaced, not taken for a refusal. The shell submitter (`krater.compute.submit`)
+  doesn't ask.
+
+The form starts with `compute_jobs.DEFAULT_IMAGE` (`pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime`), a public image
+with a shell and Python, so the example on the form works as it is.
+
 ## The digest each machine got
 
 When the scheduler rents a machine it asks the image's registry what the tag points to now

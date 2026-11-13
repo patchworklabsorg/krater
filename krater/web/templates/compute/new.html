@@ -53,8 +53,8 @@
       </div>
       <div class="field">
         <label for="job-image">Container image</label>
-        <input type="text" id="job-image" name="image" placeholder="ghcr.io/you/train:v1" value="{{ posted.image or '' }}">
-        <p class="field-hint">It needs a POSIX shell and one of curl, wget or Python. Its own entrypoint isn't run.</p>
+        <input type="text" id="job-image" name="image" placeholder="{{ default_image }}" value="{{ posted.image if 'image' in posted else default_image }}" autocomplete="off" spellcheck="false">
+        <p class="field-hint">A public image's name, as <code>docker pull</code> takes it, not a web link: <code>{{ default_image }}</code> (PyTorch with CUDA), <code>ubuntu:24.04</code>, or your own, such as <code>ghcr.io/owner/image:tag</code>. The GPU driver comes from the machine. It needs a POSIX shell and one of curl, wget or Python. Its own entrypoint isn't run.</p>
         {% if errors.image %}<p class="field-error">{{ errors.image }}</p>{% endif %}
       </div>
       <div class="field">

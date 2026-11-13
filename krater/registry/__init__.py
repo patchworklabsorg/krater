@@ -61,6 +61,12 @@ class RegistryError(Exception):
     an admin."""
 
 
+class ImageUnavailable(RegistryError):
+    """The registry answered, and won't give the image to anyone who doesn't sign in: it (or its tag) doesn't exist,
+    or it's private. A machine pulls anonymously, so it would be refused too. Anything else (a registry Krater can't
+    reach, rate limits, odd answers) stays a plain RegistryError: it says nothing about the image."""
+
+
 class UnsafeHostError(RegistryError):
     """A request would go to a host Krater must not reach (not HTTPS, or a private, loopback or link-local address)."""
 
@@ -259,10 +265,12 @@ class LiveRegistry:
             query["service"] = challenge["service"]
         url = realm + ("&" if "?" in realm else "?") + urlencode(query)
         response, body = self._send("GET", url, headers={}, limit=MAX_TOKEN_BYTES)
-        if response.status_code != 200:
-            raise RegistryError(
+        if response.status_code in (401, 403):
+            raise ImageUnavailable(
                 f"{ref.registry} wouldn't give an anonymous token ({response.status_code}): the image may be private."
             )
+        if response.status_code != 200:
+            raise RegistryError(f"{ref.registry} wouldn't give an anonymous token ({response.status_code}).")
         try:
             data = json.loads(body)
             return str(data.get("token") or data["access_token"])
@@ -279,17 +287,19 @@ class LiveRegistry:
         if key in self._tokens:
             headers["Authorization"] = f"Bearer {self._tokens[key]}"
         response, body = self._send(method, url, headers=headers, limit=limit)
-        if response.status_code == 401 and "Authorization" not in headers:
+        if response.status_code == 401:
+            # No token yet, or the one kept from an earlier call has expired (the app keeps one LiveRegistry): get a
+            # fresh one and ask once more. A 401 to a fresh token is the registry's answer.
             challenge = _bearer_challenge(response.headers.get("www-authenticate", ""))
             if challenge is None:
-                raise RegistryError(f"{ref.registry} asked for a login Krater can't do: the image may be private.")
+                raise ImageUnavailable(f"{ref.registry} asked for a login Krater can't do: the image may be private.")
             self._tokens[key] = self._token(challenge, ref)
             headers["Authorization"] = f"Bearer {self._tokens[key]}"
             response, body = self._send(method, url, headers=headers, limit=limit)
         if response.status_code == 404:
-            raise RegistryError(f"{ref.registry} has no {ref.repository}:{ref.reference}.")
+            raise ImageUnavailable(f"{ref.registry} has no {ref.repository}:{ref.reference}.")
         if response.status_code in (401, 403):
-            raise RegistryError(f"{ref.registry} refused Krater ({response.status_code}): the image may be private.")
+            raise ImageUnavailable(f"{ref.registry} refused Krater ({response.status_code}): the image may be private.")
         if response.status_code == 429:
             raise RegistryError(f"{ref.registry} is rate-limiting Krater; try again later.")
         if response.status_code >= 400:
@@ -405,12 +415,15 @@ def _details(digest: str, platform_digest: str | None, manifest: dict, config: d
 
 
 class FakeRegistry:
-    """An in-memory registry for tests: `add` an image reference with its details; `fail` makes every call fail."""
+    """An in-memory registry for tests: `add` an image reference with its details; `fail` makes every call fail;
+    an image in `missing` is one the registry refuses (`ImageUnavailable`). Any other unknown image fails as a
+    registry that couldn't say."""
 
     def __init__(self) -> None:
         self.digests: dict[str, str] = {}
         self.details: dict[str, ImageDetails] = {}
         self.fail: str | None = None
+        self.missing: set[str] = set()
         self.calls: list[tuple[str, str]] = []
 
     def add(self, image: str, details: ImageDetails) -> None:
@@ -423,6 +436,8 @@ class FakeRegistry:
         if self.fail:
             raise RegistryError(self.fail)
         ref = parse_reference(image)
+        if image in self.missing:
+            raise ImageUnavailable(f"{ref.registry} has no {ref.repository}:{ref.reference}.")
         if ref.digest:
             return ref.digest
         if image not in self.digests:
@@ -463,6 +478,7 @@ __all__ = [
     "HistoryStep",
     "ImageDetails",
     "ImageRef",
+    "ImageUnavailable",
     "LiveRegistry",
     "Registry",
     "RegistryError",
