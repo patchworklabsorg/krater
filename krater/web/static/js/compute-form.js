@@ -56,11 +56,12 @@
     var note = document.querySelector('[data-role="live-note"]');
     var tries = 0;
     function show(answer) {
-      Object.keys(answer.rows || {}).forEach(function (key) {
-        var cell = table.querySelector('[data-live="' + key.replace(/"/g, '\\"') + '"]');
-        if (!cell) return;
-        cell.querySelector('[data-part="text"]').textContent = answer.rows[key].text;
-        cell.querySelector('[data-part="at"]').textContent = answer.rows[key].at;
+      var rows = answer.rows || {};
+      Array.prototype.forEach.call(table.querySelectorAll("[data-live]"), function (cell) {
+        var row = rows[cell.getAttribute("data-live")];
+        if (!row) return;
+        cell.querySelector('[data-part="text"]').textContent = row.text;
+        cell.querySelector('[data-part="at"]').textContent = row.at;
       });
       if (note && answer.note) {
         note.textContent = answer.note;
