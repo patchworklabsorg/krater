@@ -30,6 +30,7 @@ from krater.services import (
     box_access,
     compute_watch,
     grants,
+    live_prices,
     ops_alerts,
     ospool_grants,
     people,
@@ -788,6 +789,36 @@ def stash_archive(timestamp: int) -> None:
 def stash_archive_now() -> None:
     """The same as `stash_archive`, deferred after a web action commits."""
     _stash_archive()
+
+
+@app.task(name="live_quote")
+def live_quote(key: str) -> None:
+    """Search Vast once for a job shape a member asked to estimate (`krater.services.live_prices`). Fails soft: the
+    page then says the check didn't happen."""
+    client = get_vast_client()
+    if client is None:
+        return
+    session = get_sessionmaker()()
+    try:
+        live_prices.check(session, client, key, now=datetime.now(UTC))
+        compute_search_quota.record(session, client.search_quota, now=datetime.now(UTC))
+        session.commit()
+    except Exception:
+        logger.exception("krater.live_quote failed")
+        session.rollback()
+    finally:
+        session.close()
+
+
+def kick_live_quote(key: str) -> None:
+    """Defer `live_quote` for `key`, once: a second request while one waits is the same check. Never fails the
+    caller: the page then shows the hourly prices only."""
+    try:
+        live_quote.configure(queueing_lock=f"live_quote:{key[:32]}").defer(key=key)
+    except procrastinate.exceptions.AlreadyEnqueued:
+        pass
+    except Exception:
+        logger.warning("krater: could not defer live_quote", exc_info=True)
 
 
 def kick_stash_archiving() -> None:

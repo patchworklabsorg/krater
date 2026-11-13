@@ -109,12 +109,18 @@ What Krater does about it:
   every 15 minutes (`krater/compute/search_pacing.py`). Under a quarter of the quota left, every 15 minutes; with
   none left, no searches until the reset, and waiting jobs say so.
 - Price history runs only with compute on, hourly, and stops a run when less than half the quota is left.
+- A live price check (the form's **Estimate the cost**, `krater submit --estimate`; `krater/services/live_prices.py`)
+  is one search of 8 rows for the job's shape, run by the worker, reused for 2 minutes. It's skipped when less than
+  half the quota is left, and Krater also counts its own (`live_price_usage`): at most 400 a UTC day, about 3,200
+  rows, which holds even before the worker has seen Vast's quota headers.
 - After each scheduler pass and price-history run the worker saves the quota (`vast_search_quota`), which
   `/admin/compute` shows. Under a quarter left, and used up, each write an `AuditEvent`
   (`compute_search_quota_low`, `compute_search_quota_exhausted`) and log an error, once per day.
 
-Still to check at a reset: whether the quota counts the rows returned or the `limit` asked for, and whether price
-filters (`min_bid`, `dph_total`) and `order` by `min_bid` work in a search. If they do, a search can ask only for
+Vast took `order` by `min_bid` on 2026-11-13: a live check of an interruptible shape sorts by it
+(`OfferQuery.order_by_price`), so its few rows are the cheapest bids; the scheduler still sorts by `dph_total` and reads
+more rows. Still to check at a reset: whether the quota counts the rows returned or the `limit` asked for, and
+whether price filters (`min_bid`, `dph_total`) work in a search. If they do, a search can ask only for
 offers under the job's price, and a job waiting for a low price costs almost nothing.
 
 ## Not checked live yet

@@ -18,6 +18,7 @@ from krater.models import (
     ComputeJobState,
     ComputeOutbid,
     GpuPriceSample,
+    LiveQuote,
 )
 from krater.registry import FakeRegistry, get_registry
 from krater.services import compute_jobs
@@ -342,6 +343,43 @@ def test_an_outsider_cannot_act_on_a_job(client: TestClient, login_as, project, 
     assert response.status_code == 404
     db_session.refresh(job)
     assert job.state is ComputeJobState.QUEUED
+
+
+def test_an_estimate_asks_the_worker_for_live_prices_and_the_page_polls(
+    client: TestClient, login_as, project, db_session, monkeypatch
+) -> None:
+    """Paul, 2026-11-13: "you can't know what is the best option right now". The estimate starts a live check."""
+    from krater.web import live_quote
+
+    kicked: list[str] = []
+    monkeypatch.setattr(live_quote, "kick_live_quote", kicked.append)
+    login_as(MEMBER_SUB)
+    page = client.get(f"/projects/{project.id}/compute/new")
+
+    response = client.post(
+        f"/projects/{project.id}/compute",
+        data={**FORM, "action": "estimate", "csrf_token": get_csrf_token(page.text)},
+    )
+
+    assert response.status_code == 200
+    assert "Checking Vast&#39;s prices for this job now…" in response.text
+    quote = db_session.scalars(sa.select(LiveQuote)).one()
+    assert kicked == [quote.key]
+    assert quote.shape["gpu_names"] == ["RTX 3060"] and quote.shape["rental_type"] == "bid"
+    url = f"/projects/{project.id}/compute/quotes/{quote.key}"
+    assert f'data-url="{url}"' in response.text
+    assert client.get(url).json()["status"] == "checking"
+
+    quote.checked_at, quote.cheapest_microusd = datetime.now(UTC), 61_000
+    quote.offers = [{"gpu": "RTX 3060", "full_microusd": 61_000}]
+    db_session.flush()
+    answer = client.get(url).json()
+    assert answer["status"] == "ready" and "$0.0610/h" in answer["text"]
+
+    login_as(OTHER_MEMBER_SUB)
+    assert client.get(url).status_code == 404
+    login_as(REVIEWER_SUB)
+    assert client.get(url).status_code in (403, 404)
 
 
 def test_the_forms_prices_say_when_krater_checked_them(client: TestClient, login_as, project, db_session) -> None:

@@ -95,6 +95,26 @@ def test_a_member_sees_their_projects_and_queues_a_job(client: TestClient, proje
     assert detail["events"][0]["kind"] == "queued" and detail["machine"] is None
 
 
+def test_an_estimate_starts_a_live_price_check_the_cli_can_poll(
+    client: TestClient, project, db_session, monkeypatch
+) -> None:
+    from krater.web import live_quote
+
+    kicked: list[str] = []
+    monkeypatch.setattr(live_quote, "kick_live_quote", kicked.append)
+
+    estimate = client.post(f"/api/v1/projects/{project.id}/jobs/estimate", json=JOB, headers=_as(MEMBER_SUB))
+
+    assert estimate.status_code == 200, estimate.text
+    live = estimate.json()["live"]
+    assert live["status"] == "checking" and kicked == [live["key"]]
+    assert live["poll"] == f"/projects/{project.id}/jobs/quotes/{live['key']}"
+    polled = client.get(f"/api/v1{live['poll']}", headers=_as(MEMBER_SUB))
+    assert polled.status_code == 200 and polled.json()["status"] == "checking"
+    assert client.get(f"/api/v1{live['poll']}", headers=_as(OTHER_MEMBER_SUB)).status_code == 404
+    assert client.get(f"/api/v1/projects/{project.id}/jobs/quotes/nope", headers=_as(MEMBER_SUB)).status_code == 404
+
+
 def test_a_jobs_events_are_listed_in_the_order_they_happened(client: TestClient, project, db_session) -> None:
     """Production, 2026-11-13: a scheduler pass stamps its events with the time it began, which was before the job was
     queued, and its events shared one time: the page showed "Queued" after the first rental and "Rented" before

@@ -1,0 +1,163 @@
+"""Live price checks for a job's shape (`krater.services.live_prices`): the scheduler's query and pricing, the cheapest
+few rows, freshness, and the quota guards."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+
+import sqlalchemy as sa
+from sqlalchemy.orm import Session
+
+from krater.models import ComputeJobKind, GpuPriceSample, LiveQuote
+from krater.services import compute_settings, live_prices
+from krater.services.compute_jobs import JobSpec
+from krater.vast import FakeVast
+
+NOW = datetime(2026, 11, 13, 3, 0, tzinfo=UTC)
+
+
+def _spec(**overrides) -> JobSpec:
+    fields = {
+        "name": "train",
+        "image": "ubuntu:24.04",
+        "command": "true",
+        "gpu_names": ("A100 SXM4",),
+        "target_microusd": 1_000_000,
+        "max_microusd": 1_000_000,
+        "interruptible": False,
+        "disk_gb": 32,
+        **overrides,
+    }
+    return JobSpec(**fields)
+
+
+def _shape(db_session: Session, **overrides) -> live_prices.Shape:
+    return live_prices.shape_of(_spec(**overrides), compute_settings.global_policy(db_session))
+
+
+def _market() -> FakeVast:
+    fake = FakeVast()
+    # On demand, by `dph_base`: 0.55, 0.78, 0.86. 4001 has no direct port, so a box can't have it.
+    fake.add_offer(
+        4001, 41, "A100 SXM4", dph_base=0.40, min_bid=0.30, storage_cost=0.1, gpu_ram_mb=40960, direct_port_count=0
+    )
+    fake.add_offer(4002, 42, "A100 SXM4", dph_base=0.55, min_bid=0.45, storage_cost=0.1, gpu_ram_mb=40960)
+    fake.add_offer(4003, 43, "A100 SXM4", dph_base=0.78, min_bid=0.20, storage_cost=0.1, gpu_ram_mb=40960)
+    fake.add_offer(4004, 44, "A100 SXM4", dph_base=0.86, min_bid=0.50, storage_cost=0.1, gpu_ram_mb=40960)
+    fake.add_offer(5001, 51, "RTX 4090", dph_base=0.30, min_bid=0.15, storage_cost=0.1, gpu_ram_mb=24576)
+    return fake
+
+
+def _checked(db_session: Session, fake: FakeVast, shape: live_prices.Shape, *, now: datetime = NOW) -> LiveQuote:
+    row, needs = live_prices.request(db_session, shape, now=now)
+    assert needs
+    return live_prices.check(db_session, fake.client(), row.key, now=now + timedelta(seconds=3))
+
+
+def test_a_check_finds_the_cheapest_offer_the_job_could_rent(db_session: Session) -> None:
+    fake = _market()
+
+    row = _checked(db_session, fake, _shape(db_session))
+
+    assert [offer["gpu"] for offer in row.offers] == ["A100 SXM4"] * 3
+    assert 400_000 < row.cheapest_microusd < 410_000  # $0.40 an hour, and 32 GB of disk at $0.10 a GB-month
+    assert row.error is None
+    shown = live_prices.view(row)
+    assert shown["status"] == "ready"
+    assert shown["text"].startswith("Right now on Vast (checked 03:00:03 UTC) the cheapest on demand offer")
+    assert "Krater rents what's cheapest when the job starts" in shown["text"]
+    # Live checks never become price history: its charts stay one sample an hour.
+    assert db_session.scalar(sa.select(sa.func.count()).select_from(GpuPriceSample)) == 0
+
+
+def test_a_box_needs_a_direct_port(db_session: Session) -> None:
+    row = _checked(db_session, _market(), _shape(db_session, kind=ComputeJobKind.BOX))
+
+    assert row.cheapest_microusd > 550_000  # 4001 has no port for SSH
+
+
+def test_an_interruptible_check_sorts_by_the_bid(db_session: Session, monkeypatch) -> None:
+    """Vast sorts by `dph_total`; for a bid that isn't the price paid. 4003's bid is the lowest, its on-demand price
+    the second highest: with a few rows sorted by `dph_total` it would be missed."""
+    monkeypatch.setattr(live_prices, "QUOTE_ROWS", 1)
+    fake = _market()
+
+    row = _checked(db_session, fake, _shape(db_session, interruptible=True))
+
+    margin = compute_settings.global_policy(db_session).bid_margin_percent
+    assert row.cheapest_microusd < 200_000 * (100 + margin) // 100 + 1_000
+    shown = live_prices.view(row)
+    assert "cheapest interruptible offer" in shown["text"]
+
+
+def test_several_models_say_which_and_that_krater_weighs_performance(db_session: Session) -> None:
+    row = _checked(db_session, _market(), _shape(db_session, gpu_names=("A100 SXM4", "RTX 4090")))
+
+    text = live_prices.view(row)["text"]
+    assert "(RTX 4090)" in text and "best performance per dollar" in text
+
+
+def test_a_fresh_check_answers_again_and_a_pending_one_isnt_asked_twice(db_session: Session) -> None:
+    fake = _market()
+    shape = _shape(db_session)
+    row, needs = live_prices.request(db_session, shape, now=NOW)
+    assert needs and live_prices.view(row)["status"] == "checking"
+    assert live_prices.request(db_session, shape, now=NOW + timedelta(seconds=20)) == (row, False)  # pending
+    live_prices.check(db_session, fake.client(), row.key, now=NOW + timedelta(seconds=30))
+
+    assert live_prices.request(db_session, shape, now=NOW + timedelta(minutes=1)) == (row, False)  # fresh
+    again, needs = live_prices.request(db_session, shape, now=NOW + timedelta(minutes=3))
+    assert again is row and needs and live_prices.view(row)["status"] == "checking"
+
+
+def test_a_check_leaves_half_of_vasts_quota_for_the_scheduler(db_session: Session) -> None:
+    fake = _market()
+    fake.set_search_quota(20_000, remaining=9_000, reset_at=int((NOW + timedelta(hours=21)).timestamp()))
+    client = fake.client()
+    client.search_offers(
+        live_prices.offers.shape_query(
+            rental_type="ondemand",
+            gpu_names=("RTX 4090",),
+            min_gpu_ram_gb=None,
+            num_gpus=1,
+            disk_gb=32,
+            box=False,
+            reliability_floor=0.9,
+            transfer_cap_microusd_per_gb=None,
+            limit=1,
+        )
+    )  # the client learns the quota
+    row, _ = live_prices.request(db_session, _shape(db_session), now=NOW)
+
+    live_prices.check(db_session, client, row.key, now=NOW)
+
+    assert row.cheapest_microusd is None and row.offers == []
+    assert live_prices.view(row) == {
+        "status": "unavailable",
+        "text": "Krater is saving today's Vast searches for starting jobs, so it can't check live prices now.",
+        "checked_at": NOW.isoformat(),
+    }
+
+
+def test_krater_s_own_daily_cap_holds_without_vasts_numbers(db_session: Session, monkeypatch) -> None:
+    """Production hadn't seen Vast's quota headers yet (2026-11-13): Krater counts its own searches too."""
+    monkeypatch.setitem(live_prices.DAILY_SEARCHES, live_prices.PURPOSE_QUOTE, 2)
+    fake = _market()
+    for minutes, gpu in ((0, ("A100 SXM4",)), (1, ("RTX 4090",))):
+        assert (
+            _checked(db_session, fake, _shape(db_session, gpu_names=gpu), now=NOW + timedelta(minutes=minutes)).error
+            is None
+        )
+
+    third = _checked(db_session, fake, _shape(db_session, num_gpus=2), now=NOW + timedelta(minutes=2))
+
+    assert third.error == "Krater has used today's live price checks. They're back at midnight UTC."
+    tomorrow = _checked(db_session, fake, _shape(db_session, num_gpus=4), now=NOW + timedelta(days=1))
+    assert tomorrow.error is None
+
+
+def test_nothing_that_fits_says_so(db_session: Session) -> None:
+    row = _checked(db_session, _market(), _shape(db_session, gpu_names=("H200",)))
+
+    assert row.cheapest_microusd is None
+    assert live_prices.view(row)["text"] == "Right now on Vast (checked 03:00:03 UTC) no offer fits this job."

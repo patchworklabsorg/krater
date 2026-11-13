@@ -215,6 +215,10 @@ class OfferQuery:
     #: Only hosts charging at most this per GB of data into (`inet_down_cost`) and out of (`inet_up_cost`) the
     #: machine, in micro-dollars per GB. Vast bills transfer per GB on top of `dph_total`.
     max_transfer_microusd_per_gb: int | None = None
+    #: Sort by the price this rental type pays (`min_bid` for a bid) rather than `dph_total`, so the first few rows
+    #: are the cheapest: a live price check asks for only a few (`krater.services.live_prices`). Vast's search took
+    #: `order` by `min_bid` on 2026-11-13; the scheduler keeps `dph_total` and reads more rows.
+    order_by_price: bool = False
 
     def to_body(self) -> dict[str, Any]:
         body: dict[str, Any] = {
@@ -227,7 +231,7 @@ class OfferQuery:
             "disk_space": {"gte": self.disk_gb},
             # Prices `dph_total` at the job's real disk, not Vast's ~8 GB default.
             "allocated_storage": self.disk_gb,
-            "order": [["dph_total", "asc"]],
+            "order": [["min_bid" if self.order_by_price and self.rental_type == "bid" else "dph_total", "asc"]],
         }
         if self.verified:
             body["verified"] = {"eq": True}

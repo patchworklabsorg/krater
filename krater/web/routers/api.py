@@ -53,6 +53,7 @@ from krater.services.launch_rules import LAUNCHABLE_STATUSES, hourly_cap_cents
 from krater.storage import StorageError, get_compute_store
 from krater.vast import microusd_to_usd, usd_to_microusd
 from krater.weave import WeaveClient, WeaveUnavailableError, get_weave_client
+from krater.web import live_quote
 
 router = APIRouter(prefix="/api/v1")
 
@@ -450,7 +451,24 @@ async def estimate(
         return _error(422, "Check the job's fields.", fields=exc.errors)
     except StorageError:
         return _error(503, "Krater's storage didn't answer; try again in a minute.")
-    return _estimate_json(db_session, project, spec, inputs_bytes=inputs_bytes)
+    shown = _estimate_json(db_session, project, spec, inputs_bytes=inputs_bytes)
+    quote = live_quote.start(db_session, project, spec)
+    if quote is not None:
+        # `krater submit --estimate` polls `poll` while `status` is "checking" (krater.services.live_prices).
+        shown["live"] = {**quote, "poll": f"/projects/{project.id}/jobs/quotes/{quote['key']}"}
+    return shown
+
+
+@router.get("/projects/{project_id}/jobs/quotes/{key}")
+def quote_status(project_id: uuid.UUID, key: str, actor: Me, db_session: Db):
+    """A live price check's answer (see `estimate`). The team only."""
+    project = _project(db_session, actor, project_id)
+    if not _is_team(actor, project):
+        return _error(403, "Only the project's team can run jobs on its budget.")
+    shown = live_quote.poll(db_session, key)
+    if shown is None:
+        return _error(404, "No such price check.")
+    return shown
 
 
 # -- Inputs: files the team uploads once for jobs to copy in (`compute_inputs`) ------------------------------------

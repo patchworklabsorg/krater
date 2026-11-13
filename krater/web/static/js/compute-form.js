@@ -22,9 +22,39 @@
     update();
   }
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", init);
-  } else {
+  // The estimate's live price: the worker searches Vast for this job's shape, and this asks for the answer every
+  // 2 seconds for up to a minute (krater/services/live_prices.py).
+  function pollQuote() {
+    var el = document.querySelector('[data-role="live-quote"][data-status="checking"]');
+    if (!el || !window.fetch) return;
+    var tries = 0;
+    function ask() {
+      tries += 1;
+      fetch(el.getAttribute("data-url"), { headers: { Accept: "application/json" }, credentials: "same-origin" })
+        .then(function (response) { return response.ok ? response.json() : null; })
+        .then(function (quote) {
+          if (quote && quote.status !== "checking") {
+            el.setAttribute("data-status", quote.status);
+            el.querySelector("strong").textContent = quote.text;
+          } else if (tries < 30) {
+            setTimeout(ask, 2000);
+          } else {
+            el.querySelector("strong").textContent = "Vast's live prices didn't come back in time. Try the estimate again.";
+          }
+        })
+        .catch(function () { if (tries < 30) setTimeout(ask, 2000); });
+    }
+    setTimeout(ask, 1500);
+  }
+
+  function start() {
     init();
+    pollQuote();
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", start);
+  } else {
+    start();
   }
 })();
