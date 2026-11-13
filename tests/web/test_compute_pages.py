@@ -344,6 +344,34 @@ def test_an_outsider_cannot_act_on_a_job(client: TestClient, login_as, project, 
     assert job.state is ComputeJobState.QUEUED
 
 
+def test_the_forms_prices_say_when_krater_checked_them(client: TestClient, login_as, project, db_session) -> None:
+    """Paul, 2026-11-13: "Prices right now" read as live, and its range as an average. It's Krater's hourly check."""
+    login_as(MEMBER_SUB)
+    sampled = datetime.now(UTC).replace(microsecond=0) - timedelta(minutes=41)
+    db_session.add(
+        GpuPriceSample(
+            sampled_at=sampled,
+            gpu_name="A100 SXM4",
+            rental_type="ondemand",
+            num_gpus=1,
+            disk_gb=32,
+            offer_count=4,
+            truncated=False,
+            min_microusd=551_100,
+            p10_microusd=551_100,
+            median_microusd=780_900,
+        )
+    )
+    db_session.flush()
+
+    page = client.get(f"/projects/{project.id}/compute/new").text
+
+    assert f"Prices at {sampled.strftime('%H:%M UTC')}" in page and "Prices right now" not in page
+    assert "Checked 41 minutes ago." in page
+    assert "rents the cheapest offer that fits it then" in page
+    assert "Cheapest then" in page and "Cheaper offers (10th to 50th percentile)" in page
+
+
 def test_price_history_draws_the_chart_and_a_table(client: TestClient, db_session) -> None:
     now = datetime.now(UTC).replace(microsecond=0)
     for n in range(6):

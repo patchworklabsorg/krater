@@ -213,13 +213,15 @@
 
 <section class="card">
   <div class="card-head">
-    <h2>Prices right now</h2>
+    <h2>{% if prices_sampled_at %}Prices at {{ prices_sampled_at.strftime("%H:%M UTC") }}{% else %}Recent prices{% endif %}</h2>
     <a class="muted" href="/pricing/history">Price history</a>
   </div>
   {% if latest %}
-    <p class="muted">
-      Full hourly cost of 1-GPU offers{% if latest[0].sampled_at %}, as Krater sampled them at
-      {{ latest[0].sampled_at.strftime("%Y-%m-%d %H:%M UTC") }}{% endif %}.
+    <p>
+      {% if prices_age_minutes is not none %}<strong>Checked {{ prices_age_minutes | minutes_ago }}.</strong>{% endif %}
+      Krater checks Vast's prices once an hour: the full hourly cost of 1-GPU offers on hosts it would rent (with
+      32 GB of disk). Prices move between checks, and where there are only a few offers the cheapest can be gone in
+      minutes. When your job starts, Krater searches again and rents the cheapest offer that fits it then.
     </p>
     <div class="table-scroll">
       <table class="table">
@@ -227,8 +229,8 @@
           <tr>
             <th scope="col">GPU</th>
             <th scope="col">Rental</th>
-            <th scope="col" class="num">Cheapest</th>
-            <th scope="col" class="num">Typical (10th to 50th percentile)</th>
+            <th scope="col" class="num">Cheapest then</th>
+            <th scope="col" class="num">Cheaper offers (10th to 50th percentile)</th>
             <th scope="col" class="num">Offers</th>
           </tr>
         </thead>

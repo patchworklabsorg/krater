@@ -435,7 +435,7 @@ async def estimate(
     db_session: Db,
     registry: Annotated[Registry, Depends(get_registry)],
 ):
-    """What a job with this body may cost, and what its shape costs now. Queues nothing."""
+    """What a job with this body may cost, and what its shape cost in the last day. Queues nothing."""
     project = _project(db_session, actor, project_id)
     if not _is_team(actor, project):
         return _error(403, "Only the project's team can run jobs on its budget.")
@@ -662,7 +662,8 @@ def delete_secret(project_id: uuid.UUID, name: str, actor: Me, db_session: Db):
 
 @router.get("/prices")
 def prices(actor: Me, db_session: Db):
-    """The newest sample of every GPU model Krater tracks: what a full hour costs now (32 GB disk included)."""
+    """The newest sample of every GPU model Krater tracks (`sampled_at`: Krater's hourly check, not live): what a full
+    hour cost then (32 GB disk included)."""
     del actor
     return {
         "prices": [

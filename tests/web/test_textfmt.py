@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import pytest
 from markupsafe import Markup
 
-from krater.web.textfmt import LINK_REL, markdown, nl2br
+from krater.web.textfmt import LINK_REL, markdown, minutes_ago, nl2br
 
 _HOSTED = "/projects/11111111-1111-4111-8111-111111111111/images/22222222-2222-4222-8222-222222222222.png"
 
@@ -123,3 +124,11 @@ def test_markdown_of_nothing_is_empty() -> None:
 
 def test_nl2br_still_escapes_and_breaks_lines() -> None:
     assert nl2br("**a** <b>\nnext") == "**a** &lt;b&gt;<br>\nnext"
+
+
+@pytest.mark.parametrize(
+    ("minutes", "said"),
+    [(0, "just now"), (1, "1 minute ago"), (41, "41 minutes ago"), (89, "89 minutes ago"), (150, "2 hours ago")],
+)
+def test_minutes_ago(minutes, said) -> None:
+    assert minutes_ago(minutes) == said

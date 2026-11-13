@@ -893,6 +893,7 @@ def _prices(fake: Fake) -> None:
             "min_usd_per_hour": cheapest,
             "median_usd_per_hour": median,
             "offers": offers,
+            "sampled_at": "2026-11-13T01:00:12Z",
         }
 
     fake.prices = [
@@ -911,13 +912,14 @@ def test_prices_lists_gpus_with_offers_cheapest_first_in_the_web_uis_words(http,
 
     run(["prices"], http=http, say=said.append)
 
-    assert [line.split()[0:3] for line in said[1:]] == [
+    assert said[0] == "At Krater's hourly price check of 01:00 UTC, per hour:"
+    assert [line.split()[0:3] for line in said[2:]] == [
         ["RTX", "3060", "interruptible"],
         ["RTX", "3060", "on"],
         ["RTX", "4090", "interruptible"],
         ["RTX", "4090", "on"],
     ]
-    assert "on demand" in said[2] and "H100" not in "".join(said) and "ondemand" not in "".join(said)
+    assert "on demand" in said[3] and "H100" not in "".join(said) and "ondemand" not in "".join(said)
 
 
 def test_prices_all_and_gpu_filters(http, fake) -> None:
@@ -926,10 +928,10 @@ def test_prices_all_and_gpu_filters(http, fake) -> None:
     said: list[str] = []
 
     run(["prices", "--all"], http=http, say=said.append)
-    assert len(said) == 6 and said[-1].startswith("H100") and said[-1].split()[-3:] == ["-", "-", "0"]
+    assert len(said) == 7 and said[-1].startswith("H100") and said[-1].split()[-3:] == ["-", "-", "0"]
     said.clear()
     run(["prices", "--gpu", "4090"], http=http, say=said.append)
-    assert len(said) == 3 and all("4090" in line for line in said[1:])
+    assert len(said) == 4 and all("4090" in line for line in said[2:])
     said.clear()
     run(["prices", "--gpu", "h100"], http=http, say=said.append)
     assert said == ["Nobody is offering those right now (--all lists them anyway)."]
@@ -995,12 +997,12 @@ def test_submit_without_prices_shows_the_market_and_explains(http, fake) -> None
     assert run(SUBMIT, http=http, say=said.append) == 2
 
     assert fake.jobs == []
-    assert said[0] == "Right now, per hour, interruptible:"
+    assert said[0] == "At Krater's hourly price check of 01:00 UTC, per hour, interruptible:"
     assert said[2].split() == ["RTX", "3060", "$0.0700", "$0.0900", "12"] and len(said) == 4
     assert said[-1] == GIVE_PRICES
     said.clear()
     assert run([*SUBMIT, "--target", "0.07", "--on-demand"], http=http, say=said.append) == 2
-    assert said[0] == "Right now, per hour, on demand:" and "$0.1000" in said[2]
+    assert said[0] == "At Krater's hourly price check of 01:00 UTC, per hour, on demand:" and "$0.1000" in said[2]
 
 
 def test_submit_without_prices_or_gpu_lists_every_gpu_with_offers(http, fake) -> None:

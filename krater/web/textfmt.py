@@ -88,4 +88,14 @@ def format_size(size_bytes: int) -> str:
     raise AssertionError("unreachable")
 
 
-__all__ = ["LINK_REL", "format_size", "markdown", "nl2br"]
+__all__ = ["LINK_REL", "format_size", "markdown", "minutes_ago", "nl2br"]
+
+
+def minutes_ago(minutes: int) -> str:
+    """`minutes` as people say it: "just now", "1 minute ago", "41 minutes ago", "2 hours ago"."""
+    if minutes < 1:
+        return "just now"
+    if minutes < 90:
+        return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
+    hours = round(minutes / 60)
+    return f"{hours} hours ago"
