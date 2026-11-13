@@ -76,6 +76,7 @@ from krater.services import (
     compute_watch,
     funding_holds,
     job_costs,
+    smoke,
 )
 from krater.services.compute_settings import ComputePolicy
 from krater.services.launch_rules import LAUNCHABLE_STATUSES, hourly_cap_cents
@@ -200,7 +201,7 @@ def _transfer(job: ComputeJob, image_bytes: int | None = None) -> offers.Transfe
     return offers.Transfer(
         in_gb=job.data_in_gb or 0,
         out_gb=job.data_out_gb or 0,
-        runtime_hours=Decimal(job.max_runtime_minutes) / 60,
+        runtime_hours=Decimal(smoke.runtime_cap_minutes(job)) / 60,
         image_bytes=image_bytes or 0,
         inputs_bytes=job.inputs_bytes or 0,
     )
@@ -666,7 +667,8 @@ class Scheduler:
                 job.state_reason = None
                 _event(self.session, job, "resumed", "The machine is running again.", now=self.now, instance=row)
             # Time actually running (paused and stopped time don't count), added up by the spend accrual.
-            over_runtime = row.run_seconds >= job.max_runtime_minutes * 60
+            cap_minutes = smoke.runtime_cap_minutes(job)
+            over_runtime = row.run_seconds >= cap_minutes * 60
             if over_runtime and job.kind is ComputeJobKind.BOX:
                 # Never destroy a box's disk on its own: stop it, and the member can resume it for another run.
                 if row.stop_requested_at is None:
@@ -677,7 +679,11 @@ class Scheduler:
                 _finish(
                     job,
                     ComputeJobState.FAILED,
-                    f"Stopped at its max runtime of {job.max_runtime_minutes} minutes.",
+                    f"Stopped at its max runtime of {job.max_runtime_minutes} minutes."
+                    if cap_minutes == job.max_runtime_minutes
+                    # The runner should have stopped the command at the test's end: it didn't report back in time.
+                    else f"Smoke test: the machine was stopped after {cap_minutes} minutes running without the "
+                    "runner reporting the test's end.",
                     now=self.now,
                 )
                 self._destroy(row, "max runtime reached")
@@ -1570,7 +1576,7 @@ class Scheduler:
             )
             return False
         run_cents = spend.ceil_div(
-            choice.full_microusd * job.max_runtime_minutes + 60 * transfer.cost_microusd(choice.offer),
+            choice.full_microusd * smoke.runtime_cap_minutes(job) + 60 * transfer.cost_microusd(choice.offer),
             60 * MICROUSD_PER_CENT,
         )
         self._rented_from.add(pace_key)

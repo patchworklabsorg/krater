@@ -43,6 +43,8 @@ type StartInfo struct {
 	Secrets map[string]string `json:"secrets"`
 	// The job asked for project inputs: copy them into $KRATER_INPUT_DIR before the command (restoreInputs).
 	Inputs bool `json:"inputs"`
+	// A smoke test: set KRATER_SMOKE=1 and stop the command after this many seconds (0: an ordinary job).
+	SmokeSeconds int `json:"smoke_seconds"`
 }
 
 // Reply is Krater's answer to a heartbeat.
@@ -154,6 +156,12 @@ func (a *API) Synced(ctx context.Context) error {
 // Exit reports the command's exit code.
 func (a *API) Exit(ctx context.Context, code int) error {
 	return a.post(ctx, "/exit", map[string]any{"exit_code": code}, nil)
+}
+
+// ExitSmokeStopped reports the exit of a smoke test's command that the runner stopped when its time was up: `code` is
+// its answer to the stop, and Krater counts the test as passed.
+func (a *API) ExitSmokeStopped(ctx context.Context, code int) error {
+	return a.post(ctx, "/exit", map[string]any{"exit_code": code, "smoke_stopped": true}, nil)
 }
 
 // List returns the stored files of an area ("checkpoints" or "outputs").

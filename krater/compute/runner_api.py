@@ -39,7 +39,7 @@ from krater.models import (
     StorageReservation,
 )
 from krater.models.compute_job import ACTIVE_JOB_STATES
-from krater.services import box_access, compute_settings, project_secrets
+from krater.services import box_access, compute_settings, project_secrets, smoke
 from krater.services.errors import NotAllowed, ValidationFailed
 from krater.storage import ObjectStore
 
@@ -124,6 +124,9 @@ class StartInfo:
     vast_api_url: str = ""
     # The project's secrets, name -> value. Never logged or shown (kept out of the repr).
     secrets: dict[str, str] = field(default_factory=dict, repr=False)
+    # A smoke test (`krater.services.smoke`): the runner sets KRATER_SMOKE=1 and stops the command after this many
+    # seconds, then reports its exit with `smoke_stopped`. 0 for an ordinary job.
+    smoke_seconds: int = 0
 
 
 def _vast_wire_id(instance: ComputeInstance) -> int | None:
@@ -191,6 +194,7 @@ def start(session: Session, instance: ComputeInstance, *, now: datetime, setting
         vast_api_url=settings.vast_api_url,
         secrets=secrets_env,
         inputs=bool(job.input_names),
+        smoke_seconds=(job.smoke_minutes or 0) * 60,
     )
 
 
@@ -270,16 +274,33 @@ def synced(session: Session, instance: ComputeInstance, *, now: datetime) -> Non
     session.flush()
 
 
-def report_exit(session: Session, instance: ComputeInstance, exit_code: int, *, now: datetime) -> ComputeJob:
-    """The member's command exited. Idempotent: only the first report counts. The scheduler destroys the machine."""
+def report_exit(
+    session: Session, instance: ComputeInstance, exit_code: int, *, now: datetime, smoke_stopped: bool = False
+) -> ComputeJob:
+    """The member's command exited. Idempotent: only the first report counts. The scheduler destroys the machine.
+    `smoke_stopped`: the runner stopped a smoke test's command at the test's end, so `exit_code` is its answer to
+    being stopped (143 for SIGTERM), not a failure; the test passed. Only a smoke job's runner may say so."""
     job = instance.job
     if job.state in ACTIVE_JOB_STATES:
-        job.exit_code = exit_code
-        job.state = ComputeJobState.SUCCEEDED if exit_code == 0 else ComputeJobState.FAILED
-        job.state_reason = "Finished." if exit_code == 0 else f"The command exited with code {exit_code}."
+        stopped = smoke_stopped and bool(job.smoke_minutes)
+        if stopped:
+            job.exit_code = None  # the stop's signal, not the command's own answer: kept in the event
+            job.state = ComputeJobState.SUCCEEDED
+            job.state_reason = smoke.passed_reason(job.smoke_minutes, stopped=True)
+        else:
+            job.exit_code = exit_code
+            job.state = ComputeJobState.SUCCEEDED if exit_code == 0 else ComputeJobState.FAILED
+            if exit_code != 0:
+                job.state_reason = f"The command exited with code {exit_code}."
+                if job.smoke_minutes:
+                    job.state_reason = f"Smoke test failed: {job.state_reason[0].lower()}{job.state_reason[1:]}"
+            elif job.smoke_minutes:
+                job.state_reason = smoke.passed_reason(job.smoke_minutes, stopped=False)
+            else:
+                job.state_reason = "Finished."
         job.ended_at = now
         job.hold_cents = 0
-        _event(session, instance, "exited", job.state_reason, now=now, exit_code=exit_code)
+        _event(session, instance, "exited", job.state_reason, now=now, exit_code=exit_code, smoke_stopped=stopped)
         session.flush()
     return job
 

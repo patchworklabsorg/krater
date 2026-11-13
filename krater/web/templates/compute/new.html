@@ -177,6 +177,10 @@
           {% if errors.max_runtime_minutes %}<p class="field-error">{{ errors.max_runtime_minutes }}</p>{% endif %}
         </div>
       </div>
+      <div class="field">
+        <label class="choice"><input type="checkbox" name="smoke" {% if posted.smoke %}checked{% endif %}> Smoke test first (jobs only): stop the command after {{ smoke_minutes }} minutes of running, with <code>KRATER_SMOKE=1</code> set. It passes if the command hasn't failed by then. Then queue it again without the tick for the full run.</label>
+        {% if errors.smoke_minutes %}<p class="field-error">{{ errors.smoke_minutes }}</p>{% endif %}
+      </div>
     </fieldset>
 
     {% if transfer_warning %}

@@ -145,6 +145,21 @@ def test_exit_finishes_the_job_once(http, machine) -> None:
     assert http.post("/runner/v1/exit", headers=_auth(token), json={"exit_code": "x"}).status_code == 422
 
 
+def test_a_smoke_tests_runner_says_its_stop_was_the_tests_end(http, db_session, member, project, client, fake) -> None:  # noqa: F811
+    job = _submit(db_session, member, project, smoke_minutes=5)
+    _pass(db_session, client)
+    row = _instance(db_session, job)
+    fake.set_status(row.provider_instance_id, "running")
+    _pass(db_session, client, NOW + timedelta(minutes=5))
+    token = _token(fake, row)
+
+    assert http.post("/runner/v1/start", headers=_auth(token)).json()["smoke_seconds"] == 300
+    answer = http.post("/runner/v1/exit", headers=_auth(token), json={"exit_code": 143, "smoke_stopped": True})
+
+    assert answer.json() == {"state": "succeeded"}
+    assert job.state_reason == "Smoke test passed: the command ran 5 minutes without failing."
+
+
 def test_a_failing_command_fails_the_job_and_the_machine_is_destroyed(http, machine, db_session, client, fake) -> None:  # noqa: F811
     job, row, token = machine
 

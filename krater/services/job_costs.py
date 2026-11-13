@@ -23,6 +23,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from krater.models import ComputeJob, GpuPriceSample
+from krater.services import smoke
 
 MICROUSD_PER_CENT = 10_000
 BYTES_PER_GB = 1_000_000_000
@@ -149,8 +150,9 @@ def estimate(
     inputs_bytes: int | None = None,
 ) -> JobEstimate:
     """`inputs_bytes`: the size of the project inputs it copies in (a queued job's own `inputs_bytes` by default)."""
-    runtime_hours = Decimal(job.max_runtime_minutes) / 60
-    up_to = math.ceil(job.max_microusd * job.max_runtime_minutes / 60 / MICROUSD_PER_CENT)
+    minutes = smoke.runtime_cap_minutes(job)  # a smoke test is priced at its own short cap
+    runtime_hours = Decimal(minutes) / 60
+    up_to = math.ceil(job.max_microusd * minutes / 60 / MICROUSD_PER_CENT)
     if inputs_bytes is None:
         inputs_bytes = getattr(job, "inputs_bytes", 0) or 0
     data_bytes = ((job.data_in_gb or 0) + (job.data_out_gb or 0)) * BYTES_PER_GB + inputs_bytes

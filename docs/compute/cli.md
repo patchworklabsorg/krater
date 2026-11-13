@@ -100,7 +100,32 @@ submit.
   and skips files already stored at the same size. `list` and `rm` (a folder ends in /) complete it; `submit --input`
   names them.
 - `krater rerun <job>` posts the job's `spec` from `GET /api/v1/jobs/{id}` (the submit body it was queued with) to
-  the submit endpoint, so the budget, verification and transfer checks run again.
+  the submit endpoint, so the budget, verification and transfer checks run again. `--no-smoke` drops a smoke test
+  (the full run), `--smoke` makes it one.
+
+### Trying a job before paying for it
+
+- **`krater run`** runs a job on this computer in Docker, free. It takes `submit`'s options and job files (price
+  and GPU options are ignored) and sets the container up as a Krater machine does (`krater_cli/local.py`):
+  `--entrypoint sh` and `sh -c <command>` in the image's working directory, `--platform linux/amd64`, the same
+  `KRATER_*` variables plus `KRATER_LOCAL=1`, and `krater-local/<name>/outputs` and `checkpoints` mounted at
+  `/krater/outputs` and `/krater/checkpoints` (`--dir` moves them). Project inputs can't be downloaded, so
+  `--input-dir FOLDER` gives a local folder as `$KRATER_INPUT_DIR` (read-only). Secret values can't be read back, so
+  given a project it passes each secret that is set in this shell under the same name (`-e NAME`, never the value in
+  argv) and says how many aren't set (a count: code scanning treats the names as secret). A sweep runs one job (`--index N`, default 0); `--resumed` sets
+  `KRATER_RESUMED=1`; `--local-gpu` adds `--gpus all`; `--docker podman` uses Podman. It needs no sign-in unless
+  given a project, and exits with the command's exit code, explaining 125, 126, 127 and 137.
+- **`krater submit --smoke`** (`--smoke-minutes N`, 1 to 30, default 5; the job form's "Smoke test first") queues
+  the job on the machine it asks for as a smoke test (`krater/services/smoke.py`): the runner sets `KRATER_SMOKE=1`,
+  stops the command after N minutes of it running, and the job **succeeds** ("Smoke test passed") if the command
+  hadn't failed by then. A command that fails sooner fails the job as usual. The timer starts with the command,
+  after the image pull and restores. The scheduler ends the machine itself at N + 10 minutes of running (the backstop),
+  and the budget hold and estimate are for that, not the max runtime, which the job keeps for `rerun --no-smoke`.
+  Nothing else about the job changes (its wait, price and max runtime are the full run's), so `rerun --no-smoke`
+  queues exactly the full run. A sweep's smoke test queues only its first job, and says to run the same `submit`
+  without `--smoke` for the whole sweep. Against a Krater from before smoke tests (which would ignore
+  the field and run the whole job) the CLI cancels the job at once and says so. `krater run --smoke` does the same
+  stop on this computer.
 
 ### Data transfer
 

@@ -33,7 +33,16 @@ from krater.models import (
 )
 from krater.models.compute_job import FINISHED_JOB_STATES
 from krater.registry import ImageUnavailable, Registry, RegistryError, parse_reference
-from krater.services import budget, clearance, compute_halt, compute_inputs, compute_settings, funding_holds, teams
+from krater.services import (
+    budget,
+    clearance,
+    compute_halt,
+    compute_inputs,
+    compute_settings,
+    funding_holds,
+    smoke,
+    teams,
+)
 from krater.services.actor import Actor
 from krater.services.errors import ConfirmationRequired, InvalidState, NotAllowed, ValidationFailed
 from krater.services.launch_rules import LAUNCHABLE_STATUSES
@@ -159,6 +168,8 @@ class JobSpec:
     data_out_gb: int | None = None
     # Names (or folders ending in /) from the project's inputs to copy onto the machine (`compute_inputs`).
     inputs: tuple[str, ...] = ()
+    # A smoke test of this many minutes (`krater.services.smoke`); None for the full run.
+    smoke_minutes: int | None = None
 
 
 @dataclass(frozen=True)
@@ -274,6 +285,13 @@ def _validate(spec: JobSpec, *, cap_microusd: int) -> None:
             errors[name] = f"Estimate 0 to {MAX_DATA_GB:,} GB of data {way} the machine, or leave it blank."
     if spec.on_outbid is ComputeOutbid.HOLD and not spec.interruptible:
         errors["on_outbid"] = "Only interruptible machines are outbid: a limit order needs interruptible."
+    if spec.smoke_minutes is not None:
+        if spec.kind is ComputeJobKind.BOX:
+            errors["smoke_minutes"] = "A smoke test is for jobs: a box already runs until you stop it."
+        elif not 1 <= spec.smoke_minutes <= smoke.MAX_SMOKE_MINUTES:
+            errors["smoke_minutes"] = f"Choose a smoke test of 1 to {smoke.MAX_SMOKE_MINUTES} minutes."
+        elif spec.smoke_minutes >= spec.max_runtime_minutes:
+            errors["smoke_minutes"] = "The smoke test must be shorter than the max runtime."
     _check_provider(spec, errors)
     if errors:
         raise ValidationFailed(errors)
@@ -352,6 +370,7 @@ def submit_job(
         data_out_gb=spec.data_out_gb,
         input_names=list(spec.inputs),
         inputs_bytes=inputs_bytes,
+        smoke_minutes=spec.smoke_minutes,
         state=ComputeJobState.QUEUED,
         # While compute is stopped, say so from the start, as the scheduler's next pass would.
         state_reason=f"Waiting: {halted}."

@@ -108,7 +108,13 @@ async def report_exit(request: Request, db_session: Annotated[Session, Depends(g
     if not isinstance(code, int) or isinstance(code, bool):
         return JSONResponse({"error": "exit_code must be an integer"}, status_code=422)
     try:
-        job = runner_api.report_exit(db_session, _instance(request, db_session), code, now=_now())
+        job = runner_api.report_exit(
+            db_session,
+            _instance(request, db_session),
+            code,
+            now=_now(),
+            smoke_stopped=body.get("smoke_stopped") is True,
+        )
     except NotAllowed as exc:
         db_session.rollback()
         return _deny(exc)

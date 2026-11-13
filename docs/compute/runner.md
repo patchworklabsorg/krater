@@ -28,7 +28,10 @@ The runner then:
    since the job was queued, and refuses a machine's upload to `inputs` (403);
 3. runs the command with `sh -c`;
 4. sends a heartbeat every minute, with the mean GPU use from `nvidia-smi` sampled every 15 s, and stops the
-   command (SIGTERM, then SIGKILL after 30 s) when Krater answers `stop`;
+   command (SIGTERM, then SIGKILL after 30 s) when Krater answers `stop`. For a smoke test `start` says
+   `smoke_seconds` (`krater/services/smoke.py`): the command gets `KRATER_SMOKE=1` and is stopped the same way once it
+   has run that long, and step 7 reports the exit with `"smoke_stopped": true`, which Krater counts as a pass (only for
+   a smoke job: an ordinary job's runner saying so changes nothing);
 5. uploads changed checkpoints every 10 minutes, and checkpoints and outputs (`$KRATER_OUTPUT_DIR`, default
    `/krater/outputs`) when the command exits, retrying a storage error for up to 5 minutes;
 6. saves the command's stdout and stderr, with its own lines, to the job's log (`logs/attempt-<n>.log`, up to
@@ -36,7 +39,7 @@ The runner then:
 7. reports the exit code. The scheduler destroys the machine on its next pass. If the final upload still failed
    after its retries, the exit is reported anyway (the machine mustn't bill forever) and the runner logs which of
    checkpoints and outputs were not saved, before the final log upload so the line reaches the job's log. `/exit`
-   carries only the code, so the job still shows as finished.
+   carries only the code (and `smoke_stopped`), so the job still shows as finished.
 
 ## Network use
 
@@ -219,6 +222,7 @@ page instead.
 | `KRATER_OUTPUT_DIR` | Put results here. Uploaded when the command exits |
 | `KRATER_INPUT_DIR` | The project inputs the job asked for, copied in before the command |
 | `KRATER_JOB_ID`, `KRATER_ATTEMPT` | For logs |
+| `KRATER_SMOKE` | `1` in a smoke test (`krater submit --smoke`): the command is stopped after its minutes, so take few steps |
 | the project's secrets | Such as `HF_TOKEN`, set on the project's Compute page |
 
 Write a checkpoint under a temporary name ending in `.tmp` or `.partial` and rename it when it's complete: the

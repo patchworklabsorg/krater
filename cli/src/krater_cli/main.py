@@ -25,6 +25,7 @@ import argparse
 import getpass
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -36,7 +37,7 @@ from urllib.parse import quote
 
 import httpx
 
-from krater_cli import __version__, auth, follow, jobfile, resolve, store
+from krater_cli import __version__, auth, follow, jobfile, local, resolve, store
 from krater_cli.api import Krater, KraterError
 from krater_cli.resolve import ResolveError, short
 
@@ -63,6 +64,8 @@ SUBMIT_DEFAULTS = {
     "max_runtime": 8 * 60,
     "count": 1,
 }
+#: A smoke test's length when `--smoke` gives none, in minutes (Krater's `krater.services.smoke`).
+DEFAULT_SMOKE_MINUTES = 5
 
 
 def _duration(text: str) -> int:
@@ -101,6 +104,66 @@ def _positive(text: str) -> float:
     return value
 
 
+def _add_job_options(parser: argparse.ArgumentParser) -> None:
+    """The options that describe a job, shared by `submit` (which queues it) and `run` (which runs it here)."""
+    parser.add_argument(
+        "project", nargs="?", help="its id, the first characters of it, or part of its title (or `project` in -f)"
+    )
+    parser.add_argument(
+        "-f", "--file", metavar="JOB.TOML", help="read the options from a TOML file; options given here win"
+    )
+    parser.add_argument("--name", help="required, here or in the file")
+    parser.add_argument("--image", help="your container image; it needs a POSIX sh (required)")
+    parser.add_argument("--command", dest="job_command", help="what the job runs (not for a box)")
+    parser.add_argument("--box", action="store_true", help="an interactive SSH box instead of a job")
+    parser.add_argument("--gpu", action="append", default=[], help="a GPU model you accept (repeatable)")
+    parser.add_argument("--min-vram", type=int, help="or: any GPU with at least this many GB")
+    parser.add_argument("--gpus", type=int, help="GPUs on the machine (default 1)")
+    parser.add_argument("--disk", type=int, help="GB (default 32)")
+    # Not `required=True`: without a price Krater shows what an hour costs now, which is what a member needs to pick.
+    parser.add_argument(
+        "--limit",
+        type=_price,
+        help="a limit order, $/h: start at or under it, never pay more, and keep the machine when outbid",
+    )
+    parser.add_argument("--target", type=_price, help="or: start at or under this, $/h (with --max)")
+    parser.add_argument("--max", type=_price, help="never pay more than this, $/h")
+    parser.add_argument("--on-demand", action="store_true", help="rent on demand instead of bidding")
+    parser.add_argument(
+        "--expires",
+        type=_duration,
+        metavar="DURATION",
+        help="cancel it if it hasn't started within this long (90m, 12h, 2d)",
+    )
+    parser.add_argument("--max-wait", type=int, help="minutes to wait for the target price (default 720)")
+    parser.add_argument("--on-max-wait", choices=ESCALATIONS, help="then what (default keep_waiting)")
+    parser.add_argument(
+        "--on-outbid",
+        choices=OUTBID,
+        help="when outbid for a while: move to another machine, or hold this one (default: hold with --limit)",
+    )
+    parser.add_argument("--max-runtime", type=int, help="minutes (default 480)")
+    parser.add_argument(
+        "--data-in", type=int, help="GB the job moves into its machine (image, datasets); Vast bills it per GB"
+    )
+    parser.add_argument("--data-out", type=int, help="GB the job moves out of its machine (checkpoints, outputs)")
+    parser.add_argument(
+        "--input",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="a file from the project's inputs to copy into $KRATER_INPUT_DIR first; a folder ends in / (repeatable)",
+    )
+    parser.add_argument("--count", type=int, help="queue this many copies, each with $KRATER_SWEEP_INDEX (0, 1, ...)")
+    parser.add_argument(
+        "--sweep",
+        action="append",
+        default=[],
+        metavar="NAME=V1,V2",
+        help="one job per value, with $NAME set in its command (repeatable: every combination)",
+    )
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="krater", description="Krater Compute from a terminal.")
     parser.add_argument("--version", action="version", version=f"krater {__version__}")
@@ -125,47 +188,7 @@ def _parser() -> argparse.ArgumentParser:
 
     submit = commands.add_parser("submit", help="queue a job or a box (or a sweep of jobs)")
     submit.set_defaults(submit_parser=submit)
-    submit.add_argument(
-        "project", nargs="?", help="its id, the first characters of it, or part of its title (or `project` in -f)"
-    )
-    submit.add_argument(
-        "-f", "--file", metavar="JOB.TOML", help="read the options from a TOML file; options given here win"
-    )
-    submit.add_argument("--name", help="required, here or in the file")
-    submit.add_argument("--image", help="your container image; it needs a POSIX sh (required)")
-    submit.add_argument("--command", dest="job_command", help="what the job runs (not for a box)")
-    submit.add_argument("--box", action="store_true", help="an interactive SSH box instead of a job")
-    submit.add_argument("--gpu", action="append", default=[], help="a GPU model you accept (repeatable)")
-    submit.add_argument("--min-vram", type=int, help="or: any GPU with at least this many GB")
-    submit.add_argument("--gpus", type=int, help="GPUs on the machine (default 1)")
-    submit.add_argument("--disk", type=int, help="GB (default 32)")
-    # Not `required=True`: without a price Krater shows what an hour costs now, which is what a member needs to pick.
-    submit.add_argument(
-        "--limit",
-        type=_price,
-        help="a limit order, $/h: start at or under it, never pay more, and keep the machine when outbid",
-    )
-    submit.add_argument("--target", type=_price, help="or: start at or under this, $/h (with --max)")
-    submit.add_argument("--max", type=_price, help="never pay more than this, $/h")
-    submit.add_argument("--on-demand", action="store_true", help="rent on demand instead of bidding")
-    submit.add_argument(
-        "--expires",
-        type=_duration,
-        metavar="DURATION",
-        help="cancel it if it hasn't started within this long (90m, 12h, 2d)",
-    )
-    submit.add_argument("--max-wait", type=int, help="minutes to wait for the target price (default 720)")
-    submit.add_argument("--on-max-wait", choices=ESCALATIONS, help="then what (default keep_waiting)")
-    submit.add_argument(
-        "--on-outbid",
-        choices=OUTBID,
-        help="when outbid for a while: move to another machine, or hold this one (default: hold with --limit)",
-    )
-    submit.add_argument("--max-runtime", type=int, help="minutes (default 480)")
-    submit.add_argument(
-        "--data-in", type=int, help="GB the job moves into its machine (image, datasets); Vast bills it per GB"
-    )
-    submit.add_argument("--data-out", type=int, help="GB the job moves out of its machine (checkpoints, outputs)")
+    _add_job_options(submit)
     submit.add_argument(
         "--confirm-transfer-cost",
         action="store_true",
@@ -177,27 +200,65 @@ def _parser() -> argparse.ArgumentParser:
         help="only say what it may cost and what this shape cost in the last day; queue nothing",
     )
     submit.add_argument(
-        "--input",
-        action="append",
-        default=[],
-        metavar="NAME",
-        help="a file from the project's inputs to copy into $KRATER_INPUT_DIR first; a folder ends in / (repeatable)",
+        "--smoke",
+        action="store_true",
+        help="a smoke test: run it for a few minutes on the machine it asks for, with KRATER_SMOKE=1 set, "
+        "then stop; it passes if the command hasn't failed by then (a sweep tries its first job only)",
     )
-    submit.add_argument("--count", type=int, help="queue this many copies, each with $KRATER_SWEEP_INDEX (0, 1, ...)")
     submit.add_argument(
-        "--sweep",
-        action="append",
-        default=[],
-        metavar="NAME=V1,V2",
-        help="one job per value, with $NAME set in its command (repeatable: every combination)",
+        "--smoke-minutes",
+        type=int,
+        metavar="N",
+        help=f"how long the smoke test runs the command (default {DEFAULT_SMOKE_MINUTES}, at most 30)",
     )
 
+    run_local = commands.add_parser(
+        "run",
+        help="run a job on this computer in Docker, set up as on Krater: free, to catch mistakes before renting",
+    )
+    run_local.set_defaults(submit_parser=run_local)
+    _add_job_options(run_local)
+    run_local.add_argument("--local", action="store_true", help=argparse.SUPPRESS)  # `krater run --local` reads well
+    run_local.add_argument(
+        "--smoke",
+        action="store_true",
+        help=f"set KRATER_SMOKE=1 and stop the command after --smoke-minutes (default {DEFAULT_SMOKE_MINUTES})",
+    )
+    run_local.add_argument("--smoke-minutes", type=int, metavar="N", help="how long a --smoke run lasts")
+    run_local.add_argument(
+        "--input-dir",
+        metavar="FOLDER",
+        help="a folder on this computer to give the job as $KRATER_INPUT_DIR (read-only), in place of the "
+        "project's inputs",
+    )
+    run_local.add_argument(
+        "--dir",
+        metavar="FOLDER",
+        help="where the job's outputs/ and checkpoints/ go (default krater-local/<name>)",
+    )
+    run_local.add_argument("--index", type=int, default=0, help="which job of a sweep to run (default 0, the first)")
+    run_local.add_argument(
+        "--resumed", action="store_true", help="set KRATER_RESUMED=1, to try the resume path with checkpoints there"
+    )
+    run_local.add_argument(
+        "--local-gpu",
+        action="store_true",
+        help="give the container this computer's NVIDIA GPUs (needs the NVIDIA container toolkit)",
+    )
+    run_local.add_argument(
+        "--docker", default="docker", help="the container command to use (default docker; or podman)"
+    )
     job_help = "its id, the first characters of it, or its name"
     rerun = commands.add_parser("rerun", help="queue a job again with the same settings")
     rerun.add_argument("job", help=job_help)
     rerun.add_argument("--name", help="a new name (default: the same)")
     rerun.add_argument("--confirm-transfer-cost", action="store_true", help="don't ask about a costly transfer")
     rerun.add_argument("--estimate", action="store_true", help="only say what it may cost; queue nothing")
+    rerun_smoke = rerun.add_mutually_exclusive_group()
+    rerun_smoke.add_argument("--no-smoke", action="store_true", help="after a smoke test passed: queue the full run")
+    rerun_smoke.add_argument(
+        "--smoke", action="store_true", help=f"run it as a smoke test ({DEFAULT_SMOKE_MINUTES} minutes)"
+    )
     show = commands.add_parser("show", help="a job's state, machine and recent events")
     show.add_argument("job", help=job_help)
     logs = commands.add_parser("logs", help="what a job's command printed (the end of it)")
@@ -472,6 +533,14 @@ def _queue(
                 return 1
             confirm = True
             job = krater.post(path, {**body, "confirm_transfer_cost": True})
+        if body.get("smoke_minutes") and not job.get("smoke_minutes"):
+            # A Krater from before smoke tests ignores the field and would run the whole job: take it back at once.
+            krater.post(f"/jobs/{job['id']}/cancel")
+            raise KraterError(
+                "This Krater doesn't run smoke tests yet, so it queued the full job; it was cancelled before it "
+                "started. Try `krater run` to test it on this computer.",
+                status=1,
+            )
         queued.append((job, variables))
 
     if len(queued) == 1:
@@ -481,6 +550,16 @@ def _queue(
             say(f"Queued {job['kind']} {job['id']}: {job['state_reason'] or job['state']}")
             if job.get("estimate"):
                 say(job["estimate"]["summary"])
+            if job.get("smoke_minutes"):
+                then = (
+                    "the same `krater submit` without --smoke queues the whole sweep"
+                    if getattr(args, "smoke_of_sweep", False)
+                    else f"`krater rerun {short(job['id'])} --no-smoke` queues the full run"
+                )
+                say(
+                    f"A smoke test: its command stops after {local.minutes(job['smoke_minutes'])} of running. "
+                    f"Once it passes, {then}."
+                )
 
         out(job, one)
     else:
@@ -512,6 +591,182 @@ def _job_price(job: dict, *, long: bool = False) -> str:
     return f"{_money(job['target_usd_per_hour'])}/{_money(job['max_usd_per_hour'])}"
 
 
+def _fill_defaults(args: argparse.Namespace) -> None:
+    for dest, default in SUBMIT_DEFAULTS.items():
+        if getattr(args, dest) is None:
+            setattr(args, dest, default)
+
+
+def _smoke_minutes(args: argparse.Namespace) -> int | None:
+    """The smoke test's minutes: `--smoke` (or `--smoke-minutes` alone) asks for one; None for the full run."""
+    if args.smoke_minutes is not None:
+        return args.smoke_minutes
+    return DEFAULT_SMOKE_MINUTES if args.smoke else None
+
+
+def _job_body(args: argparse.Namespace, prices: dict) -> dict:
+    """What `krater submit` posts for the options given (after `_fill_defaults`); `krater run` reads the same."""
+    body = {
+        "name": args.name,
+        "image": args.image,
+        "command": args.job_command,
+        "kind": "box" if args.box else "job",
+        "gpu_names": args.gpu,
+        "min_gpu_ram_gb": args.min_vram,
+        "num_gpus": args.gpus,
+        "disk_gb": args.disk,
+        **prices,
+        "interruptible": not args.on_demand,
+        "max_wait_minutes": args.max_wait,
+        "on_max_wait": args.on_max_wait,
+        "max_runtime_minutes": args.max_runtime,
+    }
+    if args.expires is not None:
+        body["max_wait_minutes"], body["on_max_wait"] = args.expires, "cancel"
+    if args.on_outbid is not None:
+        body["on_outbid"] = args.on_outbid
+    if args.data_in is not None:
+        body["data_in_gb"] = args.data_in
+    if args.data_out is not None:
+        body["data_out_gb"] = args.data_out
+    if args.input:
+        body["inputs"] = args.input
+    return body
+
+
+def _project_env_names(http: httpx.Client, project: str, say: Callable[[str], None]) -> list[str]:
+    """The project's secret names, for `krater run`; empty, with a line saying why, when Krater can't be asked."""
+    try:
+        krater = Krater(http)
+        data = krater.get(f"/projects/{resolve.resolve_project(krater, project)}/secrets")
+    except (auth.AuthError, ResolveError, KraterError, httpx.HTTPError) as exc:
+        say(f"Couldn't read the project's secret names ({exc}); running without them.")
+        return []
+    return [s["name"] for s in data["secrets"]]
+
+
+def _run_here(
+    args: argparse.Namespace,
+    http: httpx.Client,
+    say: Callable[[str], None],
+    execute: Callable[[local.LocalRun], local.Outcome],
+    which: Callable[[str], str | None],
+) -> int:
+    """`krater run`: the job in Docker on this computer (`krater_cli.local`)."""
+    try:
+        sweep_table = jobfile.apply(jobfile.load(args.file), args, args.submit_parser) if args.file else {}
+    except jobfile.JobFileError as exc:
+        say(str(exc))
+        return 2
+    _fill_defaults(args)
+    if args.box:
+        say(
+            "A box is an SSH machine with no command to run. To try its image here: "
+            f"docker run -it --rm --entrypoint sh {args.image or '<image>'}"
+        )
+        return 2
+    missing = [
+        option for option, dest in (("--image", "image"), ("--command", "job_command")) if not getattr(args, dest)
+    ]
+    if missing:
+        say(f"Give {', '.join(missing)}, here or in a job file (-f).")
+        return 2
+    smoke = _smoke_minutes(args)
+    if smoke is not None and smoke < 1:
+        say("Give --smoke-minutes of 1 or more.")
+        return 2
+    args.name = args.name or "job"
+    try:
+        runs = jobfile.expand(_job_body(args, {}), jobfile.sweep_values(args.sweep, sweep_table), args.count)
+    except jobfile.JobFileError as exc:
+        say(str(exc))
+        return 2
+    if not 0 <= args.index < len(runs):
+        say(f"--index {args.index}: the sweep has jobs 0 to {len(runs) - 1}.")
+        return 2
+    body, variables = runs[args.index]
+    if len(runs) > 1:
+        shown = " ".join(f"{k}={v}" for k, v in variables.items() if k != jobfile.INDEX_VAR)
+        say(f"Running job {args.index} of the sweep's {len(runs)} ({shown}); --index picks another.")
+    if which(args.docker) is None:
+        say(
+            f"No {args.docker} command found. Install Docker Desktop (docker.com), start it, and try again; "
+            "or give --docker podman."
+        )
+        return 1
+    if args.input and not args.input_dir:
+        say(
+            "The job takes project inputs (" + ", ".join(args.input) + "). Here, give a folder holding them with "
+            "--input-dir FOLDER: the job sees it as $KRATER_INPUT_DIR."
+        )
+        return 2
+    if args.input_dir:
+        if not os.path.isdir(args.input_dir):
+            say(f"No folder {args.input_dir}.")
+            return 2
+        absent = [name for name in args.input if not os.path.exists(os.path.join(args.input_dir, name.rstrip("/")))]
+        if absent:
+            say(
+                f"Not in {args.input_dir}, so the job won't find them: {', '.join(absent)}. The folder stands for "
+                "all of the project's inputs: an input data/x.csv is read from "
+                f"{os.path.join(args.input_dir, 'data', 'x.csv')}."
+            )
+    names = _project_env_names(http, args.project, say) if args.project else []
+    passed = [name for name in names if name in os.environ]
+    unset = len(names) - len(passed)
+    if unset:
+        # A count, not the names: code scanning treats anything from the secrets list as a secret.
+        say(
+            f"{unset} of the project's {len(names)} secrets {'is' if unset == 1 else 'are'} not set in this shell, "
+            "so the job won't have them (Krater can't send their values here). Set them under the same names; "
+            f"`krater secrets list {args.project}` lists them."
+        )
+    folder = args.dir or os.path.join("krater-local", re.sub(r"[^A-Za-z0-9_.-]+", "-", body["name"]).strip("-."))
+    checkpoints = os.path.join(folder, "checkpoints")
+    if not args.resumed and local.files_in(checkpoints)[0]:
+        say(
+            f"{checkpoints} has files from an earlier run, which a first attempt on Krater wouldn't have. "
+            "--resumed tries the resume path with them; delete them for a fresh start."
+        )
+    if args.gpus and not args.local_gpu:
+        say("Running without a GPU (--local-gpu gives it this computer's NVIDIA GPUs).")
+    run_spec = local.LocalRun(
+        image=body["image"],
+        command=body["command"],
+        name=body["name"],
+        folder=folder,
+        docker=args.docker,
+        input_dir=args.input_dir,
+        gpu=args.local_gpu,
+        resumed=args.resumed,
+        smoke_minutes=smoke,
+        env_names=passed,
+    )
+    say(
+        f"Running {body['image']} here, as a Krater machine would"
+        + (f", stopped after {local.minutes(smoke)} (smoke test)" if smoke else "")
+        + f". Outputs and checkpoints go to {os.path.abspath(folder)}."
+    )
+    sys.stdout.flush()  # these lines first: the container writes to the same terminal
+    outcome = execute(run_spec)
+    files, size = local.files_in(os.path.join(folder, "outputs"))
+    saved = f" It wrote {files} output file{'s' if files != 1 else ''} ({_size(size)})." if files else ""
+    if outcome.interrupted:
+        say("Stopped." + saved)
+        return INTERRUPTED
+    if outcome.smoke_passed:
+        say(f"Smoke test passed: the command ran {local.minutes(smoke)} without failing.{saved}")
+        return 0
+    if outcome.code == 0:
+        say(f"Finished: exit code 0.{saved}")
+        return 0
+    say(f"Failed: exit code {outcome.code}.{saved}")
+    hint = local.explain(outcome.code)
+    if hint:
+        say(hint)
+    return outcome.code
+
+
 def _cheapest_first(price: dict) -> tuple[Decimal, str]:
     cheapest = price["min_usd_per_hour"]
     return (Decimal(cheapest) if cheapest is not None else Decimal("Infinity"), price["gpu"])
@@ -528,6 +783,8 @@ def run(
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
     open_url: Callable[[str], object] = webbrowser.open,
+    run_local: Callable[[local.LocalRun], local.Outcome] = local.execute,
+    which: Callable[[str], str | None] = shutil.which,
 ) -> int:
     args = _parser().parse_args(list(argv))
 
@@ -546,6 +803,9 @@ def run(
         if not revoked:
             say("Couldn't tell Weave to revoke your tokens; they stay valid there until they expire.")
         return 0
+
+    if args.command == "run":
+        return _run_here(args, http, say, run_local, which)  # works without signing in
 
     krater = Krater(http, sleep=sleep)
 
@@ -583,7 +843,7 @@ def run(
             [
                 short(j["id"]),
                 j["kind"],
-                j["state"],
+                j["state"] + (" (smoke test)" if j.get("smoke_minutes") else ""),
                 _job_price(j),
                 f"${j['spend_cents'] / 100:.2f}",
                 j["name"],
@@ -597,9 +857,11 @@ def run(
         except jobfile.JobFileError as exc:
             say(str(exc))
             return 2
-        for dest, default in SUBMIT_DEFAULTS.items():
-            if getattr(args, dest) is None:
-                setattr(args, dest, default)
+        _fill_defaults(args)
+        smoke = _smoke_minutes(args)
+        if smoke is not None and args.box:
+            say("A smoke test is for jobs: a box already runs until you stop it.")
+            return 2
         missing = [
             option
             for option, dest in (("a project", "project"), ("--name", "name"), ("--image", "image"))
@@ -622,36 +884,20 @@ def run(
             if args.limit is not None
             else {"target_usd_per_hour": args.target, "max_usd_per_hour": args.max}
         )
-        body = {
-            "name": args.name,
-            "image": args.image,
-            "command": args.job_command,
-            "kind": "box" if args.box else "job",
-            "gpu_names": args.gpu,
-            "min_gpu_ram_gb": args.min_vram,
-            "num_gpus": args.gpus,
-            "disk_gb": args.disk,
-            **prices,
-            "interruptible": not args.on_demand,
-            "max_wait_minutes": args.max_wait,
-            "on_max_wait": args.on_max_wait,
-            "max_runtime_minutes": args.max_runtime,
-        }
-        if args.expires is not None:
-            body["max_wait_minutes"], body["on_max_wait"] = args.expires, "cancel"
-        if args.on_outbid is not None:
-            body["on_outbid"] = args.on_outbid
-        if args.data_in is not None:
-            body["data_in_gb"] = args.data_in
-        if args.data_out is not None:
-            body["data_out_gb"] = args.data_out
-        if args.input:
-            body["inputs"] = args.input
+        body = _job_body(args, prices)
+        if smoke is not None:
+            # Only this: everything else stays the full run's, so `rerun --no-smoke` queues exactly that.
+            body["smoke_minutes"] = smoke
         try:
             runs = jobfile.expand(body, jobfile.sweep_values(args.sweep, sweep_table), args.count)
         except jobfile.JobFileError as exc:
             say(str(exc))
             return 2
+        if smoke is not None and len(runs) > 1:
+            # A smoke test checks that the job starts and runs; one of the sweep's jobs shows that for all of them.
+            say(f"A smoke test runs only the first of the sweep's {len(runs)} jobs ({runs[0][0]['name']}).")
+            runs = runs[:1]
+            args.smoke_of_sweep = True
         path = f"/projects/{resolve.resolve_project(krater, args.project)}/jobs"
         return _queue(krater, path, runs, args, say=say, prompt=prompt, out=out, sleep=sleep)
     elif args.command == "rerun":
@@ -660,6 +906,13 @@ def run(
             say("This Krater doesn't send a job's settings yet, so it can't be run again from here.")
             return 1
         body = {**source["spec"], **({"name": args.name} if args.name else {})}
+        if args.no_smoke:
+            body.pop("smoke_minutes", None)  # the full run: the job kept its own max runtime
+        elif args.smoke:
+            if body.get("kind") == "box":
+                say("A smoke test is for jobs: a box already runs until you stop it.")
+                return 2
+            body["smoke_minutes"] = DEFAULT_SMOKE_MINUTES
         return _queue(
             krater,
             f"/projects/{source['project_id']}/jobs",
@@ -902,13 +1155,13 @@ def _upload_inputs(
     files = _input_files(paths, as_name)
     stored = {f["name"]: f["size_bytes"] for f in krater.get(base)["inputs"]}
     sent = skipped = 0
-    for local, name in files:
-        size = os.path.getsize(local)
+    for path, name in files:
+        size = os.path.getsize(path)
         if stored.get(name) == size:
             skipped += 1
             continue
         upload = krater.post(f"{base}/upload", {"name": name, "size": size})
-        with open(local, "rb") as handle:
+        with open(path, "rb") as handle:
             if "url" in upload:
                 _put(http, upload["url"], handle, 0, size)
             else:
