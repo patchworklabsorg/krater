@@ -1939,7 +1939,7 @@ def test_submit_names_its_inputs(http, fake, tmp_path) -> None:
 # -- Smoke tests (`krater submit --smoke`) ---------------------------------------------------------------------
 
 
-def test_submit_smoke_asks_for_a_smoke_test_that_gives_up_waiting_sooner(http, fake) -> None:
+def test_submit_smoke_asks_for_a_smoke_test_and_changes_nothing_else(http, fake) -> None:
     _login(http, [])
     said: list[str] = []
 
@@ -1947,18 +1947,18 @@ def test_submit_smoke_asks_for_a_smoke_test_that_gives_up_waiting_sooner(http, f
 
     body = fake.jobs[0]["body"]
     assert body["smoke_minutes"] == 5 and body["max_runtime_minutes"] == 480
-    assert body["max_wait_minutes"] == 60 and body["on_max_wait"] == "cancel"
+    # The full run's wait: `rerun --no-smoke` posts this body back, and a limit order there may wait for hours.
+    assert body["max_wait_minutes"] == 720 and body["on_max_wait"] == "keep_waiting"
     assert said[-1] == (
         "A smoke test: its command stops after 5 minutes of running. Once it passes, "
         f"`krater rerun {JOB[:8]} --no-smoke` queues the full run."
     )
 
 
-def test_submit_smoke_keeps_a_wait_the_member_gave(http, fake) -> None:
+def test_submit_smoke_minutes_alone_asks_for_a_smoke_test(http, fake) -> None:
     _login(http, [])
-    run([*SUBMIT_4090, "--smoke-minutes", "10", "--max-wait", "30"], http=http, say=lambda _: None)
-    body = fake.jobs[0]["body"]
-    assert body["smoke_minutes"] == 10 and body["max_wait_minutes"] == 30 and body["on_max_wait"] == "keep_waiting"
+    run([*SUBMIT_4090, "--smoke-minutes", "1"], http=http, say=lambda _: None)
+    assert fake.jobs[0]["body"]["smoke_minutes"] == 1
 
 
 def test_a_smoke_test_of_a_sweep_queues_only_its_first_job(http, fake) -> None:
@@ -1969,6 +1969,7 @@ def test_a_smoke_test_of_a_sweep_queues_only_its_first_job(http, fake) -> None:
 
     assert [job["body"]["name"] for job in fake.jobs] == ["train-0"]
     assert said[0] == "A smoke test runs only the first of the sweep's 2 jobs (train-0)."
+    assert said[-1].endswith("Once it passes, the same `krater submit` without --smoke queues the whole sweep.")
 
 
 def test_a_box_cant_be_a_smoke_test(http, fake) -> None:

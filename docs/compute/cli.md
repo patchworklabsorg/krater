@@ -121,8 +121,9 @@ submit.
   hadn't failed by then. A command that fails sooner fails the job as usual. The timer starts with the command,
   after the image pull and restores. The scheduler ends the machine itself at N + 10 minutes of running (the backstop),
   and the budget hold and estimate are for that, not the max runtime, which the job keeps for `rerun --no-smoke`.
-  Unless `--max-wait`, `--on-max-wait` or `--expires` is given, a smoke test is cancelled if it hasn't started within
-  an hour. A sweep's smoke test queues only its first job. Against a Krater from before smoke tests (which would ignore
+  Nothing else about the job changes (its wait, price and max runtime are the full run's), so `rerun --no-smoke`
+  queues exactly the full run. A sweep's smoke test queues only its first job, and says to run the same `submit`
+  without `--smoke` for the whole sweep. Against a Krater from before smoke tests (which would ignore
   the field and run the whole job) the CLI cancels the job at once and says so. `krater run --smoke` does the same
   stop on this computer.
 

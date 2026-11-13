@@ -126,3 +126,9 @@ def test_the_runtime_cap_is_the_shorter_of_the_two() -> None:
         )
 
     assert (cap(480, None), cap(480, 5), cap(12, 5)) == (480, 15, 12)
+
+
+def test_the_backstop_allows_for_copying_the_inputs_first(db_session, member, project, client, fake) -> None:  # noqa: F811
+    job = _submit(db_session, member, project, smoke_minutes=5)
+    job.inputs_bytes = 2_500_000_000  # 2.5 GB: three more minutes
+    assert smoke.runtime_cap_minutes(job) == 18

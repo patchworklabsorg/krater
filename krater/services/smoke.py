@@ -14,6 +14,7 @@ max runtime, so `krater rerun --no-smoke` queues the full run.
 
 from __future__ import annotations
 
+import math
 from typing import Protocol
 
 #: What `krater submit --smoke` asks for when no length is given, in minutes.
@@ -23,6 +24,10 @@ MAX_SMOKE_MINUTES = 30
 #: Running time on top of the test before the scheduler ends the machine itself: the runner copies inputs and restores
 #: checkpoints before the command (and its timer) starts, and saves the outputs and log after.
 SMOKE_GRACE_MINUTES = 10
+#: The backstop's running time counts from when the container runs, and the runner copies the job's inputs before the
+#: command (and its timer) starts: a minute more per GB of inputs, so a test with big inputs isn't ended mid-copy.
+INPUT_MINUTES_PER_GB = 1
+BYTES_PER_GB = 1_000_000_000
 
 
 class _Shape(Protocol):
@@ -32,11 +37,13 @@ class _Shape(Protocol):
 
 def runtime_cap_minutes(shape: _Shape) -> int:
     """The running time after which the scheduler ends the job's machine: its max runtime, or for a smoke test the
-    test plus `SMOKE_GRACE_MINUTES` when that's shorter. Used for the runtime limit, the budget hold and estimates."""
+    test plus `SMOKE_GRACE_MINUTES` (and a minute per GB of inputs to copy first) when that's shorter. Used for the
+    runtime limit, the budget hold and estimates."""
     smoke = getattr(shape, "smoke_minutes", None)
     if not smoke:
         return shape.max_runtime_minutes
-    return min(shape.max_runtime_minutes, smoke + SMOKE_GRACE_MINUTES)
+    inputs = math.ceil((getattr(shape, "inputs_bytes", 0) or 0) / BYTES_PER_GB) * INPUT_MINUTES_PER_GB
+    return min(shape.max_runtime_minutes, smoke + SMOKE_GRACE_MINUTES + inputs)
 
 
 def passed_reason(minutes: int, *, stopped: bool) -> str:

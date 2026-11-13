@@ -138,6 +138,8 @@ Krater sets these environment variables for your command:
 | `KRATER_OUTPUT_DIR` | Put your results here. Uploaded when the command exits |
 | `KRATER_INPUT_DIR` | The project [inputs](#inputs) the job asked for, copied in before your command starts (`/krater/inputs`) |
 | `KRATER_JOB_ID`, `KRATER_ATTEMPT` | The job's id and which attempt this is (1, 2, ...), for your own logs |
+| `KRATER_SMOKE` | `1` in a [smoke test](#trying-it-before-paying): the command is stopped after a few minutes, so take a few steps only |
+| `KRATER_LOCAL` | `1` when the job runs on your own computer with [`krater run`](#trying-it-before-paying) |
 | Your project's secrets | Such as `HF_TOKEN`, set on the project's Compute page |
 
 By default the directories are `/krater/checkpoints` and `/krater/outputs` (or `/tmp/krater/...` for a non-root
@@ -201,6 +203,25 @@ pass `resume_from_checkpoint=True` when `KRATER_RESUMED` is `1`. Save the final 
 Everything your command prints (stdout and stderr) goes to the job's log, which Krater uploads every minute and
 shows on the job page. It keeps up to 16 MB per attempt. Print progress lines (`step 1200/50000, loss 0.84`) so you can
 see the job is alive. The command's exit code decides the outcome: `0` is *succeeded*, anything else *failed*.
+
+## Trying it before paying
+
+Most failed jobs fail in their first minute: a typo in the command, a package missing from the image, a wrong path.
+Two ways to find that out cheaply:
+
+- **On your computer, free:** `krater run` takes the same options as `krater submit` (or `-f job.toml`) and runs the
+  job in Docker, set up as a Krater machine sets it up: the same image, `sh -c` command and `KRATER_*` folders, with
+  `outputs/` and `checkpoints/` under `krater-local/<name>/` for you to look at. Give your inputs as a folder with
+  `--input-dir` (an input `data/x.csv` is read from `<folder>/data/x.csv`). Project secrets reach the job only if
+  they are set in your shell under the same name. It has no GPU unless your computer has an NVIDIA GPU and you add
+  `--local-gpu`. You need Docker Desktop (or Podman, with `--docker podman`).
+- **On the real machine, for a few cents:** tick **Smoke test first** on the form, or `krater submit --smoke`
+  (`--smoke-minutes N`, up to 30; 5 by default). The job runs on the GPU you asked for, with `KRATER_SMOKE=1` set,
+  and its command is stopped after 5 minutes of running. If it hadn't failed by then, the job **succeeds** ("Smoke
+  test passed") and you've paid for minutes, not hours. Then run it for real: `krater rerun <job> --no-smoke`, or
+  **Run again** on the job page without the tick. The minutes count from when your command starts, after the image
+  pull. In your script, `KRATER_SMOKE=1` is a good moment to do a few steps and save one checkpoint, so the test
+  covers saving too.
 
 ## Submitting a job on the web
 

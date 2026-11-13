@@ -66,8 +66,6 @@ SUBMIT_DEFAULTS = {
 }
 #: A smoke test's length when `--smoke` gives none, in minutes (Krater's `krater.services.smoke`).
 DEFAULT_SMOKE_MINUTES = 5
-#: A smoke test is for now: unless told otherwise, it's cancelled if no machine starts it within this long.
-SMOKE_WAIT_MINUTES = 60
 
 
 def _duration(text: str) -> int:
@@ -553,9 +551,14 @@ def _queue(
             if job.get("estimate"):
                 say(job["estimate"]["summary"])
             if job.get("smoke_minutes"):
+                then = (
+                    "the same `krater submit` without --smoke queues the whole sweep"
+                    if getattr(args, "smoke_of_sweep", False)
+                    else f"`krater rerun {short(job['id'])} --no-smoke` queues the full run"
+                )
                 say(
-                    f"A smoke test: its command stops after {job['smoke_minutes']} minutes of running. Once it "
-                    f"passes, `krater rerun {short(job['id'])} --no-smoke` queues the full run."
+                    f"A smoke test: its command stops after {local.minutes(job['smoke_minutes'])} of running. "
+                    f"Once it passes, {then}."
                 )
 
         out(job, one)
@@ -853,8 +856,6 @@ def run(
         except jobfile.JobFileError as exc:
             say(str(exc))
             return 2
-        # Before the defaults fill them in: a smoke test waits less, unless the member said how long.
-        wait_given = args.max_wait is not None or args.on_max_wait is not None or args.expires is not None
         _fill_defaults(args)
         smoke = _smoke_minutes(args)
         if smoke is not None and args.box:
@@ -884,9 +885,8 @@ def run(
         )
         body = _job_body(args, prices)
         if smoke is not None:
+            # Only this: everything else stays the full run's, so `rerun --no-smoke` queues exactly that.
             body["smoke_minutes"] = smoke
-            if not wait_given:
-                body["max_wait_minutes"], body["on_max_wait"] = SMOKE_WAIT_MINUTES, "cancel"
         try:
             runs = jobfile.expand(body, jobfile.sweep_values(args.sweep, sweep_table), args.count)
         except jobfile.JobFileError as exc:
@@ -896,6 +896,7 @@ def run(
             # A smoke test checks that the job starts and runs; one of the sweep's jobs shows that for all of them.
             say(f"A smoke test runs only the first of the sweep's {len(runs)} jobs ({runs[0][0]['name']}).")
             runs = runs[:1]
+            args.smoke_of_sweep = True
         path = f"/projects/{resolve.resolve_project(krater, args.project)}/jobs"
         return _queue(krater, path, runs, args, say=say, prompt=prompt, out=out, sleep=sleep)
     elif args.command == "rerun":
