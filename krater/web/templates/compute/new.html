@@ -226,14 +226,22 @@
       Krater checks Vast's prices once an hour: the full hourly cost of 1-GPU offers on hosts it would rent (with
       32 GB of disk). Prices move between checks, and where there are only a few offers the cheapest can be gone in
       minutes. When your job starts, Krater searches again and rents the cheapest offer that fits it then.
+      {% if live_table %}
+        <strong>Cheapest now</strong> is Krater's search of Vast when you opened this page, filled in as each answer
+        comes back (about a minute for the whole table), with the time it was checked.
+      {% endif %}
     </p>
+    {% if live_table %}
+      <p class="muted" data-role="live-note"{% if not live_table.note %} hidden{% endif %}>{{ live_table.note or "" }}</p>
+    {% endif %}
     <div class="table-scroll">
-      <table class="table">
+      <table class="table"{% if live_table %} data-role="live-table" data-url="/projects/{{ project.id }}/compute/live-prices" data-done="{{ "1" if live_table.done else "0" }}"{% endif %}>
         <thead>
           <tr>
             <th scope="col">GPU</th>
             <th scope="col">Rental</th>
             <th scope="col" class="num">Cheapest then</th>
+            {% if live_table %}<th scope="col" class="num">Cheapest now</th>{% endif %}
             <th scope="col" class="num">Cheaper offers (10th to 50th percentile)</th>
             <th scope="col" class="num">Offers</th>
           </tr>
@@ -244,6 +252,13 @@
               <td class="nowrap"><a href="/pricing/history?gpu={{ sample.gpu_name | urlencode }}&rental={{ sample.rental_type }}">{{ sample.gpu_name }}</a></td>
               <td>{{ "interruptible" if sample.rental_type == "bid" else "on demand" }}</td>
               <td class="num">{{ sample.min_microusd | rate if sample.min_microusd is not none else "none" }}</td>
+              {% if live_table %}
+                {% set now = live_table.rows.get(sample.gpu_name ~ "|" ~ sample.rental_type) %}
+                <td class="num" data-live="{{ sample.gpu_name }}|{{ sample.rental_type }}">
+                  <span data-part="text">{{ now.text if now else "" }}</span><br>
+                  <small class="muted" data-part="at">{{ now.at if now else "" }}</small>
+                </td>
+              {% endif %}
               <td class="num">{% if sample.p10_microusd is not none %}{{ sample.p10_microusd | rate }} to {{ sample.median_microusd | rate }}{% endif %}</td>
               <td class="num">{{ sample.offer_count }}</td>
             </tr>

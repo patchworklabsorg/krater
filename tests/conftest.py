@@ -86,6 +86,15 @@ def db_session(engine: Engine) -> Generator[Session, None, None]:
         connection.close()
 
 
+@pytest.fixture(autouse=True)
+def _no_live_price_checks(monkeypatch) -> None:
+    """No test defers a live price check to a real queue; a test that cares records the calls itself."""
+    from krater.web import live_quote
+
+    monkeypatch.setattr(live_quote, "kick_live_quote", lambda key: None)
+    monkeypatch.setattr(live_quote, "kick_live_table", lambda: None)
+
+
 @pytest.fixture
 def weave_stub() -> StubWeaveClient:
     """A fresh stub Weave (the bundled fixture users) for this test. The `client` app uses it, so a test

@@ -821,6 +821,44 @@ def kick_live_quote(key: str) -> None:
         logger.warning("krater: could not defer live_quote", exc_info=True)
 
 
+LIVE_TABLE_LOCK = "live_table"
+
+
+@app.task(name="live_table", queueing_lock=LIVE_TABLE_LOCK)
+def live_table() -> None:
+    """Refresh the job form's "Cheapest now" column (`krater.services.live_prices.check_table`), committing each row
+    as it's searched so the page fills in. Fails soft: the page then shows the hourly prices only."""
+    client = get_vast_client()
+    if client is None:
+        return
+    session = get_sessionmaker()()
+    try:
+        live_prices.check_table(
+            session,
+            client,
+            disk_gb=get_settings().price_history_disk_gb,
+            clock=lambda: datetime.now(UTC),
+            on_row=session.commit,
+        )
+        compute_search_quota.record(session, client.search_quota, now=datetime.now(UTC))
+        session.commit()
+    except Exception:
+        logger.exception("krater.live_table failed")
+        session.rollback()
+    finally:
+        session.close()
+
+
+def kick_live_table() -> None:
+    """Defer `live_table`, once. Never fails the caller."""
+    try:
+        live_table.defer()
+    except procrastinate.exceptions.AlreadyEnqueued:
+        pass
+    except Exception:
+        logger.warning("krater: could not defer live_table", exc_info=True)
+
+
 def kick_stash_archiving() -> None:
     """Defer `stash_archive_now`, if Stash is configured. Never fails the caller: the periodic run is the
     safety net."""

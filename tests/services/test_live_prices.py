@@ -9,6 +9,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from krater.models import ComputeJobKind, GpuPriceSample, LiveQuote
+from krater.providers import ProviderRateLimitedError
 from krater.services import compute_settings, live_prices
 from krater.services.compute_jobs import JobSpec
 from krater.vast import FakeVast
@@ -162,3 +163,79 @@ def test_nothing_that_fits_says_so(db_session: Session) -> None:
 
     assert row.cheapest_microusd is None
     assert live_prices.view(row)["text"] == "Right now on Vast (checked 03:00:03 UTC) no offer fits this job."
+
+
+# --- the form's "Cheapest now" column ---------------------------------------------------------------------------------
+
+BOTH = ("bid", "ondemand")
+
+
+def _refresh(db_session: Session, client, *, at: datetime = NOW) -> list[int]:
+    commits: list[int] = []
+    live_prices.check_table(
+        db_session,
+        client,
+        disk_gb=32,
+        clock=lambda: at,
+        on_row=lambda: commits.append(1),
+        pause_seconds=0,
+    )
+    return commits
+
+
+def test_opening_the_form_refreshes_the_table_once_and_fills_it_in(db_session: Session) -> None:
+    fake = _market()
+    assert live_prices.request_table(db_session, ["A100 SXM4", "RTX 4090"], BOTH, now=NOW)
+    shown = live_prices.view_table(db_session)
+    assert shown["done"] is False and shown["rows"]["A100 SXM4|bid"]["status"] == "checking"
+    # Another member opening the form meanwhile doesn't ask again.
+    assert not live_prices.request_table(db_session, ["A100 SXM4", "RTX 4090"], BOTH, now=NOW + timedelta(seconds=30))
+
+    commits = _refresh(db_session, fake.client(), at=NOW + timedelta(seconds=5))
+
+    assert len(commits) == 4  # one per row, so the page fills in as it goes
+    shown = live_prices.view_table(db_session)
+    assert shown["done"] is True and shown["note"] is None
+    # The hourly table's measure: GPU price plus 32 GB of disk, no bid margin, 1-GPU offers, no direct port needed.
+    assert shown["rows"]["A100 SXM4|ondemand"] == {"status": "ready", "text": "$0.4044/h", "at": "03:00:05 UTC"}
+    assert shown["rows"]["A100 SXM4|bid"]["text"] == "$0.2044/h"
+    assert shown["rows"]["RTX 4090|bid"]["text"] == "$0.1544/h"
+    assert db_session.scalar(sa.select(sa.func.count()).select_from(GpuPriceSample)) == 0
+
+    assert not live_prices.request_table(db_session, ["A100 SXM4", "RTX 4090"], BOTH, now=NOW + timedelta(minutes=2))
+    assert live_prices.request_table(db_session, ["A100 SXM4", "RTX 4090"], BOTH, now=NOW + timedelta(minutes=6))
+
+
+def test_the_table_has_its_own_daily_cap(db_session: Session, monkeypatch) -> None:
+    monkeypatch.setitem(live_prices.DAILY_SEARCHES, live_prices.PURPOSE_TABLE, 1)
+    live_prices.request_table(db_session, ["A100 SXM4"], BOTH, now=NOW)
+
+    _refresh(db_session, _market().client())
+
+    shown = live_prices.view_table(db_session)
+    assert shown["rows"]["A100 SXM4|bid"]["status"] == "ready"
+    assert shown["rows"]["A100 SXM4|ondemand"]["status"] == "unavailable"
+    assert shown["note"] == "Krater has used today's live price checks. They're back at midnight UTC."
+    assert shown["done"] is True
+    # A quote has its own count: the table using up its share leaves the estimate's.
+    assert _checked(db_session, _market(), _shape(db_session)).error is None
+
+
+def test_a_rate_limit_stops_the_refresh(db_session: Session) -> None:
+    class Limited:
+        search_quota = None
+        calls = 0
+
+        def search_offers(self, query):
+            self.calls += 1
+            raise ProviderRateLimitedError("slow down")
+
+    client = Limited()
+    live_prices.request_table(db_session, ["A100 SXM4", "RTX 4090"], BOTH, now=NOW)
+
+    _refresh(db_session, client)
+
+    assert client.calls == 1
+    shown = live_prices.view_table(db_session)
+    assert {row["status"] for row in shown["rows"].values()} == {"unavailable"}
+    assert shown["note"] == "Vast asked Krater to slow down. Try again in a few minutes."

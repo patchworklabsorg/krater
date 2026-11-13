@@ -33,6 +33,22 @@ class LiveQuote(UUIDPrimaryKeyMixin, Base):
     error: Mapped[str | None] = mapped_column(sa.String(300), nullable=True)
 
 
+class LivePrice(Base):
+    """The form's "Cheapest now" column: the cheapest 1-GPU offer for one GPU model and rental type, from a live
+    search when a member opened the form, priced like the hourly table (`price_history_disk_gb` of disk, no bid
+    margin) so the two columns compare."""
+
+    __tablename__ = "live_prices"
+
+    gpu_name: Mapped[str] = mapped_column(sa.String(64), primary_key=True)
+    rental_type: Mapped[str] = mapped_column(sa.String(16), primary_key=True)
+    requested_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
+    checked_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    cheapest_microusd: Mapped[int | None] = mapped_column(sa.BigInteger, nullable=True)
+    # Why the last check didn't search or failed, for the member.
+    error: Mapped[str | None] = mapped_column(sa.String(300), nullable=True)
+
+
 class LivePriceUsage(Base):
     """Searches live price checks made in a UTC day, by purpose: Krater's own cap, which holds even when Vast's quota
     headers are missing."""

@@ -266,7 +266,11 @@ nothing queued. It shows:
   offers (10th to 50th percentile), for interruptible and on-demand machines, as of Krater's last hourly check of
   Vast. It isn't live: prices move between checks, and for a GPU with only a few offers the cheapest can be rented by
   someone else within minutes. When your job starts, Krater searches Vast again and rents the cheapest offer that fits
-  it at that moment. For the price right now, choose **Estimate the cost**.
+  it at that moment.
+- **Cheapest now**, next to it, is Krater searching Vast again when you open the form: each row fills in within about a
+  minute, with the time it was checked. It's searched again at most every 5 minutes, and only a set number of times a
+  day; when Krater is saving its Vast searches for starting jobs, the column says "not checked" and why. For the price
+  of your exact job (more GPUs, more disk, a box), choose **Estimate the cost**.
 - [GPU price history](/pricing/history) shows each GPU's cheapest price and typical range over the last day, week or
   month. Pick a price from it, not from a guess.
 - `krater prices --gpu 4090` shows the same from a terminal, with the time of the check.
