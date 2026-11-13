@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pytest
 import sqlalchemy as sa
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 from krater.config import get_settings
-from krater.models import ComputeJob, ComputeJobState, ComputeOutbid
+from krater.models import ComputeEvent, ComputeJob, ComputeJobState, ComputeOutbid
 from krater.registry import FakeRegistry, get_registry
 from krater.services import project_secrets
 from krater.weave import StubWeaveClient
@@ -91,6 +93,23 @@ def test_a_member_sees_their_projects_and_queues_a_job(client: TestClient, proje
     assert listed[0]["target_usd_per_hour"] == "0.0700"
     detail = client.get(f"/api/v1/jobs/{job.id}", headers=_as(MEMBER_SUB)).json()
     assert detail["events"][0]["kind"] == "queued" and detail["machine"] is None
+
+
+def test_a_jobs_events_are_listed_in_the_order_they_happened(client: TestClient, project, db_session) -> None:
+    """Production, 2026-11-13: a scheduler pass stamps its events with the time it began, which was before the job was
+    queued, and its events shared one time: the page showed "Queued" after the first rental and "Rented" before
+    "Renting"."""
+    assert client.post(f"/api/v1/projects/{project.id}/jobs", json=JOB, headers=_as(MEMBER_SUB)).status_code == 201
+    job = db_session.scalars(sa.select(ComputeJob)).one()
+    queued_at = db_session.scalars(sa.select(ComputeEvent.at).where(ComputeEvent.job_id == job.id)).one()
+    pass_began = queued_at.replace(second=0, microsecond=0) - timedelta(seconds=1)
+    for kind in ("renting", "unavailable", "renting_again", "rented"):
+        db_session.add(ComputeEvent(job_id=job.id, kind=kind, message=kind, payload={}, at=pass_began))
+        db_session.flush()
+
+    events = client.get(f"/api/v1/jobs/{job.id}", headers=_as(MEMBER_SUB)).json()["events"]
+
+    assert [event["kind"] for event in events] == ["rented", "renting_again", "unavailable", "renting", "queued"]
 
 
 def test_an_image_its_registry_refuses_gets_a_field_error(client: TestClient, project, db_session) -> None:

@@ -426,7 +426,7 @@ def job_page(
     box_admin_names = sorted(people.names(weave_client, box_admins).values(), key=str.casefold)
     events = list(
         db_session.scalars(
-            sa.select(ComputeEvent).where(ComputeEvent.job_id == job.id).order_by(ComputeEvent.at.desc()).limit(100)
+            sa.select(ComputeEvent).where(ComputeEvent.job_id == job.id).order_by(ComputeEvent.seq.desc()).limit(100)
         )
     )
     live = [row for row in job.instances if row.is_live]
