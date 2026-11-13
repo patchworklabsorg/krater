@@ -52,6 +52,8 @@ class Fake:
         self.jobs: list[dict] = []
         self.estimated: list[dict] = []
         self.secrets: dict[str, str] = {}
+        # An older Krater ignores `smoke_minutes` and doesn't send it back.
+        self.knows_smoke = True
         self.jobs_422 = False
         # Krater asks before queuing a job whose data transfer could cost a lot (409 with `confirm`).
         self.transfer_confirm = False
@@ -217,6 +219,8 @@ class Fake:
                 "state_reason": "Queued.",
                 "body": body,
             }
+            if self.knows_smoke:
+                job["smoke_minutes"] = body.get("smoke_minutes")
             self.jobs.append(job)
             return httpx.Response(201, json=job)
         acted = re.fullmatch(r"/jobs/([0-9a-f-]{36})/(cancel|stop|resume|move)", path)
@@ -255,6 +259,10 @@ class Fake:
                         {"area": "outputs", "name": "../../escape.txt", "size_bytes": 1, "url": "https://store.test/x"},
                     ]
                 },
+            )
+        if path == f"/projects/{PROJECT}/secrets" and request.method == "GET":
+            return httpx.Response(
+                200, json={"secrets": [{"name": n, "updated_at": "2026-10-11T12:00:00+00:00"} for n in self.secrets]}
             )
         if path.startswith(f"/projects/{PROJECT}/secrets/") and request.method == "PUT":
             name = path.rsplit("/", 1)[1]
@@ -1926,3 +1934,282 @@ def test_submit_names_its_inputs(http, fake, tmp_path) -> None:
     path = _job_file(tmp_path, JOB_TOML + 'input = "data/"\n')
     run(["submit", "-f", path], http=http, say=lambda _: None)
     assert fake.jobs[1]["body"]["inputs"] == ["data/"]
+
+
+# -- Smoke tests (`krater submit --smoke`) ---------------------------------------------------------------------
+
+
+def test_submit_smoke_asks_for_a_smoke_test_that_gives_up_waiting_sooner(http, fake) -> None:
+    _login(http, [])
+    said: list[str] = []
+
+    assert run([*SUBMIT_4090, "--smoke"], http=http, say=said.append) == 0
+
+    body = fake.jobs[0]["body"]
+    assert body["smoke_minutes"] == 5 and body["max_runtime_minutes"] == 480
+    assert body["max_wait_minutes"] == 60 and body["on_max_wait"] == "cancel"
+    assert said[-1] == (
+        "A smoke test: its command stops after 5 minutes of running. Once it passes, "
+        f"`krater rerun {JOB[:8]} --no-smoke` queues the full run."
+    )
+
+
+def test_submit_smoke_keeps_a_wait_the_member_gave(http, fake) -> None:
+    _login(http, [])
+    run([*SUBMIT_4090, "--smoke-minutes", "10", "--max-wait", "30"], http=http, say=lambda _: None)
+    body = fake.jobs[0]["body"]
+    assert body["smoke_minutes"] == 10 and body["max_wait_minutes"] == 30 and body["on_max_wait"] == "keep_waiting"
+
+
+def test_a_smoke_test_of_a_sweep_queues_only_its_first_job(http, fake) -> None:
+    _login(http, [])
+    said: list[str] = []
+
+    assert run([*SUBMIT_4090, "--sweep", "lr=0.1,0.01", "--smoke"], http=http, say=said.append) == 0
+
+    assert [job["body"]["name"] for job in fake.jobs] == ["train-0"]
+    assert said[0] == "A smoke test runs only the first of the sweep's 2 jobs (train-0)."
+
+
+def test_a_box_cant_be_a_smoke_test(http, fake) -> None:
+    _login(http, [])
+    said: list[str] = []
+    assert run([*SUBMIT_4090, "--box", "--smoke"], http=http, say=said.append) == 2
+    assert fake.jobs == [] and said == ["A smoke test is for jobs: a box already runs until you stop it."]
+
+
+def test_an_older_krater_that_ignores_the_smoke_test_has_the_job_cancelled(http, fake) -> None:
+    _login(http, [])
+    fake.knows_smoke = False
+    fake.details[JOB] = {**job_row(JOB, "train"), "state": "cancelled"}
+
+    with pytest.raises(KraterError, match="doesn't run smoke tests yet"):
+        run([*SUBMIT_4090, "--smoke"], http=http, say=lambda _: None)
+
+    assert any(r.url.path == f"/api/v1/jobs/{JOB}/cancel" and r.method == "POST" for r in fake.requests)
+
+
+def test_rerun_no_smoke_queues_the_full_run(http, fake) -> None:
+    _login(http, [])
+    spec = {"name": "t", "image": "x", "command": "go", "kind": "job", "limit_usd_per_hour": "0.4", "smoke_minutes": 5}
+    fake.details[JOB_C] = {**job_row(JOB_C, "train"), "spec": spec}
+
+    assert run(["rerun", JOB_C, "--no-smoke"], http=http, say=lambda _: None) == 0
+
+    assert "smoke_minutes" not in fake.jobs[0]["body"]
+
+
+def test_rerun_smoke_makes_it_a_smoke_test(http, fake) -> None:
+    _login(http, [])
+    spec = {"name": "train", "image": "x", "command": "go", "kind": "job", "limit_usd_per_hour": "0.4"}
+    fake.details[JOB_C] = {**job_row(JOB_C, "train"), "spec": spec}
+
+    assert run(["rerun", JOB_C, "--smoke"], http=http, say=lambda _: None) == 0
+
+    assert fake.jobs[0]["body"]["smoke_minutes"] == 5
+
+
+def test_jobs_marks_smoke_tests(http, fake) -> None:
+    _login(http, [])
+    fake.project_jobs[PROJECT] = [{**job_row(JOB, "train", state="succeeded"), "smoke_minutes": 5}]
+    said: list[str] = []
+    run(["jobs", PROJECT], http=http, say=said.append)
+    assert "succeeded (smoke test)" in said[1]
+
+
+# -- Local runs (`krater run`) ---------------------------------------------------------------------------------
+
+
+class Docker:
+    """Stands in for `local.execute`: records what would run, and answers with an outcome."""
+
+    def __init__(self, outcome=None, writes: dict[str, str] | None = None) -> None:
+        self.runs: list = []
+        self.outcome = outcome or main.local.Outcome(code=0)
+        self.writes = writes or {}
+
+    def __call__(self, spec):
+        self.runs.append(spec)
+        for name, text in self.writes.items():
+            path = os.path.join(spec.folder, "outputs", name)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(text)
+        return self.outcome
+
+
+def _run_local(argv, http, docker, said, which=lambda name: f"/usr/bin/{name}"):
+    return run(["run", *argv], http=http, say=said.append, run_local=docker, which=which)
+
+
+def test_run_runs_the_job_here_without_signing_in(http, fake, tmp_path) -> None:
+    docker = Docker(writes={"score.txt": "0.93"})
+    said: list[str] = []
+    folder = str(tmp_path / "out")
+
+    code = _run_local(
+        ["--image", "python:3.12-slim", "--command", "python -c 'print(1)'", "--name", "t", "--dir", folder],
+        http,
+        docker,
+        said,
+    )
+
+    assert code == 0 and fake.requests == []  # no Krater, no Weave
+    spec = docker.runs[0]
+    assert (spec.image, spec.command, spec.folder, spec.smoke_minutes) == (
+        "python:3.12-slim",
+        "python -c 'print(1)'",
+        folder,
+        None,
+    )
+    assert said[-1] == "Finished: exit code 0. It wrote 1 output file (4 B)."
+
+
+def test_run_reads_a_job_file_and_runs_the_chosen_sweep_job(http, fake, tmp_path) -> None:
+    docker = Docker()
+    said: list[str] = []
+    path = _job_file(tmp_path, JOB_TOML.replace(f'project = "{PROJECT}"\n', "") + "\n[sweep]\nlr = [0.1, 0.01]\n")
+
+    code = _run_local(["-f", path, "--index", "1", "--dir", str(tmp_path / "o")], http, docker, said)
+
+    assert code == 0
+    assert docker.runs[0].command == "export KRATER_SWEEP_INDEX=1 lr=0.01; python train.py"
+    assert said[0] == "Running job 1 of the sweep's 2 (lr=0.01); --index picks another."
+
+
+def test_run_explains_a_failure_it_knows(http, fake, tmp_path) -> None:
+    docker = Docker(outcome=main.local.Outcome(code=127))
+    said: list[str] = []
+    code = _run_local(["--image", "x", "--command", "trian.py", "--dir", str(tmp_path)], http, docker, said)
+    assert code == 127
+    assert said[-2:] == [
+        "Failed: exit code 127.",
+        "A command wasn't found in the image (exit 127): check the command, and that the image has it installed.",
+    ]
+
+
+def test_run_says_a_smoke_test_passed(http, fake, tmp_path) -> None:
+    docker = Docker(outcome=main.local.Outcome(code=0, smoke_passed=True))
+    said: list[str] = []
+    code = _run_local(["--image", "x", "--command", "go", "--smoke", "--dir", str(tmp_path)], http, docker, said)
+    assert code == 0 and docker.runs[0].smoke_minutes == 5
+    assert said[-1] == "Smoke test passed: the command ran 5 minutes without failing."
+
+
+def test_run_without_docker_says_how_to_get_it(http, fake) -> None:
+    said: list[str] = []
+    code = _run_local(["--image", "x", "--command", "go"], http, Docker(), said, which=lambda name: None)
+    assert code == 1 and said[-1].startswith("No docker command found. Install Docker Desktop")
+
+
+def test_run_needs_an_input_folder_for_project_inputs(http, fake) -> None:
+    said: list[str] = []
+    code = _run_local(["--image", "x", "--command", "go", "--input", "data/"], http, Docker(), said)
+    assert code == 2 and "--input-dir FOLDER" in said[-1]
+
+
+def test_run_passes_the_project_secrets_set_in_this_shell_by_name(http, fake, tmp_path, monkeypatch) -> None:
+    _login(http, [])
+    fake.secrets = {"HF_TOKEN": "x", "WANDB_KEY": "y"}
+    monkeypatch.setenv("HF_TOKEN", "hf_local")
+    monkeypatch.delenv("WANDB_KEY", raising=False)
+    docker = Docker()
+    said: list[str] = []
+
+    _run_local([PROJECT, "--image", "x", "--command", "go", "--dir", str(tmp_path)], http, docker, said)
+
+    assert docker.runs[0].env_names == ["HF_TOKEN"]
+    assert "Not set in this shell, so the job won't have them (Krater can't send their values here): WANDB_KEY." in said
+    args = docker.runs[0].docker_args("c")
+    assert "hf_local" not in " ".join(args) and args[args.index("HF_TOKEN") - 1] == "-e"
+
+
+def test_run_refuses_a_box(http, fake) -> None:
+    said: list[str] = []
+    assert _run_local(["--image", "x", "--box"], http, Docker(), said) == 2
+    assert said == [
+        "A box is an SSH machine with no command to run. To try its image here: docker run -it --rm --entrypoint sh x"
+    ]
+
+
+def test_the_docker_command_matches_a_krater_machine(tmp_path) -> None:
+    spec = main.local.LocalRun(
+        image="ghcr.io/me/train:v3",
+        command="python train.py",
+        name="train",
+        folder=str(tmp_path),
+        input_dir=str(tmp_path / "data"),
+        smoke_minutes=5,
+        gpu=True,
+    )
+
+    args = spec.docker_args("krater-local-train-abc")
+
+    assert args[:9] == [
+        "docker",
+        "run",
+        "--rm",
+        "--name",
+        "krater-local-train-abc",
+        "--platform",
+        "linux/amd64",
+        "--entrypoint",
+        "sh",
+    ]
+    assert args[-3:] == ["ghcr.io/me/train:v3", "-c", "python train.py"]
+    pairs = [args[i + 1] for i, a in enumerate(args) if a == "-e"]
+    assert {"KRATER_RESUMED=0", "KRATER_SMOKE=1", "KRATER_LOCAL=1", "KRATER_OUTPUT_DIR=/krater/outputs"} <= set(pairs)
+    mounts = [args[i + 1] for i, a in enumerate(args) if a == "-v"]
+    assert mounts[-1] == f"{tmp_path / 'data'}:/krater/inputs:ro"
+    assert args[args.index("--gpus") + 1] == "all"
+
+
+class FakeProcess:
+    def __init__(self, code: int, *, interrupt: bool = False) -> None:
+        self.code, self.interrupt, self.waits = code, interrupt, 0
+
+    def wait(self):
+        self.waits += 1
+        if self.interrupt and self.waits == 1:
+            raise KeyboardInterrupt
+        return self.code
+
+
+class FiringTimer:
+    """A timer that fires as soon as it's started: the smoke test's minutes are up at once."""
+
+    def __init__(self, seconds, fn) -> None:
+        self.seconds, self.fn, self.daemon = seconds, fn, False
+
+    def start(self) -> None:
+        self.fn()
+
+    def cancel(self) -> None:
+        pass
+
+
+def test_execute_stops_a_smoke_test_with_docker_stop_and_calls_it_passed(tmp_path) -> None:
+    calls: list[list[str]] = []
+    spec = main.local.LocalRun(image="x", command="go", name="t", folder=str(tmp_path), smoke_minutes=2)
+
+    outcome = main.local.execute(
+        spec,
+        popen=lambda args: FakeProcess(143),
+        call=lambda args: calls.append(list(args)) or 0,
+        timer=FiringTimer,
+    )
+
+    assert outcome.smoke_passed and outcome.code == 0
+    assert calls[0][:4] == ["docker", "stop", "-t", "30"] and calls[0][4].startswith("krater-local-t-")
+    assert (tmp_path / "outputs").is_dir() and (tmp_path / "checkpoints").is_dir()
+
+
+def test_execute_reports_the_commands_own_exit_and_stops_on_ctrl_c(tmp_path) -> None:
+    spec = main.local.LocalRun(image="x", command="go", name="t", folder=str(tmp_path))
+    assert main.local.execute(spec, popen=lambda args: FakeProcess(3), call=lambda args: 0).code == 3
+
+    calls: list = []
+    outcome = main.local.execute(
+        spec, popen=lambda args: FakeProcess(143, interrupt=True), call=lambda args: calls.append(args) or 0
+    )
+    assert outcome.interrupted and outcome.code == 130 and calls[0][1] == "stop"

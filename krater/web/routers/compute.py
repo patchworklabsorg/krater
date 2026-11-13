@@ -41,6 +41,7 @@ from krater.services import (
     people,
     price_history,
     project_secrets,
+    smoke,
     ssh_keys,
     teams,
 )
@@ -255,6 +256,7 @@ def _form_page(
             "errors": errors or {},
             "posted": posted or {},
             "default_image": compute_jobs.DEFAULT_IMAGE,
+            "smoke_minutes": smoke.DEFAULT_SMOKE_MINUTES,
             # Compute is held until Weave clears every team member (`krater.services.clearance`); the page says who
             # first, and the submit checks Weave fresh. `None`: Weave couldn't say right now.
             **_verification(db_session, weave_client, project),
@@ -318,6 +320,8 @@ def _posted_from(job: ComputeJob) -> dict:
         "max_runtime_minutes": str(job.max_runtime_minutes),
         "inputs": "\n".join(job.input_names or []),
     }
+    if job.smoke_minutes:
+        posted["smoke"] = "on"
     if job.interruptible:
         posted["interruptible"] = "on"
     if job.is_limit_order:
@@ -371,6 +375,7 @@ async def submit_job(
             data_in_gb=_int(data_in, "data_in_gb", "data into the machine") if data_in else None,
             data_out_gb=_int(data_out, "data_out_gb", "data out of the machine") if data_out else None,
             inputs=tuple(compute_inputs.check_names(inputs)),
+            smoke_minutes=smoke.DEFAULT_SMOKE_MINUTES if posted.get("smoke") == "on" else None,
         )
         store = get_compute_store() if spec.inputs else None
         if posted.get("action") == "estimate":

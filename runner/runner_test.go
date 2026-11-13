@@ -49,6 +49,8 @@ type fakeKrater struct {
 	// The job asked for project inputs; inputsGone: Krater refuses the list, as when they were deleted.
 	inputs     bool
 	inputsGone bool
+	// A smoke test of this many seconds (0: an ordinary job).
+	smokeSeconds int
 	// Storage answers 503 to GETs of this key, as when it's briefly unreachable.
 	unreadable string
 
@@ -60,6 +62,8 @@ type fakeKrater struct {
 	multipart  map[string]map[int][]byte
 	heartbeats []map[string]any
 	exitCodes  []int
+	// Whether each exit report said the smoke test's timer stopped the command.
+	smokeStops []bool
 	starts     int
 }
 
@@ -111,7 +115,7 @@ func (f *fakeKrater) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		f.writeJSON(w, map[string]any{"job_id": "j1", "attempt": 1, "resumed": f.resumed, "command": f.command,
 			"kind": kind, "ssh_keys": f.sshKeys, "heartbeat_seconds": 1, "checkpoint_sync_seconds": 3600,
-			"secrets": f.secrets, "inputs": f.inputs})
+			"secrets": f.secrets, "inputs": f.inputs, "smoke_seconds": f.smokeSeconds})
 	case path == "/runner/v1/heartbeat":
 		f.heartbeats = append(f.heartbeats, body)
 		n := len(f.heartbeats)
@@ -133,6 +137,7 @@ func (f *fakeKrater) handle(w http.ResponseWriter, r *http.Request) {
 		f.writeJSON(w, map[string]any{"ok": true})
 	case path == "/runner/v1/exit":
 		f.exitCodes = append(f.exitCodes, int(body["exit_code"].(float64)))
+		f.smokeStops = append(f.smokeStops, body["smoke_stopped"] == true)
 		f.writeJSON(w, map[string]any{"state": "done"})
 	case strings.HasSuffix(path, "/list"):
 		area := strings.Split(path, "/")[4]
@@ -348,6 +353,54 @@ func TestKraterCanStopTheJob(t *testing.T) {
 	}
 	if f.heartbeats[0]["gpu_util"] != 87.0 {
 		t.Errorf("heartbeat: %v", f.heartbeats[0])
+	}
+}
+
+func TestASmokeTestStopsTheCommandWhenItsTimeIsUpAndSaysSo(t *testing.T) {
+	f := newFakeKrater(t)
+	f.smokeSeconds = 1
+	f.command = `test "$KRATER_SMOKE" = 1 || exit 9; echo started > "$KRATER_OUTPUT_DIR/started.txt"; sleep 60`
+	start := time.Now()
+
+	code, err := Run(context.Background(), f.cfg(t), http.DefaultClient, http.DefaultClient, noGPU)
+
+	if err != nil || code != 128+15 {
+		t.Fatalf("Run = %d, %v; want SIGTERM's 143", code, err)
+	}
+	if time.Since(start) > 20*time.Second {
+		t.Errorf("the smoke test took %s to stop", time.Since(start))
+	}
+	if fmt.Sprint(f.exitCodes, f.smokeStops) != "[143] [true]" {
+		t.Errorf("exit reports %v, smoke stopped %v; want one smoke stop", f.exitCodes, f.smokeStops)
+	}
+	if string(f.objects["outputs/started.txt"]) != "started\n" {
+		t.Errorf("the outputs weren't saved after the stop: %v", keys(f.objects))
+	}
+}
+
+func TestASmokeTestThatFailsSoonerReportsItsOwnExit(t *testing.T) {
+	f := newFakeKrater(t)
+	f.smokeSeconds = 30
+	f.command = "exit 4"
+
+	code, err := Run(context.Background(), f.cfg(t), http.DefaultClient, http.DefaultClient, noGPU)
+
+	if err != nil || code != 4 {
+		t.Fatalf("Run = %d, %v; want 4", code, err)
+	}
+	if fmt.Sprint(f.exitCodes, f.smokeStops) != "[4] [false]" {
+		t.Errorf("exit reports %v, smoke stopped %v; want the command's own 4", f.exitCodes, f.smokeStops)
+	}
+}
+
+func TestAnOrdinaryJobHasNoSmokeVariable(t *testing.T) {
+	f := newFakeKrater(t)
+	f.command = `test -z "$KRATER_SMOKE"`
+
+	code, err := Run(context.Background(), f.cfg(t), http.DefaultClient, http.DefaultClient, noGPU)
+
+	if err != nil || code != 0 {
+		t.Fatalf("Run = %d, %v; want 0: KRATER_SMOKE was set", code, err)
 	}
 }
 

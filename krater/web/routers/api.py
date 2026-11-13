@@ -166,6 +166,7 @@ def _job_json(job: ComputeJob, *, detail: bool = False, session: Session | None 
         "interruptible": job.interruptible,
         "spend_cents": job.spend_cents,
         "exit_code": job.exit_code,
+        "smoke_minutes": job.smoke_minutes,
         "queued_at": _iso(job.queued_at),
         "started_at": _iso(job.started_at),
         "ended_at": _iso(job.ended_at),
@@ -229,6 +230,8 @@ def submit_body(job: ComputeJob) -> dict[str, Any]:
         "data_out_gb": job.data_out_gb,
         "inputs": list(job.input_names or []),
     }
+    if job.smoke_minutes:
+        body["smoke_minutes"] = job.smoke_minutes
     if job.is_limit_order:
         body["limit_usd_per_hour"] = _rate(job.target_microusd)
     else:
@@ -289,6 +292,7 @@ def _spec(body: dict) -> JobSpec:
         data_in_gb=_int(body, "data_in_gb", None),
         data_out_gb=_int(body, "data_out_gb", None),
         inputs=tuple(compute_inputs.check_names(inputs)),
+        smoke_minutes=_int(body, "smoke_minutes", None),
     )
 
 

@@ -32,6 +32,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -291,6 +292,9 @@ func Run(ctx context.Context, cfg Config, apiHTTP, storageHTTP *http.Client, gpu
 		"KRATER_OUTPUT_DIR="+cfg.OutputDir,
 		"KRATER_INPUT_DIR="+cfg.InputDir,
 	)
+	if info.SmokeSeconds > 0 {
+		cmd.Env = append(cmd.Env, "KRATER_SMOKE=1")
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		_ = api.Exit(ctx, 127)
@@ -299,8 +303,13 @@ func Run(ctx context.Context, cfg Config, apiHTTP, storageHTTP *http.Client, gpu
 
 	done := make(chan struct{})
 	var stopOnce sync.Once
+	// Set when the smoke test's timer was what stopped the command: its exit code is then the stop's, not a failure.
+	var smokeStopped atomic.Bool
 	stop := func(why string) {
 		stopOnce.Do(func() {
+			if why == smokeStopWhy {
+				smokeStopped.Store(true)
+			}
 			logf("%s", why)
 			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
 			go func() {
@@ -320,6 +329,18 @@ func Run(ctx context.Context, cfg Config, apiHTTP, storageHTTP *http.Client, gpu
 		case <-time.After(45 * time.Second):
 		}
 	})
+	if info.SmokeSeconds > 0 {
+		// A smoke test: the command's first minutes on the real machine are the test. The timer starts with the
+		// command, after the pull and the restores, so they don't eat into it.
+		logf("smoke test: the command is stopped after %d seconds if it hasn't ended by then", info.SmokeSeconds)
+		go func() {
+			select {
+			case <-done:
+			case <-time.After(time.Duration(info.SmokeSeconds) * time.Second):
+				stop(smokeStopWhy)
+			}
+		}()
+	}
 	loops, cancelLoops := context.WithCancel(ctx)
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -348,7 +369,11 @@ func Run(ctx context.Context, cfg Config, apiHTTP, storageHTTP *http.Client, gpu
 		logf("the command stopped (code %d) because this machine is stopping itself", code)
 		return code, nil
 	}
-	logf("the command exited with code %d", code)
+	if smokeStopped.Load() {
+		logf("smoke test passed: the command ran its time without failing (it stopped with code %d)", code)
+	} else {
+		logf("the command exited with code %d", code)
+	}
 
 	// A transient storage error here would lose the job's outputs while it shows as succeeded, so retry for a while.
 	// Past the window the machine still reports the exit (it mustn't bill forever), but says loudly what is missing;
@@ -378,11 +403,18 @@ func Run(ctx context.Context, cfg Config, apiHTTP, storageHTTP *http.Client, gpu
 			logf("final upload of the output log failed: %v", err)
 		}
 	}
-	if err := retry(ctx, 10*time.Minute, func() error { return api.Exit(ctx, code) }); err != nil {
+	report := func() error { return api.Exit(ctx, code) }
+	if smokeStopped.Load() {
+		report = func() error { return api.ExitSmokeStopped(ctx, code) }
+	}
+	if err := retry(ctx, 10*time.Minute, report); err != nil {
 		return code, fmt.Errorf("could not report the exit code: %w", err)
 	}
 	return code, nil
 }
+
+// smokeStopWhy is the runner's log line when a smoke test's timer stops the command (and how `stop` knows it was).
+const smokeStopWhy = "smoke test: the command ran its time without failing; stopping it"
 
 // finalPushWindow bounds the retries of the final upload after the command exits.
 var finalPushWindow = 5 * time.Minute

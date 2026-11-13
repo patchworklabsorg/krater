@@ -35,6 +35,7 @@
       {% endif %}
     </dd>
     {% if job.command %}<dt>Command</dt><dd><code>{{ job.command }}</code></dd>{% endif %}
+    {% if job.smoke_minutes %}<dt>Smoke test</dt><dd>the command is stopped after {{ job.smoke_minutes }} minutes of running, with <code>KRATER_SMOKE=1</code> set; it passes if it hasn't failed by then. Run it again without the smoke test for the full run.</dd>{% endif %}
     {% if job.input_names %}<dt>Inputs</dt><dd>{% for name in job.input_names %}<code>{{ name }}</code>{% if not loop.last %}, {% endif %}{% endfor %} ({{ job.inputs_bytes | filesize }}), in <code>$KRATER_INPUT_DIR</code></dd>{% endif %}
     <dt>GPU</dt>
     <dd>
