@@ -111,7 +111,7 @@ def test_an_estimate_starts_a_live_price_check_the_cli_can_poll(
     assert live["poll"] == f"/projects/{project.id}/jobs/quotes/{live['key']}"
     polled = client.get(f"/api/v1{live['poll']}", headers=_as(MEMBER_SUB))
     assert polled.status_code == 200 and polled.json()["status"] == "checking"
-    assert client.get(f"/api/v1{live['poll']}", headers=_as(OTHER_MEMBER_SUB)).status_code == 404
+    assert client.get(f"/api/v1{live['poll']}", headers=_as(OTHER_MEMBER_SUB)).status_code == 403
     assert client.get(f"/api/v1/projects/{project.id}/jobs/quotes/nope", headers=_as(MEMBER_SUB)).status_code == 404
 
 

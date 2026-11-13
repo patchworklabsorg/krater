@@ -85,7 +85,8 @@ def test_an_interruptible_check_sorts_by_the_bid(db_session: Session, monkeypatc
     row = _checked(db_session, fake, _shape(db_session, interruptible=True))
 
     margin = compute_settings.global_policy(db_session).bid_margin_percent
-    assert row.cheapest_microusd < 200_000 * (100 + margin) // 100 + 1_000
+    # 4003: $0.20 plus the margin plus 32 GB of disk; by `dph_total` the one row would be 4001, at $0.30 plus.
+    assert row.cheapest_microusd == 200_000 * (100 + margin) // 100 + 4_384
     shown = live_prices.view(row)
     assert "cheapest interruptible offer" in shown["text"]
 
