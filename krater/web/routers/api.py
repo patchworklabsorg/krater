@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 from krater.config import get_settings
 from krater.db import get_session
 from krater.models import ComputeEscalation, ComputeEvent, ComputeJob, ComputeJobKind, ComputeOutbid, Project, User
+from krater.registry import Registry, get_registry
 from krater.services import (
     compute_files,
     compute_inputs,
@@ -386,6 +387,7 @@ async def submit(
     actor: Me,
     db_session: Db,
     weave_client: Annotated[WeaveClient, Depends(get_weave_client)],
+    registry: Annotated[Registry, Depends(get_registry)],
 ):
     project = _project(db_session, actor, project_id)
     body = await _body(request)
@@ -403,6 +405,7 @@ async def submit(
             weave_client=weave_client,
             confirm_transfer_cost=body.get("confirm_transfer_cost") is True,
             store=get_compute_store() if spec.inputs else None,
+            registry=registry,
         )
     except ConfirmationRequired as exc:
         db_session.rollback()
@@ -425,7 +428,13 @@ async def submit(
 
 
 @router.post("/projects/{project_id}/jobs/estimate")
-async def estimate(project_id: uuid.UUID, request: Request, actor: Me, db_session: Db):
+async def estimate(
+    project_id: uuid.UUID,
+    request: Request,
+    actor: Me,
+    db_session: Db,
+    registry: Annotated[Registry, Depends(get_registry)],
+):
     """What a job with this body may cost, and what its shape costs now. Queues nothing."""
     project = _project(db_session, actor, project_id)
     if not _is_team(actor, project):
@@ -435,7 +444,7 @@ async def estimate(project_id: uuid.UUID, request: Request, actor: Me, db_sessio
         return _error(400, "Send a JSON object.")
     try:
         spec = _spec(body)
-        compute_jobs.validate_spec(spec, cap_cents=hourly_cap_cents(project, get_settings()))
+        compute_jobs.validate_spec(spec, cap_cents=hourly_cap_cents(project, get_settings()), registry=registry)
         inputs_bytes = compute_jobs.inputs_size(get_compute_store() if spec.inputs else None, project, spec)
     except ValidationFailed as exc:
         return _error(422, "Check the job's fields.", fields=exc.errors)

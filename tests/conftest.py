@@ -29,6 +29,7 @@ from sqlalchemy.orm import Session  # noqa: E402
 from alembic import command  # noqa: E402
 from krater.db import get_engine, get_session  # noqa: E402
 from krater.models import User  # noqa: E402
+from krater.registry import FakeRegistry, get_registry  # noqa: E402
 from krater.weave import StubWeaveClient, get_weave_client  # noqa: E402
 from krater.web.app import create_app  # noqa: E402
 
@@ -99,6 +100,9 @@ def client(db_session: Session, weave_stub: StubWeaveClient) -> Generator[TestCl
     app = create_app()
     app.dependency_overrides[get_session] = lambda: db_session
     app.dependency_overrides[get_weave_client] = lambda: weave_stub
+    # No test reaches a real registry. This one knows no image, so a submit goes ahead as when a registry can't say;
+    # a test that cares sets its own (`app.dependency_overrides[get_registry]`).
+    app.dependency_overrides[get_registry] = FakeRegistry
 
     with TestClient(app) as test_client:
         yield test_client

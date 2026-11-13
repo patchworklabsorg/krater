@@ -32,6 +32,7 @@ from krater.models import (
     Project,
 )
 from krater.models.compute_job import FINISHED_JOB_STATES
+from krater.registry import ImageUnavailable, Registry, RegistryError, parse_reference
 from krater.services import budget, clearance, compute_halt, compute_inputs, compute_settings, funding_holds, teams
 from krater.services.actor import Actor
 from krater.services.errors import ConfirmationRequired, InvalidState, NotAllowed, ValidationFailed
@@ -63,6 +64,73 @@ LIMITED_STATES = (
     ComputeInstanceState.PAUSED,
 )
 _IMAGE_RE = re.compile(r"^[a-z0-9][a-z0-9._\-/:@]*$")
+#: What the job form starts with: public, with a shell and Python, and PyTorch with CUDA for a GPU. A box that needs
+#: none of that can use `ubuntu:24.04`, a much smaller pull.
+DEFAULT_IMAGE = "pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime"
+_EXAMPLE_IMAGES = f"such as {DEFAULT_IMAGE} or ubuntu:24.04"
+#: A web address someone pasted for an image: Docker Hub's and GitHub's pages, or any URL.
+_LINK_RE = re.compile(r"^(?:[a-z]+://|(?:www\.)?(?:hub\.docker\.com|github\.com)/)", re.IGNORECASE)
+
+
+def _image_from_link(link: str) -> str | None:
+    """The image a Docker Hub or GitHub package page is about, if `link` is one, else None."""
+    path = re.sub(r"^[a-z]+://", "", link.strip(), flags=re.IGNORECASE).split("?")[0].split("#")[0].strip("/")
+    host, _, path = path.partition("/")
+    parts = [part for part in path.split("/") if part]
+    host = host.lower().removeprefix("www.")
+    if host == "hub.docker.com":
+        if len(parts) >= 2 and parts[0] == "_":  # an official image: hub.docker.com/_/ubuntu
+            return parts[1].lower()
+        if len(parts) >= 3 and parts[0] == "r":  # hub.docker.com/r/pytorch/pytorch
+            return f"{parts[1]}/{parts[2]}".lower()
+        if len(parts) >= 4 and parts[0] == "layers":  # a tag's page: hub.docker.com/layers/<owner>/<name>/<tag>/...
+            name = parts[2] if parts[1] == "library" else f"{parts[1]}/{parts[2]}"
+            return f"{name}:{parts[3]}".lower()
+    if host == "github.com" and len(parts) >= 5 and parts[2:4] == ["pkgs", "container"]:
+        return f"ghcr.io/{parts[0]}/{parts[4]}".lower()  # github.com/<owner>/<repo>/pkgs/container/<name>
+    return None
+
+
+def image_error(image: str) -> str | None:
+    """What's wrong with `image` as written (a link, a pasted `docker pull`, not a name Docker reads), or None."""
+    if _LINK_RE.match(image):
+        named = _image_from_link(image)
+        if named:
+            return f"Enter the image's name, not a web address: for that page, {named}, with a tag if you need one."
+        return f"Enter the image's name, not a web address, {_EXAMPLE_IMAGES}."
+    pull = re.match(r"^docker\s+pull\s+(\S+)$", image.strip(), re.IGNORECASE)
+    if pull:
+        return f"Enter only the image's name: {pull.group(1)}."
+    if not _IMAGE_RE.match(image) or len(image) > 500:
+        return f"Enter a container image's name, {_EXAMPLE_IMAGES}. Image names are lowercase."
+    try:
+        parse_reference(image)
+    except RegistryError:
+        return f"{image} isn't an image name Docker can read. Enter one {_EXAMPLE_IMAGES}."
+    return None
+
+
+def check_image(registry: Registry | None, image: str) -> None:
+    """Raise `ValidationFailed` when `image`'s registry says no one can pull it without signing in (it doesn't exist,
+    the tag is wrong, or it's private): a machine would be rented only to be refused the same. In production
+    (2026-11-12) a box named the guide's example image with a full stop after it. When the registry can't be asked
+    (down, rate-limiting, a host Krater won't reach) the job goes ahead: the scheduler still fails it as soon as a
+    machine's pull is refused (`krater.compute.scheduler.pull_refused`)."""
+    if registry is None:
+        return
+    try:
+        registry.resolve_digest(image)
+    except ImageUnavailable as exc:
+        raise ValidationFailed(
+            {
+                "image": f"{image} can't be pulled: {exc} Check its name and tag, and that it's public: machines "
+                "pull it without signing in."
+            }
+        ) from None
+    except RegistryError:
+        return
+
+
 #: The most data a job may say it moves each way, in GB (100 TB).
 MAX_DATA_GB = 100_000
 
@@ -166,17 +234,19 @@ def _can_launch_for(actor: Actor, project: Project) -> bool:
     return teams.on_team(project, actor.user.id)
 
 
-def validate_spec(spec: JobSpec, *, cap_cents: int) -> None:
-    """Raise `ValidationFailed` for what `submit_job` would refuse in `spec` itself (for estimating before queueing)."""
+def validate_spec(spec: JobSpec, *, cap_cents: int, registry: Registry | None = None) -> None:
+    """Raise `ValidationFailed` for what `submit_job` would refuse in `spec` itself (for estimating before queueing),
+    and, given a `registry`, for an image it refuses (`check_image`)."""
     _validate(spec, cap_microusd=cap_cents * MICROUSD_PER_CENT)
+    check_image(registry, spec.image)
 
 
 def _validate(spec: JobSpec, *, cap_microusd: int) -> None:
     errors: dict[str, str] = {}
     if not spec.name.strip() or len(spec.name) > 200:
         errors["name"] = "Give the job a name of up to 200 characters."
-    if not _IMAGE_RE.match(spec.image) or len(spec.image) > 500:
-        errors["image"] = "Enter a container image, such as ghcr.io/you/train:v1."
+    if (image_problem := image_error(spec.image)) is not None:
+        errors["image"] = image_problem
     if spec.kind is ComputeJobKind.JOB and not (spec.command and spec.command.strip()):
         errors["command"] = "Enter the command to run."
     if spec.command is not None and len(spec.command) > 2000:
@@ -240,17 +310,20 @@ def submit_job(
     weave_client: WeaveClient,
     confirm_transfer_cost: bool = False,
     store: ObjectStore | None = None,
+    registry: Registry | None = None,
 ) -> ComputeJob:
     """Queue `spec` for `project`. Only the project's team (lead and accepted members) may, only while the project
     can launch, not while it has a funding hold (`funding_holds.require_not_held`), and only once Weave has cleared
     every team member (`clearance.require_team_cleared`, asking `weave_client` fresh). `cap_cents` is the project's
     hourly cap (`launch_rules.hourly_cap_cents`). Raises `ConfirmationRequired` when the job's estimated data
-    transfer could cost a large share of the budget, unless `confirm_transfer_cost`."""
+    transfer could cost a large share of the budget, unless `confirm_transfer_cost`. Given a `registry`, an image it
+    refuses is a `ValidationFailed` (`check_image`); the shell submitter (`krater.compute.submit`) passes none."""
     if not _can_launch_for(actor, project):
         raise NotAllowed("Only the project's team can run jobs on its budget.")
     if project.status not in LAUNCHABLE_STATUSES:
         raise InvalidState(f"A {project.status.value} project can't run jobs.")
     _validate(spec, cap_microusd=cap_cents * MICROUSD_PER_CENT)
+    check_image(registry, spec.image)
     funding_holds.require_not_held(project)
     clearance.require_team_cleared(session, weave_client, project)
     inputs_bytes = inputs_size(store, project, spec)

@@ -28,7 +28,7 @@ from krater.models import (
     Project,
 )
 from krater.models.compute_job import ACTIVE_JOB_STATES
-from krater.registry import RegistryError, parse_reference
+from krater.registry import Registry, RegistryError, get_registry, parse_reference
 from krater.services import (
     box_access,
     clearance,
@@ -242,6 +242,7 @@ def _form_page(
             "escalations": ESCALATION_LABELS,
             "errors": errors or {},
             "posted": posted or {},
+            "default_image": compute_jobs.DEFAULT_IMAGE,
             # Compute is held until Weave clears every team member (`krater.services.clearance`); the page says who
             # first, and the submit checks Weave fresh. `None`: Weave couldn't say right now.
             **_verification(db_session, weave_client, project),
@@ -317,6 +318,7 @@ async def submit_job(
     db_session: Annotated[Session, Depends(get_session)],
     actor: Annotated[Actor, Depends(fresh_actor)],
     weave_client: Annotated[WeaveClient, Depends(get_weave_client)],
+    registry: Annotated[Registry, Depends(get_registry)],
 ):
     _require_compute()
     project = _project(db_session, actor, project_id)
@@ -357,7 +359,7 @@ async def submit_job(
         store = get_compute_store() if spec.inputs else None
         if posted.get("action") == "estimate":
             # Only the price: nothing is queued, and the form comes back as it was.
-            compute_jobs.validate_spec(spec, cap_cents=hourly_cap_cents(project, get_settings()))
+            compute_jobs.validate_spec(spec, cap_cents=hourly_cap_cents(project, get_settings()), registry=registry)
             policy = compute_settings.effective_policy(db_session, project)
             estimate = job_costs.estimate(
                 db_session,
@@ -377,6 +379,7 @@ async def submit_job(
             weave_client=weave_client,
             confirm_transfer_cost=posted.get("confirm_transfer_cost") == "on",
             store=store,
+            registry=registry,
         )
     except ConfirmationRequired as exc:
         db_session.rollback()

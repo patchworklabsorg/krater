@@ -18,6 +18,7 @@ from krater.models import (
     ComputeOutbid,
     GpuPriceSample,
 )
+from krater.registry import FakeRegistry, get_registry
 from krater.services import compute_jobs
 from krater.services.compute_jobs import JobSpec
 from krater.weave import StubWeaveClient
@@ -156,6 +157,48 @@ def test_a_bad_form_is_shown_again_with_the_errors(client: TestClient, login_as,
     assert response.status_code == 422
     assert "The target can&#39;t be above the max price." in response.text
     assert 'value="ghcr.io/alice/train:v3"' in response.text
+    assert db_session.scalars(sa.select(ComputeJob)).all() == []
+
+
+def test_the_form_starts_with_a_public_image(client: TestClient, login_as, project) -> None:
+    login_as(MEMBER_SUB)
+
+    page = client.get(f"/projects/{project.id}/compute/new").text
+
+    assert f'name="image" placeholder="{compute_jobs.DEFAULT_IMAGE}" value="{compute_jobs.DEFAULT_IMAGE}"' in page
+
+
+def test_an_image_its_registry_refuses_isnt_queued(client: TestClient, login_as, project, db_session) -> None:
+    """Production, 2026-11-12: a box named the guide's example image with a full stop after it, and machines were
+    rented for it one after another. The registry is asked first now."""
+    registry = FakeRegistry()
+    registry.missing.add("ghcr.io/you/train:v1.")
+    client.app.dependency_overrides[get_registry] = lambda: registry
+    login_as(MEMBER_SUB)
+    page = client.get(f"/projects/{project.id}/compute/new")
+
+    response = client.post(
+        f"/projects/{project.id}/compute",
+        data={**FORM, "image": "ghcr.io/you/train:v1.", "csrf_token": get_csrf_token(page.text)},
+    )
+
+    assert response.status_code == 422
+    assert "ghcr.io/you/train:v1. can&#39;t be pulled: ghcr.io has no you/train:v1.." in response.text
+    assert db_session.scalars(sa.select(ComputeJob)).all() == []
+    assert ("resolve", "ghcr.io/you/train:v1.") in registry.calls
+
+
+def test_a_web_address_for_an_image_is_refused_with_its_name(client: TestClient, login_as, project, db_session) -> None:
+    login_as(MEMBER_SUB)
+    page = client.get(f"/projects/{project.id}/compute/new")
+
+    response = client.post(
+        f"/projects/{project.id}/compute",
+        data={**FORM, "image": "https://hub.docker.com/r/pytorch/pytorch", "csrf_token": get_csrf_token(page.text)},
+    )
+
+    assert response.status_code == 422
+    assert "not a web address: for that page, pytorch/pytorch," in response.text
     assert db_session.scalars(sa.select(ComputeJob)).all() == []
 
 

@@ -9,7 +9,7 @@ import json
 import httpx
 import pytest
 
-from krater.registry import LiveRegistry, RegistryError, UnsafeHostError, parse_reference
+from krater.registry import ImageUnavailable, LiveRegistry, RegistryError, UnsafeHostError, parse_reference
 
 PUBLIC = "151.101.1.1"
 
@@ -177,8 +177,48 @@ def test_details_round_trip_through_json() -> None:
 
 
 def test_an_unknown_image_says_so() -> None:
-    with pytest.raises(RegistryError, match="has no library/ubuntu:nope"):
+    with pytest.raises(ImageUnavailable, match="has no library/ubuntu:nope"):
         _registry(Hub()).resolve_digest("ubuntu:nope")
+
+
+def _ghcr(manifest_status: int, *, token_status: int = 200) -> LiveRegistry:
+    """ghcr.io: a Bearer challenge, an anonymous token, then `manifest_status` for every manifest."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/token":
+            return httpx.Response(token_status, json={"token": "anon"} if token_status == 200 else {})
+        if request.headers.get("authorization") != "Bearer anon":
+            challenge = 'Bearer realm="https://ghcr.io/token",service="ghcr.io",scope="repository:you/train:pull"'
+            return httpx.Response(401, headers={"www-authenticate": challenge})
+        return httpx.Response(manifest_status, json={"errors": [{"code": "DENIED"}]})
+
+    return LiveRegistry(transport=httpx.MockTransport(handler), resolve=_public)
+
+
+@pytest.mark.parametrize(
+    ("manifest_status", "token_status"),
+    [(403, 200), (401, 200), (404, 200), (200, 403), (200, 401)],
+)
+def test_an_image_no_one_can_pull_anonymously_is_unavailable(manifest_status, token_status) -> None:
+    """Production, 2026-11-12: `ghcr.io/you/train:v1.`, the guide's example with a full stop after it."""
+    with pytest.raises(ImageUnavailable):
+        _ghcr(manifest_status, token_status=token_status).resolve_digest("ghcr.io/you/train:v1.")
+
+
+@pytest.mark.parametrize(("manifest_status", "token_status"), [(429, 200), (500, 200), (503, 200), (200, 500)])
+def test_a_registry_that_cant_say_isnt_a_missing_image(manifest_status, token_status) -> None:
+    with pytest.raises(RegistryError) as caught:
+        _ghcr(manifest_status, token_status=token_status).resolve_digest("ghcr.io/you/train:v1")
+    assert not isinstance(caught.value, ImageUnavailable)
+
+
+def test_an_expired_token_is_replaced_rather_than_taken_for_a_refusal() -> None:
+    """The app keeps one LiveRegistry, and with it the tokens it got: one expires while the image is still there."""
+    registry = _registry(Hub())
+    registry.resolve_digest("ubuntu:24.04")
+    registry._tokens[("registry-1.docker.io", "library/ubuntu")] = "expired"
+
+    assert registry.resolve_digest("ubuntu:24.04") == INDEX_DIGEST
 
 
 # --------------------------------------------------------------------------------------------------

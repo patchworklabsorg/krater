@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from krater.config import get_settings
 from krater.models import ComputeJob, ComputeJobState, ComputeOutbid
+from krater.registry import FakeRegistry, get_registry
 from krater.services import project_secrets
 from krater.weave import StubWeaveClient
 from tests.conftest import ADMIN_SUB, MEMBER_SUB, OTHER_MEMBER_SUB, REVIEWER_SUB
@@ -90,6 +91,20 @@ def test_a_member_sees_their_projects_and_queues_a_job(client: TestClient, proje
     assert listed[0]["target_usd_per_hour"] == "0.0700"
     detail = client.get(f"/api/v1/jobs/{job.id}", headers=_as(MEMBER_SUB)).json()
     assert detail["events"][0]["kind"] == "queued" and detail["machine"] is None
+
+
+def test_an_image_its_registry_refuses_gets_a_field_error(client: TestClient, project, db_session) -> None:
+    registry = FakeRegistry()
+    registry.missing.add("ghcr.io/you/train:v1.")
+    client.app.dependency_overrides[get_registry] = lambda: registry
+    body = {**JOB, "image": "ghcr.io/you/train:v1."}
+
+    response = client.post(f"/api/v1/projects/{project.id}/jobs", json=body, headers=_as(MEMBER_SUB))
+    estimate = client.post(f"/api/v1/projects/{project.id}/jobs/estimate", json=body, headers=_as(MEMBER_SUB))
+
+    assert response.status_code == 422 and estimate.status_code == 422
+    assert "can't be pulled: ghcr.io has no you/train:v1.." in response.json()["fields"]["image"]
+    assert db_session.scalars(sa.select(ComputeJob)).all() == []
 
 
 def test_a_bad_job_gets_field_errors(client: TestClient, project) -> None:
