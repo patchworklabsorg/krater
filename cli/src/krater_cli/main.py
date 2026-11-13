@@ -634,7 +634,7 @@ def _job_body(args: argparse.Namespace, prices: dict) -> dict:
     return body
 
 
-def _secret_names(http: httpx.Client, project: str, say: Callable[[str], None]) -> list[str]:
+def _project_env_names(http: httpx.Client, project: str, say: Callable[[str], None]) -> list[str]:
     """The project's secret names, for `krater run`; empty, with a line saying why, when Krater can't be asked."""
     try:
         krater = Krater(http)
@@ -711,7 +711,7 @@ def _run_here(
                 "all of the project's inputs: an input data/x.csv is read from "
                 f"{os.path.join(args.input_dir, 'data', 'x.csv')}."
             )
-    names = _secret_names(http, args.project, say) if args.project else []
+    names = _project_env_names(http, args.project, say) if args.project else []
     passed = [name for name in names if name in os.environ]
     unset = [name for name in names if name not in os.environ]
     if unset:
