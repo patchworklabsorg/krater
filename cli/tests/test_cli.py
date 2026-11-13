@@ -1605,6 +1605,60 @@ def test_submit_estimate_only_says_the_price_and_queues_nothing(http, fake) -> N
     assert said == ["Up to $4.00 if it runs its full 8 hours."]
 
 
+def test_an_estimate_waits_for_krater_s_live_price(http, fake, monkeypatch) -> None:
+    """Paul, 2026-11-13: the form's prices were an hourly snapshot. Krater's worker now searches Vast for the job's
+    shape when asked for an estimate, and the CLI asks for the answer until it comes."""
+    _login(http, [])
+    original = fake.api
+    poll = f"/projects/{PROJECT}/jobs/quotes/abc"
+    answers = iter(
+        [
+            {"status": "checking", "text": "Checking Vast's prices for this job now…"},
+            {"status": "ready", "text": "Right now on Vast the cheapest costs $0.5511/h."},
+        ]
+    )
+
+    def with_live(request, path):
+        if path == f"/projects/{PROJECT}/jobs/estimate" and request.method == "POST":
+            live = {"status": "checking", "text": "Checking…", "key": "abc", "poll": poll}
+            return httpx.Response(200, json={"summary": "Up to $4.00.", "live": live})
+        if path == poll:
+            return httpx.Response(200, json=next(answers))
+        return original(request, path)
+
+    monkeypatch.setattr(fake, "api", with_live)
+    said: list[str] = []
+    slept: list[float] = []
+
+    assert run([*SUBMIT_4090, "--estimate"], http=http, say=said.append, sleep=slept.append) == 0
+
+    assert said == ["Up to $4.00.", "Right now on Vast the cheapest costs $0.5511/h."]
+    assert slept == [2, 2]
+
+
+def test_an_estimate_stops_waiting_for_the_live_price(http, fake, monkeypatch) -> None:
+    _login(http, [])
+    original = fake.api
+    poll = f"/projects/{PROJECT}/jobs/quotes/abc"
+
+    def never_ready(request, path):
+        if path == f"/projects/{PROJECT}/jobs/estimate" and request.method == "POST":
+            live = {"status": "checking", "text": "Checking…", "key": "abc", "poll": poll}
+            return httpx.Response(200, json={"summary": "Up to $4.00.", "live": live})
+        if path == poll:
+            return httpx.Response(200, json={"status": "checking", "text": "Checking…"})
+        return original(request, path)
+
+    monkeypatch.setattr(fake, "api", never_ready)
+    said: list[str] = []
+    slept: list[float] = []
+
+    run([*SUBMIT_4090, "--estimate"], http=http, say=said.append, sleep=slept.append)
+
+    assert sum(slept) == main.LIVE_PRICE_WAIT_SECONDS
+    assert said[-1].startswith("Krater's live check of Vast's prices didn't answer in time")
+
+
 def test_submit_says_what_the_job_may_cost(http, fake, monkeypatch) -> None:
     _login(http, [])
     said: list[str] = []

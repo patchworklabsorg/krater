@@ -393,6 +393,26 @@ def _explain_prices(krater: Krater, args: argparse.Namespace, say: Callable[[str
     )
 
 
+#: How long `--estimate` waits for Krater's live price check of Vast, and how often it asks.
+LIVE_PRICE_WAIT_SECONDS = 30
+LIVE_PRICE_POLL_SECONDS = 2
+
+
+def _live_price(krater: Krater, live: dict | None, *, sleep: Callable[[float], None]) -> dict | None:
+    """Krater's live price check for the estimated job (an older Krater sends none): asked for while Krater's worker
+    searches Vast, for up to `LIVE_PRICE_WAIT_SECONDS`."""
+    if not live:
+        return None
+    waited = 0
+    while live.get("status") == "checking" and live.get("poll") and waited < LIVE_PRICE_WAIT_SECONDS:
+        sleep(LIVE_PRICE_POLL_SECONDS)
+        waited += LIVE_PRICE_POLL_SECONDS
+        live = {**krater.get(live["poll"]), "poll": live["poll"]}
+    if live.get("status") == "checking":
+        return {**live, "text": "Krater's live check of Vast's prices didn't answer in time; try --estimate again."}
+    return live
+
+
 def _queue(
     krater: Krater,
     path: str,
@@ -402,19 +422,32 @@ def _queue(
     say: Callable[[str], None],
     prompt: Callable[[str], str],
     out: Callable[[object, Callable[[], None]], None],
+    sleep: Callable[[float], None] = time.sleep,
 ) -> int:
     """Queue each job (one, or a sweep's), asking once if Krater says the data transfer could cost a lot. If Krater
     refuses one part-way through a sweep, says which were queued before raising."""
     if args.estimate:
         estimate = krater.post(path + "/estimate", runs[0][0])
+        live = _live_price(krater, estimate.get("live"), sleep=sleep)
+        if live is not None:
+            estimate["live"] = live
+
+        def say_live() -> None:
+            if live is not None:
+                say(live["text"])
+
         if len(runs) == 1:
-            out(estimate, lambda: say(estimate["summary"]))
+            out(estimate, lambda: (say(estimate["summary"]), say_live()))
         else:
             each = estimate.get("total_up_to_cents", estimate.get("up_to_cents", 0))
             out(
                 {**estimate, "jobs": len(runs)},
-                lambda: say(
-                    f"{len(runs)} jobs. Each: {estimate['summary']} All of them: up to ${each * len(runs) / 100:,.2f}."
+                lambda: (
+                    say(
+                        f"{len(runs)} jobs. Each: {estimate['summary']} All of them: up to "
+                        f"${each * len(runs) / 100:,.2f}."
+                    ),
+                    say_live(),
                 ),
             )
         return 0
@@ -620,7 +653,7 @@ def run(
             say(str(exc))
             return 2
         path = f"/projects/{resolve.resolve_project(krater, args.project)}/jobs"
-        return _queue(krater, path, runs, args, say=say, prompt=prompt, out=out)
+        return _queue(krater, path, runs, args, say=say, prompt=prompt, out=out, sleep=sleep)
     elif args.command == "rerun":
         source = krater.get(f"/jobs/{resolve.resolve_job(krater, args.job)}")
         if not source.get("spec"):
@@ -628,7 +661,14 @@ def run(
             return 1
         body = {**source["spec"], **({"name": args.name} if args.name else {})}
         return _queue(
-            krater, f"/projects/{source['project_id']}/jobs", [(body, {})], args, say=say, prompt=prompt, out=out
+            krater,
+            f"/projects/{source['project_id']}/jobs",
+            [(body, {})],
+            args,
+            say=say,
+            prompt=prompt,
+            out=out,
+            sleep=sleep,
         )
     elif args.command == "show":
         job = krater.get(f"/jobs/{resolve.resolve_job(krater, args.job)}")

@@ -200,6 +200,10 @@
         {% elif posted.gpu %}
           <p class="muted">No recent prices for these GPU models: see the <a href="/pricing/history">price history</a>.</p>
         {% endif %}
+        {% if quote %}
+          <p data-role="live-quote" data-status="{{ quote.status }}"
+             data-url="/projects/{{ project.id }}/compute/quotes/{{ quote.key }}"><strong>{{ quote.text }}</strong></p>
+        {% endif %}
       </div>
     {% endif %}
 

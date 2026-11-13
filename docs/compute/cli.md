@@ -80,7 +80,9 @@ you pass `--all`, and `--gpu 4090` narrows it to names containing that.
 
 `krater submit ... --estimate` checks the options like a real submit and prints what the job may cost: its max price
 for its max runtime, plus its data estimate at the transfer price cap, and recent prices for the GPU models named. It
-queues nothing. A queued job prints the same line, and `krater show <job>` splits the spend into GPU, disk and data,
+queues nothing. It then waits up to 30 seconds for Krater's live check of Vast for the job's shape and prints the
+cheapest offer that fits right now (`live` in the API's answer, polled at its `poll` path while `status` is
+`checking`; `krater/services/live_prices.py`). A queued job prints the same line, and `krater show <job>` splits the spend into GPU, disk and data,
 with Vast's figure for each where it has one. `POST /api/v1/projects/{id}/jobs/estimate` takes the same body as a
 submit.
 

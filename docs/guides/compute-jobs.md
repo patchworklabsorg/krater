@@ -252,6 +252,11 @@ nothing queued. It shows:
 - **Data**: your data estimate at the transfer price cap, the most that data can cost.
 - **Recent prices** for the GPUs you named (not for "any GPU with this much memory"): the cheapest and typical full
   hourly price over the last day. If even the cheapest is above your max price, expect the job to wait.
+- **Right now on Vast**: Krater searches Vast for this exact job (its GPUs, count, disk, and interruptible or on
+  demand) and shows the cheapest offer that fits, at what Krater would pay, a few seconds after the page loads. It's
+  still a moment's price: the job rents what's cheapest when it starts. With several GPU models allowed, Krater rents
+  the best performance per dollar, which may cost more than the cheapest. `krater submit ... --estimate` prints the
+  same. If Krater is saving Vast searches for starting jobs, it says so and shows the hourly prices only.
 
 ## Choosing a price
 
@@ -261,7 +266,7 @@ nothing queued. It shows:
   offers (10th to 50th percentile), for interruptible and on-demand machines, as of Krater's last hourly check of
   Vast. It isn't live: prices move between checks, and for a GPU with only a few offers the cheapest can be rented by
   someone else within minutes. When your job starts, Krater searches Vast again and rents the cheapest offer that fits
-  it at that moment.
+  it at that moment. For the price right now, choose **Estimate the cost**.
 - [GPU price history](/pricing/history) shows each GPU's cheapest price and typical range over the last day, week or
   month. Pick a price from it, not from a guess.
 - `krater prices --gpu 4090` shows the same from a terminal, with the time of the check.

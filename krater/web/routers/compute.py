@@ -52,6 +52,7 @@ from krater.storage import StorageError, get_compute_store
 from krater.vast import microusd_to_usd, usd_to_microusd
 from krater.weave import WeaveClient, get_weave_client
 from krater.weave import links as weave_links
+from krater.web import live_quote
 from krater.web.charts import PricePoint, price_chart_svg
 from krater.web.csrf import verify_csrf_token
 from krater.web.deps import fresh_actor, session_actor
@@ -222,6 +223,7 @@ def _form_page(
     transfer_warning: str | None = None,
     estimate=None,
     source: ComputeJob | None = None,
+    quote: dict | None = None,
 ):
     settings = get_settings()
     policy = compute_settings.effective_policy(db_session, project)
@@ -244,6 +246,7 @@ def _form_page(
             ),
             "transfer_warning": transfer_warning,
             "estimate": estimate,
+            "quote": quote,
             "source": source,
             "escalations": ESCALATION_LABELS,
             "errors": errors or {},
@@ -374,7 +377,8 @@ async def submit_job(
                 now=datetime.now(UTC),
                 inputs_bytes=compute_jobs.inputs_size(store, project, spec),
             )
-            return _form_page(request, db_session, project, weave_client, posted=posted, estimate=estimate)
+            quote = live_quote.start(db_session, project, spec)
+            return _form_page(request, db_session, project, weave_client, posted=posted, estimate=estimate, quote=quote)
         job = compute_jobs.submit_job(
             db_session,
             actor,
@@ -412,6 +416,24 @@ async def submit_job(
     db_session.commit()
     flash(request, "Queued. It starts when an offer at or under your price appears.", "success")
     return RedirectResponse(f"/projects/{project.id}/compute/{job.id}", status_code=303)
+
+
+@router.get("/projects/{project_id}/compute/quotes/{key}")
+def quote_status(
+    project_id: uuid.UUID,
+    key: str,
+    db_session: Annotated[Session, Depends(get_session)],
+    actor: Annotated[Actor, Depends(session_actor)],
+):
+    """A live price check's answer, for the form's estimate to poll (static/js/compute-form.js). The team only."""
+    _require_compute()
+    project = _project(db_session, actor, project_id)
+    if not _is_team(actor, project):
+        raise NotAllowed("Only the project's team can run jobs on its budget.")
+    shown = live_quote.poll(db_session, key)
+    if shown is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    return shown
 
 
 @router.get("/projects/{project_id}/compute/{job_id}")

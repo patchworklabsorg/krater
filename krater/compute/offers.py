@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 
-from krater.vast import Offer, RentalType, microusd_to_usd, usd_to_microusd
+from krater.vast import Offer, OfferQuery, RentalType, microusd_to_usd, usd_to_microusd
 
 #: Bids are sent with this many decimal places (Vast takes dollars per hour as a JSON number).
 BID_QUANTUM = Decimal("0.0001")
@@ -98,6 +98,37 @@ def within_transfer_cap(offer: Offer, cap_microusd_per_gb: int | None) -> bool:
     return (
         offer.transfer_in_microusd_per_gb <= cap_microusd_per_gb
         and offer.transfer_out_microusd_per_gb <= cap_microusd_per_gb
+    )
+
+
+def shape_query(
+    *,
+    rental_type: RentalType,
+    gpu_names: tuple[str, ...],
+    min_gpu_ram_gb: float | None,
+    num_gpus: int,
+    disk_gb: int,
+    box: bool,
+    reliability_floor: float,
+    transfer_cap_microusd_per_gb: int | None,
+    limit: int,
+    max_price_microusd: int | None = None,
+    order_by_price: bool = False,
+) -> OfferQuery:
+    """The search for a job's shape: what the scheduler rents from, and what a live price check asks Vast for, so the
+    two can't drift. A box needs a direct port for SSH."""
+    return OfferQuery(
+        rental_type=rental_type,
+        gpu_names=gpu_names,
+        min_gpu_ram_gb=min_gpu_ram_gb,
+        num_gpus=num_gpus,
+        disk_gb=disk_gb,
+        min_reliability=reliability_floor,
+        min_direct_ports=1 if box else 0,
+        limit=limit,
+        max_price_microusd=max_price_microusd,
+        max_transfer_microusd_per_gb=transfer_cap_microusd_per_gb,
+        order_by_price=order_by_price,
     )
 
 

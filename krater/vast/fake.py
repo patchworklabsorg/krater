@@ -332,7 +332,8 @@ class FakeVast:
             if not all(_matches(priced.get(k), v) for k, v in body.items() if k not in _SEARCH_CONTROL_KEYS):
                 continue
             results.append(priced)
-        results.sort(key=lambda o: o["dph_total"])
+        order = (body.get("order") or [["dph_total", "asc"]])[0][0]
+        results.sort(key=lambda o: (o.get(order) is None, o.get(order) or 0))
         limit = min(int(body.get("limit", 64)), SEARCH_RESULT_CAP)
         if self.search_quota is not None:
             quota_limit, left, reset_at = self.search_quota

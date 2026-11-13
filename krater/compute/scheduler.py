@@ -79,7 +79,7 @@ from krater.services import (
 )
 from krater.services.compute_settings import ComputePolicy
 from krater.services.launch_rules import LAUNCHABLE_STATUSES, hourly_cap_cents
-from krater.vast import Instance, Offer, OfferQuery, RentalType, microusd_to_usd, usd_to_microusd
+from krater.vast import Instance, Offer, RentalType, microusd_to_usd, usd_to_microusd
 from krater.weave import WeaveClient, WeaveUnavailableError
 
 logger = logging.getLogger(__name__)
@@ -1614,17 +1614,17 @@ class Scheduler:
         """Vast's offers for `job`'s shape under `limit`, and the key its searches are paced by. Each query is sent at
         most once a pass, and only when the pacer says it's due; `None` when it wasn't searched (paced, or Vast's
         daily search quota is used up, which the job's reason then says)."""
-        query = OfferQuery(
+        query = offers.shape_query(
             rental_type=rental_type,
             gpu_names=tuple(job.gpu_names),
             min_gpu_ram_gb=job.min_gpu_ram_gb,
             num_gpus=job.num_gpus,
             disk_gb=job.disk_gb,
-            min_reliability=policy.reliability_floor,
-            min_direct_ports=1 if job.kind is ComputeJobKind.BOX else 0,
+            box=job.kind is ComputeJobKind.BOX,
+            reliability_floor=policy.reliability_floor,
+            transfer_cap_microusd_per_gb=policy.transfer_cap_microusd_per_gb,
             limit=SEARCH_LIMIT,
             max_price_microusd=limit,
-            max_transfer_microusd_per_gb=policy.transfer_cap_microusd_per_gb,
         )
         key = json.dumps(query.to_body(), sort_keys=True)
         # The price is part of what's paced: an escalated job (a higher limit) searches at once.
