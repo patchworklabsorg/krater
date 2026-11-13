@@ -99,8 +99,9 @@ def test_an_image_its_registry_refuses_gets_a_field_error(client: TestClient, pr
     client.app.dependency_overrides[get_registry] = lambda: registry
     body = {**JOB, "image": "ghcr.io/you/train:v1."}
 
-    response = client.post(f"/api/v1/projects/{project.id}/jobs", json=body, headers=_as(MEMBER_SUB))
+    # The estimate first: a refused submit rolls back the test's session, project and all.
     estimate = client.post(f"/api/v1/projects/{project.id}/jobs/estimate", json=body, headers=_as(MEMBER_SUB))
+    response = client.post(f"/api/v1/projects/{project.id}/jobs", json=body, headers=_as(MEMBER_SUB))
 
     assert response.status_code == 422 and estimate.status_code == 422
     assert "can't be pulled: ghcr.io has no you/train:v1.." in response.json()["fields"]["image"]
