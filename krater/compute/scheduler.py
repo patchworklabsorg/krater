@@ -643,6 +643,15 @@ class Scheduler:
             row.state is ComputeInstanceState.PROVISIONING
             and seen.phase in (Phase.STOPPED, Phase.INTERRUPTED)
             and row.runner_starts == 0
+            and self._credit_out(live=True)
+        ):
+            # Not the host's fault, and nothing on its disk yet: don't count it towards failing the job.
+            self._drop_for_credit(row, job)
+            return
+        if (
+            row.state is ComputeInstanceState.PROVISIONING
+            and seen.phase in (Phase.STOPPED, Phase.INTERRUPTED)
+            and row.runner_starts == 0
             and self.now - row.created_at >= HOST_START_GRACE
         ):
             self._give_up_on_host(row, job, seen)
@@ -1647,6 +1656,23 @@ class Scheduler:
             compute_watch.record_credit(self.session, self.provider.name, credit, now=self.now)
         self._credit_out_now = known_out if credit is None else credit <= 0
         return self._credit_out_now
+
+    def _drop_for_credit(self, row: ComputeInstance, job: ComputeJob) -> None:
+        """A machine the provider stopped before it ever ran, because the account is out of credit: destroy it and
+        queue the job again (the queue waits for credit). Unlike a host failure, it doesn't count towards failing
+        the job."""
+        reason = f"Waiting: the {self.provider.title} account is out of credit. An admin needs to add credit."
+        _event(
+            self.session,
+            job,
+            "credit_out",
+            f"{self.provider.title} stopped instance {row.provider_instance_id} before it started: the account is out "
+            "of credit.",
+            now=self.now,
+            instance=row,
+        )
+        if self._destroy(row, "out of credit") and self._still_active(job):
+            _requeue(self.session, job, reason, now=self.now)
 
     def _hold_for_credit(self, row: ComputeInstance, job: ComputeJob) -> None:
         """Keep a machine the provider stopped for lack of credit, with its disk, and start it again once there is

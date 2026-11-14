@@ -1341,6 +1341,42 @@ def test_out_of_credit_machines_are_kept_and_started_again_once_credit_is_added(
     assert row.start_requested_at is None
 
 
+def test_a_machine_stopped_for_credit_before_it_started_is_not_a_host_failure(
+    db_session, member, project, client, fake
+) -> None:  # noqa: F811
+    """Three of those in a row would have failed the job with "Check that the image exists"."""
+    job = _submit(db_session, member, project, interruptible=False)
+    _pass(db_session, client)
+    row = _instance(db_session, job)
+    vast_id = row.provider_instance_id
+    fake.account_credit = 0.0
+    fake.set_status(vast_id, "stopped", intended_status="stopped")
+
+    _pass(db_session, client, NOW + timedelta(minutes=6))
+
+    assert job.state is ComputeJobState.QUEUED and "out of credit" in job.state_reason
+    assert row.state is ComputeInstanceState.DESTROYED and vast_id not in fake.instances
+    kinds = _events(db_session, job)
+    assert "credit_out" in kinds and "host_failed" not in kinds
+
+
+def test_a_failed_credit_check_is_not_out_of_credit(db_session, member, project, client, fake) -> None:  # noqa: F811
+    job, row = _running_job(db_session, member, project, client, fake, interruptible=False)
+    fake.set_status(row.provider_instance_id, "stopped", intended_status="stopped")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/users/current/"):
+            return httpx.Response(500, text="oops")
+        return fake.handle(request)
+
+    broken = fake.client()
+    broken._http = httpx.Client(transport=httpx.MockTransport(handler))
+    _pass(db_session, broken, NOW + timedelta(minutes=7))
+
+    assert job.state is ComputeJobState.PAUSED and "wasn't outbid" in job.state_reason
+    assert row.start_requested_at is None
+
+
 def test_an_outbid_interruptible_machine_is_still_outbid_with_credit(db_session, member, project, client, fake) -> None:  # noqa: F811
     job, row = _running_job(db_session, member, project, client, fake)
     fake.set_status(row.provider_instance_id, "stopped", intended_status="stopped")
