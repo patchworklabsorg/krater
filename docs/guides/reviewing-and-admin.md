@@ -234,7 +234,7 @@ while it lasts, and when it clears. It covers:
   members' compute jobs);
 - compute stopped, by an admin's stop switch or a spending cap;
 - Vast charging for machines labelled as Krater's that Krater never rented;
-- the Vast account's credit under the low credit alert;
+- the Vast account's credit under the low credit alert, or out (always on);
 - storage 80% full (when the server knows the store's size).
 
 What to do about each is in the [compute runbook](compute-runbook.md).

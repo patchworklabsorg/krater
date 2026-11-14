@@ -302,6 +302,8 @@ class Scheduler:
         # Whether that halt lets running machines save first (every halt but an emergency stop).
         self.save_first = True
         self._org: compute_settings.OrgLimits | None = None
+        # Whether the provider account is out of credit, once asked this pass (`_credit_out`).
+        self._credit_out_now: bool | None = None
 
     # -- Entry point -----------------------------------------------------------------------------------
 
@@ -324,10 +326,15 @@ class Scheduler:
         self._requeue_orphans()
         self._notify_endings()
         if self.halt is not None:
-            self._hold_queue()
+            self._hold_queue(f"Waiting: {self.halt}.")
         elif self.runner_sha256 is None:
             logger.error(
                 "krater.compute: no runner binary at %s; not renting anything", self.settings.compute_runner_binary_path
+            )
+        elif self._credit_out():
+            # The provider rents nothing on an empty account: wait without searching.
+            self._hold_queue(
+                f"Waiting: the {self.provider.title} account is out of credit. An admin needs to add credit."
             )
         else:
             self._start_queued()
@@ -636,6 +643,15 @@ class Scheduler:
             row.state is ComputeInstanceState.PROVISIONING
             and seen.phase in (Phase.STOPPED, Phase.INTERRUPTED)
             and row.runner_starts == 0
+            and self._credit_out(live=True)
+        ):
+            # Not the host's fault, and nothing on its disk yet: don't count it towards failing the job.
+            self._drop_for_credit(row, job)
+            return
+        if (
+            row.state is ComputeInstanceState.PROVISIONING
+            and seen.phase in (Phase.STOPPED, Phase.INTERRUPTED)
+            and row.runner_starts == 0
             and self.now - row.created_at >= HOST_START_GRACE
         ):
             self._give_up_on_host(row, job, seen)
@@ -707,28 +723,48 @@ class Scheduler:
             self._adopt_self_stop(row, job, policy)
             return
         if row.state is ComputeInstanceState.RUNNING:
-            # It was running and isn't now, without Krater stopping it: outbid (or the host went away).
+            # It was running and isn't now, without Krater stopping it. An interruptible machine was most likely
+            # outbid; an on-demand one can't be, so its host went away or the provider stopped it. The provider also
+            # stops every machine when the account runs out of credit, so ask before saying why.
+            out_of_credit = self._credit_out(live=True)
             row.state = ComputeInstanceState.PAUSED
             row.paused_since = self.now
-            row.outbid_count += 1
+            if row.interruptible and not out_of_credit:
+                row.outbid_count += 1
             # A pause kills the container's processes and Vast restarts it on resume: the runner must start again.
             row.runner_starts_needed = row.runner_starts + 1
             job.state = ComputeJobState.PAUSED
-            job.state_reason = "Outbid: the machine is paused." + (
-                f" Krater raises the bid up to {_dollars(job.max_microusd)} and keeps the machine, with the job's "
-                "state on its disk, until it runs again."
-                if job.on_outbid is ComputeOutbid.HOLD
-                else ""
-            )
+            if out_of_credit:
+                self._hold_for_credit(row, job)
+                why, cause = "the account ran out of credit", "credit_out"
+            elif row.interruptible:
+                job.state_reason = "Outbid: the machine is paused." + (
+                    f" Krater raises the bid up to {_dollars(job.max_microusd)} and keeps the machine, with the job's "
+                    "state on its disk, until it runs again."
+                    if job.on_outbid is ComputeOutbid.HOLD
+                    else ""
+                )
+                why, cause = "outbid", "outbid"
+            else:
+                job.state_reason = (
+                    f"{self.provider.title} stopped the machine. It's on demand, so it wasn't outbid: its host may "
+                    "have gone down. Krater moves it elsewhere if it doesn't come back."
+                )
+                why, cause = "stopped by the provider, not outbid", "provider_stopped"
             _event(
                 self.session,
                 job,
                 "paused",
-                "The machine was paused (outbid).",
+                f"The machine was paused ({why}).",
                 now=self.now,
                 instance=row,
                 vast_status=seen.status,
+                cause=cause,
             )
+            return
+        if row.state is ComputeInstanceState.PAUSED and self._credit_out():
+            # Moving it couldn't rent anything and would throw its disk away; a higher bid can't win either.
+            self._hold_for_credit(row, job)
             return
         if (
             row.state is ComputeInstanceState.PAUSED
@@ -816,9 +852,8 @@ class Scheduler:
             return False
         return None
 
-    def _hold_queue(self) -> None:
-        """Compute is halted: queued jobs wait, without searching, and say why."""
-        reason = f"Waiting: {self.halt}."
+    def _hold_queue(self, reason: str) -> None:
+        """Compute is halted, or the account is out of credit: queued jobs wait, without searching, and say why."""
         stmt = sa.select(ComputeJob).where(ComputeJob.state == ComputeJobState.QUEUED)
         for job in list(self.session.scalars(stmt)):
             if job.state_reason != reason:
@@ -1600,6 +1635,58 @@ class Scheduler:
         if self._org is None:
             self._org = compute_settings.org_limits(self.session)
         return self._org
+
+    def _credit_out(self, *, live: bool = False) -> bool:
+        """Whether the provider account has run out of credit, so the provider has stopped every machine and rents
+        nothing. Asked of the provider at most once a pass: when `live` (a machine stopped without Krater stopping it),
+        or when the last reading says it's out, so a top-up is seen on the next pass. Otherwise the last reading
+        decides, and a missing reading or a failed check never counts as out."""
+        if self._credit_out_now is not None:
+            return self._credit_out_now
+        latest = compute_watch.latest_credit(self.session)
+        known_out = latest is not None and latest.credit_microusd <= 0
+        if not live and not known_out:
+            return False
+        try:
+            credit = self.client.account_credit()
+        except ProviderError:
+            logger.exception("krater.compute: reading the account's credit failed")
+            credit = None
+        if credit is not None:
+            compute_watch.record_credit(self.session, self.provider.name, credit, now=self.now)
+        self._credit_out_now = known_out if credit is None else credit <= 0
+        return self._credit_out_now
+
+    def _drop_for_credit(self, row: ComputeInstance, job: ComputeJob) -> None:
+        """A machine the provider stopped before it ever ran, because the account is out of credit: destroy it and
+        queue the job again (the queue waits for credit). Unlike a host failure, it doesn't count towards failing
+        the job."""
+        reason = f"Waiting: the {self.provider.title} account is out of credit. An admin needs to add credit."
+        _event(
+            self.session,
+            job,
+            "credit_out",
+            f"{self.provider.title} stopped instance {row.provider_instance_id} before it started: the account is out "
+            "of credit.",
+            now=self.now,
+            instance=row,
+        )
+        if self._destroy(row, "out of credit") and self._still_active(job):
+            _requeue(self.session, job, reason, now=self.now)
+
+    def _hold_for_credit(self, row: ComputeInstance, job: ComputeJob) -> None:
+        """Keep a machine the provider stopped for lack of credit, with its disk, and start it again once there is
+        credit: the restart is asked for (`start_requested_at`), and the pause rules count from the last held pass,
+        so the job moves only if its GPU is still taken after that."""
+        row.paused_since = self.now
+        if row.start_requested_at is None:
+            row.start_requested_at = self.now
+        reason = (
+            f"{self.provider.title} stopped the machine: the account ran out of credit. Krater keeps it, with its "
+            "disk, and starts it again once an admin adds credit."
+        )
+        if job.state_reason != reason:
+            job.state_reason = reason
 
     def _credit_short(self, choice: offers.Choice) -> str | None:
         """Why renting `choice` would eat into the credit reserve, or `None`. Off (0 hours) by default, and without a

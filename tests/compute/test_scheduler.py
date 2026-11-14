@@ -27,7 +27,7 @@ from krater.models import (
     ProjectStatus,
 )
 from krater.providers.errors import ProviderUnavailableError
-from krater.services import budget, compute_jobs
+from krater.services import budget, compute_jobs, compute_watch
 from krater.services.compute_jobs import JobSpec
 from krater.services.errors import InvalidState, NotAllowed, ValidationFailed
 from krater.vast import FakeVast, VastClient
@@ -1290,6 +1290,100 @@ def test_an_outbid_machine_is_still_a_pause(db_session, member, project, client,
 
     assert job.state is ComputeJobState.PAUSED and "Outbid" in job.state_reason
     assert fake.instances[row.provider_instance_id]["intended_status"] == "stopped"
+
+
+def test_a_stopped_on_demand_machine_is_not_called_outbid(db_session, member, project, client, fake) -> None:  # noqa: F811
+    """Production, 2026-11-13: an on-demand box the provider stopped said "Outbid", which an on-demand machine can't
+    be."""
+    job, row = _running_job(db_session, member, project, client, fake, interruptible=False)
+    fake.set_status(row.provider_instance_id, "stopped", intended_status="stopped")
+
+    _pass(db_session, client, NOW + timedelta(minutes=7))
+
+    assert job.state is ComputeJobState.PAUSED
+    assert "Outbid" not in job.state_reason and "wasn't outbid" in job.state_reason
+    assert row.outbid_count == 0
+    assert "The machine was paused (stopped by the provider, not outbid)." in [
+        e.message for e in db_session.scalars(sa.select(ComputeEvent).where(ComputeEvent.job_id == job.id))
+    ]
+
+
+def test_out_of_credit_machines_are_kept_and_started_again_once_credit_is_added(
+    db_session, member, project, client, fake
+) -> None:  # noqa: F811
+    """Production, 2026-11-13: the Vast account ran out of credit and Vast stopped every machine. Moving one after
+    the pause time would have thrown its disk away and couldn't have rented anything."""
+    job, row = _running_job(db_session, member, project, client, fake, interruptible=False)
+    vast_id = row.provider_instance_id
+    waiting = _submit(db_session, member, project, name="waiting")
+    fake.account_credit = 0.0
+    fake.set_status(vast_id, "stopped", intended_status="stopped")
+
+    _pass(db_session, client, NOW + timedelta(minutes=7))
+
+    assert job.state is ComputeJobState.PAUSED and "ran out of credit" in job.state_reason
+    assert row.start_requested_at is not None
+    assert waiting.state is ComputeJobState.QUEUED and "out of credit" in waiting.state_reason
+    assert compute_watch.latest_credit(db_session).credit_microusd == 0
+
+    _pass(db_session, client, NOW + timedelta(minutes=60))  # long past the 30-minute move
+
+    assert row.state is ComputeInstanceState.PAUSED and vast_id in fake.instances
+    assert fake.instances[vast_id]["intended_status"] == "stopped"  # not started while there's no credit
+    assert waiting.state is ComputeJobState.QUEUED
+
+    fake.account_credit = 25.0
+    _pass(db_session, client, NOW + timedelta(minutes=61))  # credit added: start it again
+
+    assert fake.instances[vast_id]["intended_status"] == "running"
+    _pass(db_session, client, NOW + timedelta(minutes=62))
+    assert job.state is ComputeJobState.RUNNING and row.state is ComputeInstanceState.RUNNING
+    assert row.start_requested_at is None
+
+
+def test_a_machine_stopped_for_credit_before_it_started_is_not_a_host_failure(
+    db_session, member, project, client, fake
+) -> None:  # noqa: F811
+    """Three of those in a row would have failed the job with "Check that the image exists"."""
+    job = _submit(db_session, member, project, interruptible=False)
+    _pass(db_session, client)
+    row = _instance(db_session, job)
+    vast_id = row.provider_instance_id
+    fake.account_credit = 0.0
+    fake.set_status(vast_id, "stopped", intended_status="stopped")
+
+    _pass(db_session, client, NOW + timedelta(minutes=6))
+
+    assert job.state is ComputeJobState.QUEUED and "out of credit" in job.state_reason
+    assert row.state is ComputeInstanceState.DESTROYED and vast_id not in fake.instances
+    kinds = _events(db_session, job)
+    assert "credit_out" in kinds and "host_failed" not in kinds
+
+
+def test_a_failed_credit_check_is_not_out_of_credit(db_session, member, project, client, fake) -> None:  # noqa: F811
+    job, row = _running_job(db_session, member, project, client, fake, interruptible=False)
+    fake.set_status(row.provider_instance_id, "stopped", intended_status="stopped")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/users/current/"):
+            return httpx.Response(500, text="oops")
+        return fake.handle(request)
+
+    broken = fake.client()
+    broken._http = httpx.Client(transport=httpx.MockTransport(handler))
+    _pass(db_session, broken, NOW + timedelta(minutes=7))
+
+    assert job.state is ComputeJobState.PAUSED and "wasn't outbid" in job.state_reason
+    assert row.start_requested_at is None
+
+
+def test_an_outbid_interruptible_machine_is_still_outbid_with_credit(db_session, member, project, client, fake) -> None:  # noqa: F811
+    job, row = _running_job(db_session, member, project, client, fake)
+    fake.set_status(row.provider_instance_id, "stopped", intended_status="stopped")
+
+    _pass(db_session, client, NOW + timedelta(minutes=7))
+
+    assert "Outbid" in job.state_reason and row.outbid_count == 1 and row.start_requested_at is None
 
 
 def test_after_a_pause_the_runner_must_start_again(db_session, member, project, client, fake) -> None:  # noqa: F811

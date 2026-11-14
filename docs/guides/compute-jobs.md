@@ -399,7 +399,7 @@ when Krater moves it to another machine.
 | **queued** | Waiting for a machine at your price, for budget, for the team's verification, for a free place under the project's machine limit, or while an admin has stopped compute. The reason shows under the name |
 | **starting** | A machine is rented and pulling your image. The disk bills from now; the GPU from when it runs |
 | **running** | Your command is running |
-| **paused** | The interruptible machine was outbid. See [Choosing a price](#choosing-a-price) for what happens next |
+| **paused** | The machine stopped without Krater stopping it. An interruptible one was outbid: see [Choosing a price](#choosing-a-price) for what happens next. An on-demand one can't be outbid: Vast stopped it (its host went down, say), and Krater moves it if it doesn't come back. If Vast stopped it because Patchwork's Vast account ran out of credit, the reason says so, and Krater keeps it, with its disk, until credit is added |
 | **stopped** | A box that was stopped (idle, or you stopped it). Its disk is kept, and only the disk bills, until it's resumed or destroyed (after 24 hours by default) |
 | **succeeded** | The command exited with 0. The machine is destroyed within a minute or so |
 | **failed** | The command exited with another code, ran past its max runtime, or the machine never got going. The reason is on the page |
@@ -770,6 +770,7 @@ Only rank 0 should write checkpoints and outputs.
 | Failed with your program's exit code | Your command failed. Read **Output**. Run the same command locally in the image |
 | Failed, max runtime | It ran longer than **Stop after**. Raise it, and make sure the job resumes from checkpoints |
 | Paused for a long time | Outbid. A limit order holds its machine until it wins again or another is free under the limit. Raise the limit or switch to target-and-max to move sooner |
+| Paused: "the account ran out of credit" | Patchwork's Vast account needs topping up; the admins are alerted. Nothing is lost: the machine and its disk are kept and start again once there's credit |
 | Restarted from the beginning after a move | Your program didn't load its checkpoint. Check `KRATER_RESUMED` and the path you load from |
 | Checkpoint missing after a move | It was written after the last upload (every 10 minutes), or under a name ending in `.tmp`. Save more often, then rename |
 | Box won't resume | Its old machine's GPU is taken. Use **Start it elsewhere from the saved workspace** |

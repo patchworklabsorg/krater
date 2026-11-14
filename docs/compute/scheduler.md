@@ -140,6 +140,15 @@ Off by default. With the organization limit "Credit reserve" above 0 hours, a jo
 account's credit, read in the last 2 hours, wouldn't cover that many hours of every machine Krater holds plus the new
 one. With no fresh reading nothing is held back: a wrong or missing reading mustn't stop all compute.
 
+### Out of credit
+
+Always on. Vast stops every machine of an account with no credit. When a running machine stops without Krater
+stopping it, the scheduler asks the provider for the credit (once a pass) before saying why: out of credit, outbid
+(interruptible), or stopped by the provider (on demand, which can't be outbid). While the last reading is 0 or less it
+asks again every pass, and meanwhile keeps paused machines (no bid raise, no move: a move couldn't rent and would
+throw the disk away), asks for them to be started once there is credit (`start_requested_at`, restarting the pause
+clock), and holds the queue without searching. A missing reading or a failed check never counts as out.
+
 ### Data collected for later
 
 Not used for any decision yet; kept so wait-time forecasts and outbid-adjusted prices can be built on real data:

@@ -74,11 +74,23 @@ The alert stays up for 24 hours after the last such charge.
 
 ## "The Vast account's credit is low"
 
-The Vast account's prepaid credit is under the **Low credit alert** set on `/admin/compute`. When it runs out, Vast
-can stop the account's machines and refuse new ones; Krater then sees jobs as outbid and waits, so they stall rather
-than fail. Add credit on Vast. Keep the balance limited and turn off auto top-up: the balance is the last limit on spend if
+The Vast account's prepaid credit is under the **Low credit alert** set on `/admin/compute`. Add credit on Vast before
+it runs out (next section). Keep the balance limited and turn off auto top-up: the balance is the last limit on spend if
 everything else fails. With a **Credit reserve** set, jobs that would eat into it wait (saying the credit is low)
 until credit is added.
+
+## "The Vast account is out of credit"
+
+Always on, with or without a low credit alert. Vast stops every machine on an account with no credit (on demand too)
+and rents nothing. Krater notices when a machine stops (it checks the credit then, and every hour) and:
+
+- keeps every stopped machine, with its disk, instead of moving it after the pause time, and asks Vast to start it
+  again once there is credit. Its job says "the account ran out of credit";
+- holds the queue without searching ("the Vast account is out of credit");
+- checks the credit again on every pass, so all of it carries on within a minute or so of a top-up.
+
+Add credit on Vast. A machine whose GPU was taken meanwhile moves elsewhere after the usual pause time, counted from
+the top-up.
 
 ## "Krater's storage is nearly full"
 
