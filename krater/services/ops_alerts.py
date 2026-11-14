@@ -8,7 +8,7 @@ scheduler went unseen until someone read the logs. Two kinds of problem open an 
   failed `threshold` times with no gap longer than its `window`, and clears after a whole window without a failure.
 - **A condition** the periodic `ops_watch` task checks (`check`): Quilt's outbox backing up, prices not refreshed,
   background jobs ending in error, compute stopped (by the switch or a spending cap), charges for machines Krater
-  never rented, the provider's credit running low, storage nearly full. It opens while the condition holds and
+  never rented, the provider's credit running low or out, storage nearly full. It opens while the condition holds and
   clears when it doesn't.
 
 `deliver` posts what changed. A dead worker can't report itself: `/healthz/worker` answers 503 when its heartbeat is
@@ -96,6 +96,7 @@ CONDITION_TITLES = {
     "compute_halted": "Krater Compute is stopped",
     "unknown_charges": "Vast charged for machines Krater never rented",
     "low_credit": "The Vast account's credit is low",
+    "credit_out": "The Vast account is out of credit",
     "store_full": "Krater's storage is nearly full",
 }
 
@@ -250,9 +251,26 @@ def _low_credit(session: Session) -> str | None:
     latest = compute_watch.latest_credit(session)
     if threshold <= 0 or latest is None or latest.credit_microusd >= threshold * 10_000:
         return None
+    if latest.credit_microusd <= 0:
+        return None  # `credit_out` says so
     return (
         f"${latest.credit_microusd / 1_000_000:,.2f} left as of {latest.observed_at:%Y-%m-%d %H:%M} UTC, under the "
         f"${threshold / 100:,.2f} alert. Vast stops every machine when the credit runs out. Add credit on Vast."
+    )
+
+
+def _credit_out(session: Session) -> str | None:
+    """The account has no credit left: Vast has stopped every machine and rents nothing. Always on, with or without
+    a low credit alert."""
+    from krater.services import compute_watch
+
+    latest = compute_watch.latest_credit(session)
+    if latest is None or latest.credit_microusd > 0:
+        return None
+    return (
+        f"${latest.credit_microusd / 1_000_000:,.2f} left as of {latest.observed_at:%Y-%m-%d %H:%M} UTC. Vast has "
+        "stopped every machine and rents nothing. Krater keeps the stopped machines, with their disks, starts them "
+        "again once there is credit, and holds the queue until then. Add credit on Vast."
     )
 
 
@@ -282,6 +300,7 @@ def check(session: Session, settings: Settings, *, now: datetime) -> None:
     _set_condition(session, "compute_halted", _compute_halted(session), now=now)
     _set_condition(session, "unknown_charges", _unknown_charges(session, now), now=now)
     _set_condition(session, "low_credit", _low_credit(session), now=now)
+    _set_condition(session, "credit_out", _credit_out(session), now=now)
     _set_condition(session, "store_full", _store_full(session, settings), now=now)
     for key, rule in FAILURE_RULES.items():
         row = session.get(OpsAlert, key, with_for_update=True)

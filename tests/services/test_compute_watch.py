@@ -236,6 +236,27 @@ def test_low_credit_alerts_only_once_a_threshold_is_set(db_session: Session) -> 
     assert "cleared" in _last(slack)
 
 
+def test_running_out_of_credit_alerts_without_a_threshold_and_only_once(db_session: Session) -> None:
+    slack = FakeSlackClient()
+    _settings_row(db_session).credit_alert_cents = 5000  # a low credit alert too: only the "out" one opens
+    compute_watch.record_credit(db_session, "vast", Decimal("0"), now=NOW)
+
+    opened = _watch(db_session, slack, NOW)
+
+    assert "credit_out" in opened and "low_credit" not in opened
+    assert "Vast has stopped every machine" in _last(slack) and "Add credit on Vast" in _last(slack)
+
+    compute_watch.record_credit(db_session, "vast", Decimal("80"), now=NOW + timedelta(minutes=5))
+    assert "credit_out" in _watch(db_session, slack, NOW + timedelta(minutes=5))
+    assert "cleared" in _last(slack)
+
+
+def test_no_credit_alert_while_there_is_credit_and_no_threshold(db_session: Session) -> None:
+    compute_watch.record_credit(db_session, "vast", Decimal("0.01"), now=NOW)
+
+    assert "credit_out" not in _watch(db_session, FakeSlackClient(), NOW)
+
+
 def test_a_missing_credit_reading_keeps_the_last_one(db_session: Session) -> None:
     compute_watch.record_credit(db_session, "vast", Decimal("40"), now=NOW)
     compute_watch.record_credit(db_session, "vast", None, now=NOW + timedelta(hours=1))
