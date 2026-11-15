@@ -185,6 +185,11 @@ class Settings(BaseSettings):
     # alerts instead.
     slack_alerts_channel_id: str = ""
     slack_reconcile_interval_minutes: int = 10
+    # Whether alastor's once-a-minute request to `/healthz/edge` is set up for this deploy
+    # (`krater.services.network_watch`). Only then does a missing or stale ping hold actions on silent runners and
+    # raise `edge_ping_stale`. Off, pings are recorded but ignored, so a request from anyone else turns on nothing.
+    # Turn on only once alastor's `krater-edge-ping` timer reaches this deploy.
+    edge_ping_expected: bool = False
 
     # S3-compatible object storage (gallery screenshots). docker-compose runs a temporary SeaweedFS as `storage`.
     # `fake` uses an in-memory store for dev and tests; `live` talks to a real S3-compatible bucket. See

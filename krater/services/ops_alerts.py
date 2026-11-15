@@ -289,15 +289,19 @@ def _credit_out(session: Session) -> str | None:
     )
 
 
-def _edge_ping_stale(session: Session, now: datetime) -> str | None:
-    """alastor's ping, seen before, has stopped: runners can't reach Krater, or alastor's timer stopped."""
+def _edge_ping_stale(session: Session, settings: Settings, now: datetime) -> str | None:
+    """alastor's ping, expected here, is missing or has stopped: runners can't reach Krater, or alastor's timer
+    stopped. Only `edge_ping_expected` turns this on: the endpoint is open, so a ping seen proves nothing."""
     from krater.services import network_watch
 
+    if not settings.edge_ping_expected:
+        return None
     last = network_watch.last_edge_ping(session)
-    if last is None or now - last < EDGE_PING_ALERT:
-        return None  # never set up, or arriving
+    if last is not None and now - last < EDGE_PING_ALERT:
+        return None  # arriving
+    arrived = "None has arrived yet" if last is None else f"The last one arrived at {last:%Y-%m-%d %H:%M} UTC"
     return (
-        f"The last one arrived at {last:%Y-%m-%d %H:%M} UTC. It comes over the path runners report on (Cloudflare, "
+        f"{arrived}. It comes over the path runners report on (Cloudflare, "
         "alastor, the tailnet to weft), so they likely can't reach Krater either; or alastor's krater-edge-ping timer "
         "stopped. Meanwhile Krater does nothing about machines whose runners go silent, for up to "
         f"{network_watch.HOLD_LIMIT.total_seconds() / 3600:.0f} hours."
@@ -332,7 +336,7 @@ def check(session: Session, settings: Settings, *, now: datetime) -> None:
     _set_condition(session, "low_credit", _low_credit(session), now=now)
     _set_condition(session, "credit_out", _credit_out(session), now=now)
     _set_condition(session, "store_full", _store_full(session, settings), now=now)
-    _set_condition(session, "edge_ping_stale", _edge_ping_stale(session, now), now=now)
+    _set_condition(session, "edge_ping_stale", _edge_ping_stale(session, settings, now), now=now)
     for key, rule in FAILURE_RULES.items():
         row = session.get(OpsAlert, key, with_for_update=True)
         if row is not None and row.last_failed_at is not None and now - row.last_failed_at > rule.window:

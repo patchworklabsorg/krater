@@ -6,9 +6,11 @@ Silence means a broken machine only while runners can reach Krater. When the pat
 and none is. Two checks tell the cases apart:
 
 - **Inbound: alastor's ping.** alastor, the public edge, requests `/healthz/edge` every minute over the runners' own
-  path (`patchworklabsorg/infra`, `hosts/alastor/edge.nix`); `record_edge_ping` keeps the time. A ping older than
-  `EDGE_PING_FRESH` means runners can't get through either. A ping never seen means alastor isn't set up to send it
-  (staging, development, or before the infra change is deployed): no hold, as before.
+  path (`patchworklabsorg/infra`, `hosts/alastor/edge.nix`); `record_edge_ping` keeps the time. It counts only
+  where `edge_ping_expected` says the timer is set up: then a ping missing or older than `EDGE_PING_FRESH` means
+  runners can't get through either. Off (development, or before the timer is deployed), pings are ignored. The
+  endpoint is open, so a setting, not the first ping seen, must turn this on: otherwise one request from anyone
+  would start holds and an alert.
 - **Outbound: a connection test.** A TCP connection to a couple of public anycast addresses, with a DNS lookup,
   like `ping 8.8.8.8` but allowed in a container. A test that never passed in this process is a firewall's doing,
   not an outage: no hold.
@@ -48,8 +50,8 @@ PROBE_TIMEOUT_SECONDS = 2.0
 def record_edge_ping(session: Session, *, now: datetime) -> bool:
     """Record alastor's ping, at most every `EDGE_PING_WRITE_EVERY`. Returns whether it wrote. The caller commits.
 
-    The endpoint is open: a forged ping can only make the inbound check pass, which is how Krater behaved before it
-    had one."""
+    The endpoint is open: a forged ping can only make the inbound check pass (it never turns the check on; see
+    `edge_ping_expected`), which is how Krater behaved before it had one."""
     row = session.get(EdgePing, 1)
     if row is None:
         session.add(EdgePing(id=1, at=now))
@@ -66,10 +68,17 @@ def last_edge_ping(session: Session) -> datetime | None:
     return row.at if row is not None else None
 
 
-def inbound_problem(session: Session, *, now: datetime) -> str | None:
-    """Why runners can't reach Krater, or `None`: never set up, or a fresh ping."""
+def inbound_problem(session: Session, *, now: datetime, expected: bool) -> str | None:
+    """Why runners can't reach Krater, or `None`: alastor's ping isn't `expected` here, or it's fresh."""
+    if not expected:
+        return None
     last = last_edge_ping(session)
-    if last is None or now - last < EDGE_PING_FRESH:
+    if last is None:
+        return (
+            "alastor's ping has never reached Krater, so runners may not reach it either (or alastor's "
+            "krater-edge-ping timer isn't running)"
+        )
+    if now - last < EDGE_PING_FRESH:
         return None
     return (
         f"alastor's ping hasn't reached Krater since {last:%Y-%m-%d %H:%M} UTC, so runners can't reach it either "
@@ -104,12 +113,13 @@ class LiveNetworkCheck:
     """The worker's check: alastor's ping, then the outbound test. One instance lives for the worker's process, so
     it remembers whether the outbound test has ever passed."""
 
-    def __init__(self, probe=probe_outbound) -> None:
+    def __init__(self, *, edge_ping_expected: bool, probe=probe_outbound) -> None:
+        self._edge_ping_expected = edge_ping_expected
         self._probe = probe
         self._outbound_ever_passed = False
 
     def problem(self, session: Session, *, now: datetime) -> str | None:
-        inbound = inbound_problem(session, now=now)
+        inbound = inbound_problem(session, now=now, expected=self._edge_ping_expected)
         if inbound is not None:
             return inbound
         outbound = self._probe()
