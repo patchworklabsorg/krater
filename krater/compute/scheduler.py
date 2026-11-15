@@ -1097,6 +1097,19 @@ class Scheduler:
             return
         if row.watch_resumed_at is not None:
             since = max(since, row.watch_resumed_at)
+        if row.runner_starts < row.runner_starts_needed and self._runner_survived(row):
+            # Production, 2026-11-15: Vast reported an on-demand box not running for one pass, then running again.
+            # Its container never restarted, so its runner never "started again"; Krater waited for that and stopped
+            # a box mid-run. A runner reporting since the machine came back is the one from before the pause.
+            row.runner_starts_needed = row.runner_starts
+            _event(
+                self.session,
+                job,
+                "runner_kept_running",
+                "The runner kept running through the pause: the machine wasn't restarted.",
+                now=self.now,
+                instance=row,
+            )
         if row.runner_starts < row.runner_starts_needed:
             if self.now - since >= timedelta(minutes=policy.runner_start_minutes):
                 if job.kind is ComputeJobKind.BOX and row.runner_starts > 0:
@@ -1119,6 +1132,22 @@ class Scheduler:
                 now=self.now,
             )
             self._destroy(row, "runner stopped reporting")
+
+    @staticmethod
+    def _runner_survived(row: ComputeInstance) -> bool:
+        """Whether the runner Krater is waiting on to start again never stopped: it sent a heartbeat after the
+        machine came back. A restarted container's runner calls start before its first heartbeat, and a killed one
+        can't report after its machine runs again, so only a runner whose container was never restarted does this.
+        The provider's status said the machine stopped when it hadn't (a host's brief loss of contact)."""
+        # Only `entered_running_at` (set each time the machine comes back) will do: the first start's time would make
+        # every heartbeat from before the pause count.
+        came_back = row.entered_running_at
+        return (
+            row.runner_starts > 0
+            and came_back is not None
+            and row.last_heartbeat_at is not None
+            and row.last_heartbeat_at > came_back
+        )
 
     def _stopped_itself(self, row: ComputeInstance, seen: Instance, policy: ComputePolicy) -> bool:
         """Whether a machine that stopped without Krater stopping it was stopped by its own runner, which does that

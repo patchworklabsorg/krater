@@ -1558,3 +1558,22 @@ def test_a_limit_order_speaks_of_its_limit(db_session, member, project, client) 
     db_session.refresh(job)
     assert job.state is ComputeJobState.CANCELLED
     assert job.state_reason == "No offer met the limit within 2 hours."
+
+
+def test_a_job_whose_machine_only_looked_stopped_carries_on(db_session, member, project, client, fake) -> None:  # noqa: F811
+    """As the box Sh35 in production (2026-11-15), for a batch job: before, Krater destroyed its machine for a runner
+    that "didn't start", when it had never stopped, and started the job again elsewhere from its last checkpoint."""
+    job, row = _running_job(db_session, member, project, client, fake, interruptible=False)
+    vast_id = row.provider_instance_id
+    fake.set_status(vast_id, "offline")
+    _pass(db_session, client, NOW + timedelta(minutes=6))
+    assert job.state is ComputeJobState.PAUSED
+    fake.set_status(vast_id, "running")
+    _pass(db_session, client, NOW + timedelta(minutes=7))
+
+    for minute in range(8, 40):
+        _beat(db_session, row, NOW + timedelta(minutes=minute - 0.5))
+        _pass(db_session, client, NOW + timedelta(minutes=minute))
+
+    assert job.state is ComputeJobState.RUNNING and vast_id in fake.instances
+    assert "runner_kept_running" in _events(db_session, job)
