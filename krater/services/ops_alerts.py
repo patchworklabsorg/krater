@@ -11,8 +11,12 @@ scheduler went unseen until someone read the logs. Two kinds of problem open an 
   never rented, the provider's credit running low or out, storage nearly full. It opens while the condition holds and
   clears when it doesn't.
 
-`deliver` posts what changed. A dead worker can't report itself: `/healthz/worker` answers 503 when its heartbeat is
-stale, for an uptime check outside Krater to watch (`docs/dev/production.md`).
+Each failure, and each condition opening, is also kept for `HISTORY_KEEP` (`OpsAlertFailure`) for the admin
+compute page: the alert row holds only the last message.
+
+`deliver` posts what changed, and a cleared alert says how long it lasted. A dead worker can't report itself:
+`/healthz/worker` answers 503 when its heartbeat is stale, for an uptime check outside Krater to watch
+(`docs/dev/production.md`).
 
 Framework-free; `krater.worker.app` calls it.
 """
@@ -32,6 +36,7 @@ from krater.models import (
     ComputeSettings,
     GpuPrice,
     OpsAlert,
+    OpsAlertFailure,
     QuiltOutbox,
     QuiltOutboxState,
     StashArchive,
@@ -60,6 +65,13 @@ JOBS_WAITING_AGE = timedelta(minutes=15)
 UNKNOWN_CHARGES_WINDOW = timedelta(hours=24)
 #: The audit action the reconciliation writes for them (`krater.compute.reconcile.AUDIT_UNKNOWN_CHARGES`).
 AUDIT_UNKNOWN_CHARGES = "compute_unknown_charges"
+#: alastor's every-minute ping (`krater.services.network_watch`) missing this long opens an alert: longer than a
+#: deploy's restart.
+EDGE_PING_ALERT = timedelta(minutes=10)
+#: Failures (`OpsAlertFailure`) are kept this long, then pruned by `check`.
+HISTORY_KEEP = timedelta(days=14)
+#: The failures `recent` lists under each problem, newest first.
+HISTORY_SHOWN = 20
 
 
 @dataclass(frozen=True)
@@ -98,6 +110,7 @@ CONDITION_TITLES = {
     "low_credit": "The Vast account's credit is low",
     "credit_out": "The Vast account is out of credit",
     "store_full": "Krater's storage is nearly full",
+    "edge_ping_stale": "alastor's ping stopped reaching Krater",
 }
 
 
@@ -120,6 +133,7 @@ def record_failure(session: Session, key: str, message: str, *, now: datetime) -
     row.message = message[:2000]
     if row.failures >= rule.threshold and row.opened_at is None:
         row.opened_at = now
+    session.add(OpsAlertFailure(key=key, at=now, message=row.message))
     session.flush()
 
 
@@ -135,6 +149,7 @@ def _set_condition(session: Session, key: str, message: str | None, *, now: date
     row.last_failed_at = now
     if row.opened_at is None:
         row.opened_at, row.first_failed_at = now, now
+        session.add(OpsAlertFailure(key=key, at=now, message=message[:2000]))
 
 
 def _stash_backlog(session: Session, settings: Settings, now: datetime) -> str | None:
@@ -274,6 +289,21 @@ def _credit_out(session: Session) -> str | None:
     )
 
 
+def _edge_ping_stale(session: Session, now: datetime) -> str | None:
+    """alastor's ping, seen before, has stopped: runners can't reach Krater, or alastor's timer stopped."""
+    from krater.services import network_watch
+
+    last = network_watch.last_edge_ping(session)
+    if last is None or now - last < EDGE_PING_ALERT:
+        return None  # never set up, or arriving
+    return (
+        f"The last one arrived at {last:%Y-%m-%d %H:%M} UTC. It comes over the path runners report on (Cloudflare, "
+        "alastor, the tailnet to weft), so they likely can't reach Krater either; or alastor's krater-edge-ping timer "
+        "stopped. Meanwhile Krater does nothing about machines whose runners go silent, for up to "
+        f"{network_watch.HOLD_LIMIT.total_seconds() / 3600:.0f} hours."
+    )
+
+
 def _store_full(session: Session, settings: Settings) -> str | None:
     from krater.services import compute_watch
 
@@ -302,16 +332,25 @@ def check(session: Session, settings: Settings, *, now: datetime) -> None:
     _set_condition(session, "low_credit", _low_credit(session), now=now)
     _set_condition(session, "credit_out", _credit_out(session), now=now)
     _set_condition(session, "store_full", _store_full(session, settings), now=now)
+    _set_condition(session, "edge_ping_stale", _edge_ping_stale(session, now), now=now)
     for key, rule in FAILURE_RULES.items():
         row = session.get(OpsAlert, key, with_for_update=True)
         if row is not None and row.last_failed_at is not None and now - row.last_failed_at > rule.window:
-            row.failures = 0
+            # `failures` and `first_failed_at` stay, for the cleared message and the admin page; the next failure,
+            # a whole window later, starts the count again (`record_failure`).
             row.opened_at = None
+    session.execute(sa.delete(OpsAlertFailure).where(OpsAlertFailure.at < now - HISTORY_KEEP))
     session.flush()
 
 
 #: How far back `recent` lists problems that never reached their alert's threshold or have cleared.
 RECENT_WINDOW = timedelta(hours=24)
+
+
+@dataclass(frozen=True)
+class Failure:
+    at: datetime
+    message: str
 
 
 @dataclass(frozen=True)
@@ -323,6 +362,10 @@ class RecentProblem:
     first_failed_at: datetime | None
     last_failed_at: datetime | None
     message: str
+    #: The latest failures (`HISTORY_SHOWN`) within `RECENT_WINDOW`, newest first.
+    history: tuple[Failure, ...] = ()
+    #: All the failures within `RECENT_WINDOW`, of which `history` is the newest.
+    history_count: int = 0
 
 
 def recent(session: Session, *, now: datetime) -> list[RecentProblem]:
@@ -333,19 +376,65 @@ def recent(session: Session, *, now: datetime) -> list[RecentProblem]:
         sa.select(OpsAlert)
         .where(sa.or_(OpsAlert.opened_at.is_not(None), OpsAlert.last_failed_at >= now - RECENT_WINDOW))
         .order_by(OpsAlert.last_failed_at.desc().nulls_last())
+    ).all()
+    since = now - RECENT_WINDOW
+    counts = dict(
+        session.execute(
+            sa.select(OpsAlertFailure.key, sa.func.count())
+            .where(OpsAlertFailure.at >= since)
+            .group_by(OpsAlertFailure.key)
+        ).all()
     )
-    return [
-        RecentProblem(
-            key=row.key,
-            title=_title(row.key),
-            open=row.opened_at is not None,
-            failures=row.failures,
-            first_failed_at=row.first_failed_at,
-            last_failed_at=row.last_failed_at,
-            message=row.message,
+    problems = []
+    for row in rows:
+        history = session.execute(
+            sa.select(OpsAlertFailure.at, OpsAlertFailure.message)
+            .where(OpsAlertFailure.key == row.key, OpsAlertFailure.at >= since)
+            .order_by(OpsAlertFailure.at.desc())
+            .limit(HISTORY_SHOWN)
+        ).all()
+        problems.append(
+            RecentProblem(
+                key=row.key,
+                title=_title(row.key),
+                open=row.opened_at is not None,
+                failures=row.failures,
+                first_failed_at=row.first_failed_at,
+                last_failed_at=row.last_failed_at,
+                message=row.message,
+                history=tuple(Failure(at=at, message=message) for at, message in history),
+                history_count=counts.get(row.key, 0),
+            )
         )
-        for row in rows
-    ]
+    return problems
+
+
+def _span(delta: timedelta) -> str:
+    """ "4 minutes", "1 h 20 min", "2 days 3 h"."""
+    minutes = max(0, round(delta.total_seconds() / 60))
+    if minutes < 60:
+        return f"{minutes} minute{'s' if minutes != 1 else ''}"
+    hours, minutes = divmod(minutes, 60)
+    if hours < 24:
+        return f"{hours} h {minutes} min" if minutes else f"{hours} h"
+    days, hours = divmod(hours, 24)
+    return f"{days} day{'s' if days != 1 else ''} {hours} h" if hours else f"{days} day{'s' if days != 1 else ''}"
+
+
+def _cleared_text(row: OpsAlert) -> str:
+    """The cleared message: the alert's title, then how long the problem lasted, from its first failure (or the
+    condition first seen) to its last."""
+    text = f":white_check_mark: *Krater: cleared:* {_title(row.key)}"
+    if row.first_failed_at is None or row.last_failed_at is None:
+        return text
+    first, last = row.first_failed_at, row.last_failed_at
+    end = f"{last:%H:%M}" if last.date() == first.date() else f"{last:%Y-%m-%d %H:%M}"
+    span = f"{first:%Y-%m-%d %H:%M}–{end} UTC"
+    if last - first < timedelta(minutes=1):
+        return f"{text}\nSeen once, at {first:%Y-%m-%d %H:%M} UTC."
+    if row.key in FAILURE_RULES:
+        return f"{text}\n{row.failures} failures over {_span(last - first)} ({span})."
+    return f"{text}\nSeen for {_span(last - first)} ({span})."
 
 
 def _title(key: str) -> str:
@@ -383,10 +472,7 @@ def deliver(session: Session, slack_client: SlackClient | None, channel_id: str 
     posted = []
     for row in rows:
         cleared = row.opened_at is None
-        if cleared:
-            text = f":white_check_mark: *Krater: cleared:* {_title(row.key)}"
-        else:
-            text = _open_text(row, again=row.notified_at is not None)
+        text = _cleared_text(row) if cleared else _open_text(row, again=row.notified_at is not None)
         if slack_client is None or not channel_id:
             (logger.info if cleared else logger.error)("krater ops alert: %s", text)
         else:

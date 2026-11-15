@@ -40,7 +40,7 @@ from decimal import ROUND_FLOOR, Decimal
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
-from krater import providers
+from krater import net_errors, providers
 from krater.compute import launch, market, offers, runner_api, search_quota, spend
 from krater.compute.search_pacing import SearchPacer
 from krater.config import Settings
@@ -76,6 +76,7 @@ from krater.services import (
     compute_watch,
     funding_holds,
     job_costs,
+    network_watch,
     smoke,
 )
 from krater.services.compute_settings import ComputePolicy
@@ -154,10 +155,16 @@ MICROUSD_PER_CENT = 10_000
 #: A box is idle while its GPU use stays under this (percent), and its CPU use, when reported, under that.
 IDLE_GPU_PERCENT = 5
 IDLE_CPU_PERCENT = 10
+#: Idle is judged from the runner's last heartbeat only while it's this fresh. An older one is a silent runner (or
+#: Krater's network down): what it last said about the GPU is no longer true, and the heartbeat timeout, which
+#: knows about the network, decides about the silence.
+IDLE_BEAT_STALE = timedelta(minutes=5)
 #: The warning before a stopped box is destroyed.
 DESTROY_WARNING = timedelta(hours=1)
 #: A live instance Krater hasn't looked at for this long (Krater itself was down) restarts its runner deadlines.
 WATCH_GAP = timedelta(minutes=5)
+#: While a network hold lasts, its event is written again this often (`Scheduler._hold_for_network`).
+NETWORK_HOLD_REMINDER = timedelta(hours=1)
 #: `destroy_reason` of a box the member asked to start again elsewhere.
 MOVED_BY_MEMBER = "moved by member"
 #: `destroy_reason` of a machine Krater destroyed because compute was halted. Its job goes back in the queue.
@@ -176,6 +183,9 @@ class PassResult:
     destroyed: list[int] = field(default_factory=list)  # Vast ids
     swept: list[int] = field(default_factory=list)  # Vast ids destroyed without a Krater record
     errors: int = 0
+    #: What failed and why, one line per error (`Scheduler._note_error`), for the admin alert: "1 provider error"
+    #: alone sent admins to a log they may not be able to read.
+    problems: list[str] = field(default_factory=list)
 
 
 def _event(session: Session, job: ComputeJob, kind: str, message: str, *, now: datetime, instance=None, **payload):
@@ -269,8 +279,13 @@ class Scheduler:
         weave_client: WeaveClient,
         pacer: SearchPacer | None = None,
         registry: Registry | None = None,
+        network: network_watch.NetworkCheck | None = None,
     ) -> None:
         self.session = session
+        # Asked before acting on a silent runner (`_hold_for_network`). Without one (tests, one-off passes), the
+        # network counts as up.
+        self.network = network
+        self._network_problem: str | None | bool = False  # False: not asked yet this pass
         # Asked for each image's digest when renting (`_image_for`); None asks nothing and launches by tag.
         self.registry = registry
         self._digests: dict[str, str | None] = {}
@@ -342,6 +357,11 @@ class Scheduler:
         self.session.commit()
         return self.result
 
+    def _note_error(self, what: str, exc: BaseException) -> None:
+        """Count a provider error the pass carried on past, and say what failed and why for the admin alert."""
+        self.result.errors += 1
+        self.result.problems.append(f"{what}: {net_errors.describe(exc, limit=400)}")
+
     def _ours(self) -> sa.ColumnElement[bool]:
         """Instances rented from this pass's provider: another provider's are its own scheduler's to watch."""
         return ComputeInstance.provider == self.provider.name
@@ -391,10 +411,10 @@ class Scheduler:
                 if row.is_live and row.provider_instance_id is not None:
                     try:
                         self._destroy(row, "budget reached")
-                    except ProviderError:
+                    except ProviderError as exc:
                         # The job is finished, so the next pass's watch retries the destroy.
                         logger.exception("krater.compute: budget stop of instance %s failed", row.provider_instance_id)
-                        self.result.errors += 1
+                        self._note_error(f"stopping instance {row.provider_instance_id} at its budget", exc)
                     stopped.append(row.provider_instance_id)
         budget_alerts.record_teardown(
             self.session,
@@ -482,9 +502,9 @@ class Scheduler:
                             instance=row,
                             provider_instance_id=instance.id,
                         )
-            except ProviderError:
+            except ProviderError as exc:
                 logger.exception("krater.compute: sweeping instance %s failed", instance.id)
-                self.result.errors += 1
+                self._note_error(f"destroying unknown instance {instance.id}", exc)
         self.session.commit()
 
     def _destroy_and_confirm(self, provider_instance_id: str) -> bool:
@@ -510,9 +530,9 @@ class Scheduler:
         for row in list(self.session.scalars(stmt)):
             try:
                 self._watch_one(row, listing.get(row.provider_instance_id))
-            except ProviderError:
+            except ProviderError as exc:
                 logger.exception("krater.compute: watching instance %s failed", row.provider_instance_id)
-                self.result.errors += 1
+                self._note_error(f"watching instance {row.provider_instance_id} (job {row.job_id})", exc)
             self.session.commit()
 
     def _destroy(self, row: ComputeInstance, reason: str) -> bool:
@@ -868,6 +888,9 @@ class Scheduler:
         beat = row.last_heartbeat or {}
         if minutes <= 0 or "gpu_util" not in beat or row.runner_starts < row.runner_starts_needed:
             return  # off, nothing to judge by, or a heartbeat from before the container restarted
+        if not self._beat_is_fresh(row):
+            row.idle_since = None
+            return
         if beat["gpu_util"] >= IDLE_GPU_PERCENT:
             row.idle_since = None
             row.idle_warned_at = None
@@ -1087,10 +1110,28 @@ class Scheduler:
         since = row.entered_running_at or row.running_since
         if since is None:
             return
+        if self._silent_since_restart(row) and self._network_down(row) is not None:
+            # Still held: the deadlines keep restarting until the network is back, then run in full.
+            row.watch_resumed_at = self.now
         if row.watch_resumed_at is not None:
             since = max(since, row.watch_resumed_at)
+        if row.runner_starts < row.runner_starts_needed and self._runner_survived(row):
+            # Production, 2026-11-15: Vast reported an on-demand box not running for one pass, then running again.
+            # Its container never restarted, so its runner never "started again"; Krater waited for that and stopped
+            # a box mid-run. A runner reporting since the machine came back is the one from before the pause.
+            row.runner_starts_needed = row.runner_starts
+            _event(
+                self.session,
+                job,
+                "runner_kept_running",
+                "The runner kept running through the pause: the machine wasn't restarted.",
+                now=self.now,
+                instance=row,
+            )
         if row.runner_starts < row.runner_starts_needed:
             if self.now - since >= timedelta(minutes=policy.runner_start_minutes):
+                if self._hold_for_network(row, job):
+                    return
                 if job.kind is ComputeJobKind.BOX and row.runner_starts > 0:
                     # It ran before: its disk may hold work newer than the last sync. Stop it, don't destroy it.
                     self._stop_box(row, job, "the runner didn't start again")
@@ -1101,6 +1142,8 @@ class Scheduler:
         if row.watch_resumed_at is not None:
             last = max(last, row.watch_resumed_at)
         if self.now - last >= timedelta(minutes=policy.heartbeat_timeout_minutes):
+            if self._hold_for_network(row, job):
+                return
             if job.kind is ComputeJobKind.BOX:
                 self._stop_box(row, job, "the runner stopped reporting")
                 return
@@ -1111,6 +1154,79 @@ class Scheduler:
                 now=self.now,
             )
             self._destroy(row, "runner stopped reporting")
+
+    def _beat_is_fresh(self, row: ComputeInstance) -> bool:
+        return row.last_heartbeat_at is not None and self.now - row.last_heartbeat_at < IDLE_BEAT_STALE
+
+    @staticmethod
+    def _silent_since_restart(row: ComputeInstance) -> bool:
+        """Whether the machine's deadlines were restarted (a hold, or Krater back from being away) and its runner
+        hasn't reported since."""
+        return row.watch_resumed_at is not None and (
+            row.last_heartbeat_at is None or row.watch_resumed_at > row.last_heartbeat_at
+        )
+
+    def _network_down(self, row: ComputeInstance) -> str | None:
+        """Why Krater's own network is down (`krater.services.network_watch`), asked once a pass, or `None`: up, no
+        check, or this runner silent for over `HOLD_LIMIT`, too long to wait on any longer."""
+        if self.network is None:
+            return None
+        heard = row.last_heartbeat_at or row.runner_started_at or row.entered_running_at or row.running_since
+        if heard is not None and self.now - heard >= network_watch.HOLD_LIMIT:
+            return None
+        if self._network_problem is False:
+            self._network_problem = self.network.problem(self.session, now=self.now)
+        return self._network_problem
+
+    def _hold_for_network(self, row: ComputeInstance, job: ComputeJob) -> bool:
+        """Whether to hold an action on a runner's silence because Krater's own network is down: its silence says
+        nothing about the machine then. A held machine's deadlines restart on every pass while the network is down
+        (`_check_runner`), so once it's back Krater waits them out in full, looking at Vast's listing each pass,
+        before acting. A runner silent for over `HOLD_LIMIT` is acted on anyway."""
+        problem = self._network_down(row)
+        if problem is None:
+            return False
+        row.watch_resumed_at = self.now
+        # One event per hold (and an hourly reminder while it lasts), not one a pass.
+        is_hold = ComputeEvent.kind == "network_hold"
+        last_hold = self.session.scalar(
+            sa.select(sa.func.max(ComputeEvent.at)).where(ComputeEvent.job_id == job.id, is_hold)
+        )
+        last_other = self.session.scalar(
+            sa.select(sa.func.max(ComputeEvent.at)).where(ComputeEvent.job_id == job.id, sa.not_(is_hold))
+        )
+        if (
+            last_hold is None
+            or (last_other is not None and last_other > last_hold)
+            or self.now - last_hold >= NETWORK_HOLD_REMINDER
+        ):
+            _event(
+                self.session,
+                job,
+                "network_hold",
+                f"The runner is silent, but so is Krater's network: {problem}. Krater does nothing about the "
+                "machine until the network is back, then gives the runner its deadlines again.",
+                now=self.now,
+                instance=row,
+            )
+        logger.warning("krater.compute: holding instance %s: %s", row.provider_instance_id, problem)
+        return True
+
+    @staticmethod
+    def _runner_survived(row: ComputeInstance) -> bool:
+        """Whether the runner Krater is waiting on to start again never stopped: it sent a heartbeat after the
+        machine came back. A restarted container's runner calls start before its first heartbeat, and a killed one
+        can't report after its machine runs again, so only a runner whose container was never restarted does this.
+        The provider's status said the machine stopped when it hadn't (a host's brief loss of contact)."""
+        # Only `entered_running_at` (set each time the machine comes back) will do: the first start's time would make
+        # every heartbeat from before the pause count.
+        came_back = row.entered_running_at
+        return (
+            row.runner_starts > 0
+            and came_back is not None
+            and row.last_heartbeat_at is not None
+            and row.last_heartbeat_at > came_back
+        )
 
     def _stopped_itself(self, row: ComputeInstance, seen: Instance, policy: ComputePolicy) -> bool:
         """Whether a machine that stopped without Krater stopping it was stopped by its own runner, which does that
@@ -1163,11 +1279,13 @@ class Scheduler:
         (unlike an outbid one), so a failed call is retried on every pass until it runs (`start_requested_at`)."""
         try:
             self.client.start_instance(row.provider_instance_id)
-        except ProviderError:
+        except ProviderError as exc:
             logger.warning(
-                "krater.compute: starting self-stopped instance %s failed; retrying", row.provider_instance_id
+                "krater.compute: starting self-stopped instance %s failed; retrying: %s",
+                row.provider_instance_id,
+                net_errors.describe(exc),
             )
-            self.result.errors += 1
+            self._note_error(f"starting self-stopped instance {row.provider_instance_id} (job {row.job_id})", exc)
 
     # -- Boxes -----------------------------------------------------------------------------------------
 
@@ -1185,6 +1303,9 @@ class Scheduler:
         beat = row.last_heartbeat or {}
         if "gpu_util" not in beat and "sessions" not in beat:
             return  # nothing to judge by; the heartbeat timeout covers a silent runner
+        if not self._beat_is_fresh(row):
+            row.idle_since = None  # count again from fresh reports
+            return
         idle = beat.get("gpu_util", 0) < IDLE_GPU_PERCENT and beat.get("sessions", 0) == 0
         if "cpu_util" in beat:
             idle = idle and beat["cpu_util"] < IDLE_CPU_PERCENT
@@ -1453,9 +1574,9 @@ class Scheduler:
                     logger.warning("krater.compute: %s; not searching until then", exc)
                     job.state_reason = _quota_reason(exc.reset_at, self.provider.title)
                     stop = True
-                except ProviderError:
+                except ProviderError as exc:
                     logger.exception("krater.compute: starting job %s failed", job.id)
-                    self.result.errors += 1
+                    self._note_error(f"starting job {job.id}", exc)
                     stop = True
                 self.session.commit()
                 if stop:
@@ -1928,6 +2049,7 @@ def run_pass(
     weave_client: WeaveClient,
     pacer: SearchPacer | None = None,
     registry: Registry | None = None,
+    network: network_watch.NetworkCheck | None = None,
 ) -> PassResult:
     return Scheduler(
         session,
@@ -1938,4 +2060,5 @@ def run_pass(
         weave_client=weave_client,
         pacer=pacer,
         registry=registry,
+        network=network,
     ).run()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 
 import sqlalchemy as sa
@@ -26,11 +27,37 @@ class OpsAlert(Base):
     notified_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
 
 
+class OpsAlertFailure(Base):
+    """One failure behind an alert, or a condition opening (`krater.services.ops_alerts`), kept for
+    `ops_alerts.HISTORY_KEEP`: `OpsAlert` keeps only the last message, and the admin page shows what each failure
+    said, so a pattern (every task failing at once: the server's own network) shows without the worker's log."""
+
+    __tablename__ = "ops_alert_failures"
+    __table_args__ = (sa.Index("ix_ops_alert_failures_key_at", "key", "at"), sa.Index("ix_ops_alert_failures_at", "at"))
+
+    id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)
+    key: Mapped[str] = mapped_column(sa.String(100), nullable=False)
+    at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
+    message: Mapped[str] = mapped_column(sa.Text, nullable=False, default="")
+
+
 class WorkerHeartbeat(Base):
     """When the worker last ran its every-minute heartbeat (one row): `/healthz/worker` reads it, since the web app
     and the worker are separate containers."""
 
     __tablename__ = "worker_heartbeat"
+    __table_args__ = (sa.CheckConstraint("id = 1", name="singleton"),)
+
+    id: Mapped[int] = mapped_column(sa.Integer, primary_key=True, default=1)
+    at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
+
+
+class EdgePing(Base):
+    """When the ping from alastor, the public edge, last reached the portal (one row). alastor requests
+    `/healthz/edge` every minute over the same path runners report on (Cloudflare, alastor, the tailnet, weft), so
+    a stale ping means runners can't reach Krater either (`krater.services.network_watch`)."""
+
+    __tablename__ = "edge_ping"
     __table_args__ = (sa.CheckConstraint("id = 1", name="singleton"),)
 
     id: Mapped[int] = mapped_column(sa.Integer, primary_key=True, default=1)

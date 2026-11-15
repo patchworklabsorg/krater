@@ -33,7 +33,7 @@ from krater.models.gpu_price_sample import GpuPriceSample
 from krater.models.held_grant import HeldGrant
 from krater.models.image_inspection import ImageInspection
 from krater.models.live_price import LivePrice, LivePriceUsage, LiveQuote
-from krater.models.ops_alert import OpsAlert, WorkerHeartbeat
+from krater.models.ops_alert import EdgePing, OpsAlert, OpsAlertFailure, WorkerHeartbeat
 from krater.models.ospool_grant import OspoolGrant, OspoolUsageDay
 from krater.models.project import Project
 from krater.models.project_member import ProjectMember
@@ -72,7 +72,9 @@ __all__ = [
     "GpuPriceSample",
     "HeldGrant",
     "ImageInspection",
+    "EdgePing",
     "OpsAlert",
+    "OpsAlertFailure",
     "OspoolGrant",
     "OspoolUsageDay",
     "Project",

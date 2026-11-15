@@ -68,10 +68,44 @@ def test_a_pass_with_provider_errors_counts_towards_the_admin_alert(monkeypatch)
         patch("krater.worker.app.slack_notify"),
         patch("krater.worker.app._report_failure") as mock_report,
     ):
-        mock_scheduler.run_pass.return_value = PassResult(errors=2)
+        mock_scheduler.run_pass.return_value = PassResult(
+            errors=5, problems=[f"watching instance {n}: VastUnavailableError: boom" for n in range(5)]
+        )
         compute_schedule.func(timestamp=1_791_700_000)
 
-    assert mock_report.call_args.args[0] == "compute_schedule"
+    key, message = mock_report.call_args.args
+    assert key == "compute_schedule"
+    # What failed and why, not "see the worker's log": the first few, and a count of the rest.
+    assert message.startswith("5 provider errors in one pass: watching instance 0: VastUnavailableError: boom; ")
+    assert "watching instance 2" in message and "watching instance 3" not in message
+    assert message.endswith("and 2 more (see the worker's log)")
+
+
+def test_a_failed_pass_reports_its_root_cause(monkeypatch) -> None:
+    import socket
+
+    from krater.vast import VastUnavailableError
+
+    monkeypatch.setattr(get_settings(), "compute_mode", "vast")
+    try:
+        try:
+            raise socket.gaierror(socket.EAI_AGAIN, "Temporary failure in name resolution")
+        except socket.gaierror as exc:
+            raise VastUnavailableError("could not reach Vast for GET /api/v1/instances/: ConnectError") from exc
+    except VastUnavailableError as exc:
+        error = exc
+    with (
+        patch("krater.providers.get_provider"),
+        patch("krater.worker.app.compute_scheduler") as mock_scheduler,
+        patch("krater.worker.app.get_sessionmaker"),
+        patch("krater.worker.app._report_failure") as mock_report,
+    ):
+        mock_scheduler.run_pass.side_effect = error
+        compute_schedule.func(timestamp=1_791_700_000)
+
+    _, message = mock_report.call_args.args
+    assert "ConnectError (gaierror: [Errno " in message and "Temporary failure in name resolution" in message
+    assert "DNS lookup failed" in message
 
 
 def test_compute_schedule_posts_budget_notices_right_after_the_pass(monkeypatch) -> None:

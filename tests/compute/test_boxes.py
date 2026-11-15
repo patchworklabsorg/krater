@@ -414,3 +414,49 @@ def test_a_box_the_member_stops_gets_no_notice(db_session, member, project, clie
 
     assert job.state is ComputeJobState.STOPPED
     assert _notices(db_session, compute_jobs.AUDIT_BOX_STOPPED) == []
+
+
+def test_a_box_whose_machine_only_looked_stopped_keeps_running(db_session, member, project, client, fake) -> None:  # noqa: F811
+    """Production, 2026-11-15 (Sh35): Vast reported an on-demand box's machine not running for one pass, then running
+    again. Its container never restarted, so the runner never started again: it kept sending heartbeats. Krater
+    waited for a start, and after the runner start deadline stopped the box mid-run without saving /workspace."""
+    job, row = _running_box(db_session, member, project, client, fake)
+    vast_id = row.provider_instance_id
+    _beat(db_session, row, 3, gpu_util=99)
+    fake.set_status(vast_id, "offline")  # the host lost contact with Vast for a moment
+
+    _pass(db_session, client, NOW + timedelta(minutes=4))
+    assert job.state is ComputeJobState.PAUSED
+
+    fake.set_status(vast_id, "running")
+    _pass(db_session, client, NOW + timedelta(minutes=5))
+    assert job.state is ComputeJobState.RUNNING
+    for minute in range(6, 40):  # well past the runner start deadline, the same runner reporting throughout
+        _beat(db_session, row, minute - 0.5, gpu_util=99)
+        _pass(db_session, client, NOW + timedelta(minutes=minute))
+
+    assert job.state is ComputeJobState.RUNNING and row.state is ComputeInstanceState.RUNNING
+    assert fake.instances[vast_id]["intended_status"] == "running"
+    assert row.runner_starts_needed == row.runner_starts
+    assert _events(db_session, job).count("runner_kept_running") == 1
+    assert "stopped" not in _events(db_session, job)
+
+
+def test_a_box_whose_runner_really_didnt_start_again_is_still_stopped(
+    db_session, member, project, client, fake
+) -> None:  # noqa: F811
+    """The other side: the container restarted and its runner never came back. Nothing has reported since the machine
+    came back, so Krater stops the box as before."""
+    job, row = _running_box(db_session, member, project, client, fake)
+    vast_id = row.provider_instance_id
+    _beat(db_session, row, 3)
+    fake.set_status(vast_id, "offline")
+    _pass(db_session, client, NOW + timedelta(minutes=4))
+    fake.set_status(vast_id, "running")
+    _pass(db_session, client, NOW + timedelta(minutes=5))
+
+    for minute in range(6, 40):
+        _pass(db_session, client, NOW + timedelta(minutes=minute))
+
+    assert job.state is ComputeJobState.STOPPED and "didn't start again" in job.state_reason
+    assert "runner_kept_running" not in _events(db_session, job)

@@ -215,3 +215,24 @@ def test_the_page_shows_the_workers_recent_problems(client: TestClient, login_as
 
     page = client.get("/admin/compute").text
     assert "The compute scheduler keeps failing" in page and "VastError: &lt;401&gt; bad key" in page
+    assert "problem-history" not in page  # one failure: its message is the whole story
+
+    ops_alerts.record_failure(db_session, "compute_schedule", "VastUnavailableError: DNS", now=datetime.now(UTC))
+    db_session.commit()
+    page = client.get("/admin/compute").text
+    assert "2 in the last 24 hours" in page
+    assert page.count("VastUnavailableError: DNS") == 2  # the latest message, and the history's first row
+    assert "VastError: &lt;401&gt; bad key" in page
+
+
+def test_only_admins_see_the_workers_problems(client: TestClient, login_as, db_session) -> None:
+    from datetime import UTC, datetime
+
+    from krater.services import ops_alerts
+
+    ops_alerts.record_failure(db_session, "compute_schedule", "VastUnavailableError: DNS", now=datetime.now(UTC))
+    db_session.commit()
+    login_as(MEMBER_SUB)
+    response = client.get("/admin/compute")
+
+    assert response.status_code in (403, 404) and "VastUnavailableError" not in response.text

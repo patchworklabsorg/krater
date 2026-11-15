@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import timedelta
+
 from fastapi.testclient import TestClient
 
 from tests.conftest import ADMIN_SUB, MEMBER_SUB, REVIEWER_SUB
@@ -72,3 +74,26 @@ def test_healthz_worker_answers_503_once_the_worker_heartbeat_is_stale(client: T
     db_session.commit()
     stale = client.get("/healthz/worker")
     assert stale.status_code == 503 and stale.json()["status"] == "stale"
+
+
+def test_healthz_edge_records_alastors_ping_signed_out(client: TestClient, db_session) -> None:
+    import sqlalchemy as sa
+
+    from krater.services import network_watch
+
+    response = client.get("/healthz/edge")
+
+    assert response.status_code == 200 and response.json() == {"status": "ok"}
+    assert response.headers["cache-control"] == "no-store"
+    first = network_watch.last_edge_ping(db_session)
+    assert first is not None
+
+    # Within the write interval a ping changes nothing; after it, the time moves on.
+    client.get("/healthz/edge")
+    db_session.expire_all()
+    assert network_watch.last_edge_ping(db_session) == first
+    db_session.execute(sa.text("UPDATE edge_ping SET at = at - interval '1 minute'"))
+    db_session.commit()
+    client.get("/healthz/edge")
+    db_session.expire_all()
+    assert network_watch.last_edge_ping(db_session) > first - timedelta(minutes=1)

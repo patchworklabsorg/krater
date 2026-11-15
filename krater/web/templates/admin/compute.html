@@ -24,7 +24,9 @@
   <h2 id="problems-title">Problems</h2>
   <p class="muted">
     What the worker ran into in the last 24 hours, and any alert still open. Open ones were posted to the alerts
-    channel; the others failed fewer times than their alert waits for. The worker's log has the details.
+    channel; the others failed fewer times than their alert waits for. Each failure says what went wrong: when
+    several kinds fail together and each names a DNS lookup or a connect that got no answer, the server's own network
+    is down, not the services it calls.
   </p>
   <ul class="problem-list">
     {% for problem in problems %}
@@ -36,6 +38,22 @@
           {%- if problem.last_failed_at %} {{ problem.last_failed_at.strftime("%Y-%m-%d %H:%M UTC") }}{% endif %}
         </div>
         {% if problem.message %}<pre class="problem-message">{{ problem.message }}</pre>{% endif %}
+        {% if problem.history_count > 1 %}
+          <details class="problem-history">
+            <summary>
+              {{ problem.history_count }} in the last 24 hours
+              {%- if problem.history_count > problem.history | length %}, the latest {{ problem.history | length }}{% endif %}
+            </summary>
+            <ol class="problem-history__list">
+              {% for failure in problem.history %}
+                <li>
+                  <time datetime="{{ failure.at.isoformat() }}">{{ failure.at.strftime("%Y-%m-%d %H:%M UTC") }}</time>
+                  <pre class="problem-message">{{ failure.message }}</pre>
+                </li>
+              {% endfor %}
+            </ol>
+          </details>
+        {% endif %}
       </li>
     {% endfor %}
   </ul>
