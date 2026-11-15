@@ -76,6 +76,7 @@ from krater.services import (
     compute_watch,
     funding_holds,
     job_costs,
+    network_watch,
     smoke,
 )
 from krater.services.compute_settings import ComputePolicy
@@ -154,10 +155,16 @@ MICROUSD_PER_CENT = 10_000
 #: A box is idle while its GPU use stays under this (percent), and its CPU use, when reported, under that.
 IDLE_GPU_PERCENT = 5
 IDLE_CPU_PERCENT = 10
+#: Idle is judged from the runner's last heartbeat only while it's this fresh. An older one is a silent runner (or
+#: Krater's network down): what it last said about the GPU is no longer true, and the heartbeat timeout, which
+#: knows about the network, decides about the silence.
+IDLE_BEAT_STALE = timedelta(minutes=5)
 #: The warning before a stopped box is destroyed.
 DESTROY_WARNING = timedelta(hours=1)
 #: A live instance Krater hasn't looked at for this long (Krater itself was down) restarts its runner deadlines.
 WATCH_GAP = timedelta(minutes=5)
+#: While a network hold lasts, its event is written again this often (`Scheduler._hold_for_network`).
+NETWORK_HOLD_REMINDER = timedelta(hours=1)
 #: `destroy_reason` of a box the member asked to start again elsewhere.
 MOVED_BY_MEMBER = "moved by member"
 #: `destroy_reason` of a machine Krater destroyed because compute was halted. Its job goes back in the queue.
@@ -272,8 +279,13 @@ class Scheduler:
         weave_client: WeaveClient,
         pacer: SearchPacer | None = None,
         registry: Registry | None = None,
+        network: network_watch.NetworkCheck | None = None,
     ) -> None:
         self.session = session
+        # Asked before acting on a silent runner (`_hold_for_network`). Without one (tests, one-off passes), the
+        # network counts as up.
+        self.network = network
+        self._network_problem: str | None | bool = False  # False: not asked yet this pass
         # Asked for each image's digest when renting (`_image_for`); None asks nothing and launches by tag.
         self.registry = registry
         self._digests: dict[str, str | None] = {}
@@ -876,6 +888,9 @@ class Scheduler:
         beat = row.last_heartbeat or {}
         if minutes <= 0 or "gpu_util" not in beat or row.runner_starts < row.runner_starts_needed:
             return  # off, nothing to judge by, or a heartbeat from before the container restarted
+        if not self._beat_is_fresh(row):
+            row.idle_since = None
+            return
         if beat["gpu_util"] >= IDLE_GPU_PERCENT:
             row.idle_since = None
             row.idle_warned_at = None
@@ -1095,6 +1110,9 @@ class Scheduler:
         since = row.entered_running_at or row.running_since
         if since is None:
             return
+        if self._silent_since_restart(row) and self._network_down(row) is not None:
+            # Still held: the deadlines keep restarting until the network is back, then run in full.
+            row.watch_resumed_at = self.now
         if row.watch_resumed_at is not None:
             since = max(since, row.watch_resumed_at)
         if row.runner_starts < row.runner_starts_needed and self._runner_survived(row):
@@ -1112,6 +1130,8 @@ class Scheduler:
             )
         if row.runner_starts < row.runner_starts_needed:
             if self.now - since >= timedelta(minutes=policy.runner_start_minutes):
+                if self._hold_for_network(row, job):
+                    return
                 if job.kind is ComputeJobKind.BOX and row.runner_starts > 0:
                     # It ran before: its disk may hold work newer than the last sync. Stop it, don't destroy it.
                     self._stop_box(row, job, "the runner didn't start again")
@@ -1122,6 +1142,8 @@ class Scheduler:
         if row.watch_resumed_at is not None:
             last = max(last, row.watch_resumed_at)
         if self.now - last >= timedelta(minutes=policy.heartbeat_timeout_minutes):
+            if self._hold_for_network(row, job):
+                return
             if job.kind is ComputeJobKind.BOX:
                 self._stop_box(row, job, "the runner stopped reporting")
                 return
@@ -1132,6 +1154,63 @@ class Scheduler:
                 now=self.now,
             )
             self._destroy(row, "runner stopped reporting")
+
+    def _beat_is_fresh(self, row: ComputeInstance) -> bool:
+        return row.last_heartbeat_at is not None and self.now - row.last_heartbeat_at < IDLE_BEAT_STALE
+
+    @staticmethod
+    def _silent_since_restart(row: ComputeInstance) -> bool:
+        """Whether the machine's deadlines were restarted (a hold, or Krater back from being away) and its runner
+        hasn't reported since."""
+        return row.watch_resumed_at is not None and (
+            row.last_heartbeat_at is None or row.watch_resumed_at > row.last_heartbeat_at
+        )
+
+    def _network_down(self, row: ComputeInstance) -> str | None:
+        """Why Krater's own network is down (`krater.services.network_watch`), asked once a pass, or `None`: up, no
+        check, or this runner silent for over `HOLD_LIMIT`, too long to wait on any longer."""
+        if self.network is None:
+            return None
+        heard = row.last_heartbeat_at or row.runner_started_at or row.entered_running_at or row.running_since
+        if heard is not None and self.now - heard >= network_watch.HOLD_LIMIT:
+            return None
+        if self._network_problem is False:
+            self._network_problem = self.network.problem(self.session, now=self.now)
+        return self._network_problem
+
+    def _hold_for_network(self, row: ComputeInstance, job: ComputeJob) -> bool:
+        """Whether to hold an action on a runner's silence because Krater's own network is down: its silence says
+        nothing about the machine then. A held machine's deadlines restart on every pass while the network is down
+        (`_check_runner`), so once it's back Krater waits them out in full, looking at Vast's listing each pass,
+        before acting. A runner silent for over `HOLD_LIMIT` is acted on anyway."""
+        problem = self._network_down(row)
+        if problem is None:
+            return False
+        row.watch_resumed_at = self.now
+        # One event per hold (and an hourly reminder while it lasts), not one a pass.
+        is_hold = ComputeEvent.kind == "network_hold"
+        last_hold = self.session.scalar(
+            sa.select(sa.func.max(ComputeEvent.at)).where(ComputeEvent.job_id == job.id, is_hold)
+        )
+        last_other = self.session.scalar(
+            sa.select(sa.func.max(ComputeEvent.at)).where(ComputeEvent.job_id == job.id, sa.not_(is_hold))
+        )
+        if (
+            last_hold is None
+            or (last_other is not None and last_other > last_hold)
+            or self.now - last_hold >= NETWORK_HOLD_REMINDER
+        ):
+            _event(
+                self.session,
+                job,
+                "network_hold",
+                f"The runner is silent, but so is Krater's network: {problem}. Krater does nothing about the "
+                "machine until the network is back, then gives the runner its deadlines again.",
+                now=self.now,
+                instance=row,
+            )
+        logger.warning("krater.compute: holding instance %s: %s", row.provider_instance_id, problem)
+        return True
 
     @staticmethod
     def _runner_survived(row: ComputeInstance) -> bool:
@@ -1224,6 +1303,9 @@ class Scheduler:
         beat = row.last_heartbeat or {}
         if "gpu_util" not in beat and "sessions" not in beat:
             return  # nothing to judge by; the heartbeat timeout covers a silent runner
+        if not self._beat_is_fresh(row):
+            row.idle_since = None  # count again from fresh reports
+            return
         idle = beat.get("gpu_util", 0) < IDLE_GPU_PERCENT and beat.get("sessions", 0) == 0
         if "cpu_util" in beat:
             idle = idle and beat["cpu_util"] < IDLE_CPU_PERCENT
@@ -1967,6 +2049,7 @@ def run_pass(
     weave_client: WeaveClient,
     pacer: SearchPacer | None = None,
     registry: Registry | None = None,
+    network: network_watch.NetworkCheck | None = None,
 ) -> PassResult:
     return Scheduler(
         session,
@@ -1977,4 +2060,5 @@ def run_pass(
         weave_client=weave_client,
         pacer=pacer,
         registry=registry,
+        network=network,
     ).run()

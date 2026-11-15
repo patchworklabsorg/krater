@@ -65,6 +65,9 @@ JOBS_WAITING_AGE = timedelta(minutes=15)
 UNKNOWN_CHARGES_WINDOW = timedelta(hours=24)
 #: The audit action the reconciliation writes for them (`krater.compute.reconcile.AUDIT_UNKNOWN_CHARGES`).
 AUDIT_UNKNOWN_CHARGES = "compute_unknown_charges"
+#: alastor's every-minute ping (`krater.services.network_watch`) missing this long opens an alert: longer than a
+#: deploy's restart.
+EDGE_PING_ALERT = timedelta(minutes=10)
 #: Failures (`OpsAlertFailure`) are kept this long, then pruned by `check`.
 HISTORY_KEEP = timedelta(days=14)
 #: The failures `recent` lists under each problem, newest first.
@@ -107,6 +110,7 @@ CONDITION_TITLES = {
     "low_credit": "The Vast account's credit is low",
     "credit_out": "The Vast account is out of credit",
     "store_full": "Krater's storage is nearly full",
+    "edge_ping_stale": "alastor's ping stopped reaching Krater",
 }
 
 
@@ -285,6 +289,21 @@ def _credit_out(session: Session) -> str | None:
     )
 
 
+def _edge_ping_stale(session: Session, now: datetime) -> str | None:
+    """alastor's ping, seen before, has stopped: runners can't reach Krater, or alastor's timer stopped."""
+    from krater.services import network_watch
+
+    last = network_watch.last_edge_ping(session)
+    if last is None or now - last < EDGE_PING_ALERT:
+        return None  # never set up, or arriving
+    return (
+        f"The last one arrived at {last:%Y-%m-%d %H:%M} UTC. It comes over the path runners report on (Cloudflare, "
+        "alastor, the tailnet to weft), so they likely can't reach Krater either; or alastor's krater-edge-ping timer "
+        "stopped. Meanwhile Krater does nothing about machines whose runners go silent, for up to "
+        f"{network_watch.HOLD_LIMIT.total_seconds() / 3600:.0f} hours."
+    )
+
+
 def _store_full(session: Session, settings: Settings) -> str | None:
     from krater.services import compute_watch
 
@@ -313,6 +332,7 @@ def check(session: Session, settings: Settings, *, now: datetime) -> None:
     _set_condition(session, "low_credit", _low_credit(session), now=now)
     _set_condition(session, "credit_out", _credit_out(session), now=now)
     _set_condition(session, "store_full", _store_full(session, settings), now=now)
+    _set_condition(session, "edge_ping_stale", _edge_ping_stale(session, now), now=now)
     for key, rule in FAILURE_RULES.items():
         row = session.get(OpsAlert, key, with_for_update=True)
         if row is not None and row.last_failed_at is not None and now - row.last_failed_at > rule.window:

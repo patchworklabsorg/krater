@@ -141,6 +141,22 @@ When Weave's syncs or Quilt and Stash deliveries fail at the same minutes as the
 down, not Vast. A blip of a few minutes is harmless: the scheduler doesn't fail a machine for heartbeats it missed
 while it couldn't reach out (`WATCH_GAP`).
 
+## "alastor's ping stopped reaching Krater"
+
+alastor, the public edge, requests `/healthz/edge` every minute over the path runners report on: Cloudflare, Traefik
+on alastor, the tailnet to weft (infra `hosts/alastor/edge.nix`, timer `krater-edge-ping`). When it stops arriving,
+runners likely can't reach Krater either, so every machine looks silent.
+
+While it's stale, or the worker's own connection test (TCP to 1.1.1.1 and 8.8.8.8, and a DNS lookup) fails, Krater
+does nothing about a machine whose runner has gone silent: no "stopped reporting", no "didn't start". The job's log
+says "The runner is silent, but so is Krater's network". Once the network is back, each held runner gets its full
+deadlines again, and Krater looks at Vast's listing before acting. A runner silent for over 6 hours is acted on
+anyway, after one more heartbeat timeout. Live runners stop their own machines after 3 hours without Krater.
+
+To check: `systemctl status krater-edge-ping` and its journal on alastor; `curl -fsS
+https://krater.patchworklabs.org/healthz/edge` from anywhere. A ping never seen (staging before the timer, local
+development) holds nothing.
+
 ## Stuck background jobs
 
 Two alerts are about the worker's own jobs (not members' compute jobs):

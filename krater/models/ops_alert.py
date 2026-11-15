@@ -50,3 +50,15 @@ class WorkerHeartbeat(Base):
 
     id: Mapped[int] = mapped_column(sa.Integer, primary_key=True, default=1)
     at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
+
+
+class EdgePing(Base):
+    """When the ping from alastor, the public edge, last reached the portal (one row). alastor requests
+    `/healthz/edge` every minute over the same path runners report on (Cloudflare, alastor, the tailnet, weft), so
+    a stale ping means runners can't reach Krater either (`krater.services.network_watch`)."""
+
+    __tablename__ = "edge_ping"
+    __table_args__ = (sa.CheckConstraint("id = 1", name="singleton"),)
+
+    id: Mapped[int] = mapped_column(sa.Integer, primary_key=True, default=1)
+    at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)

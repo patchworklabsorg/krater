@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from krater.db import get_session
 from krater.models import User
-from krater.services import funding_holds, grants, ops_alerts, ospool_grants, people, teams
+from krater.services import funding_holds, grants, network_watch, ops_alerts, ospool_grants, people, teams
 from krater.services import projects as project_service
 from krater.services import users as user_service
 from krater.weave import WeaveClient, get_weave_client
@@ -69,6 +69,17 @@ def home(
 def healthz(session: Annotated[Session, Depends(get_session)]) -> dict[str, str]:
     session.execute(text("SELECT 1"))
     return {"status": "ok"}
+
+
+@router.get("/healthz/edge")
+def healthz_edge(session: Annotated[Session, Depends(get_session)]):
+    """alastor, the public edge, requests this every minute over the path runners report on (Cloudflare, alastor,
+    the tailnet to weft): while it arrives, runners can reach Krater. The scheduler holds actions on silent runners
+    when it stops (`krater.services.network_watch`). Open, like `/healthz`: a forged request can only make Krater act
+    as it did before the check existed."""
+    if network_watch.record_edge_ping(session, now=datetime.now(UTC)):
+        session.commit()
+    return JSONResponse({"status": "ok"}, headers={"Cache-Control": "no-store"})
 
 
 @router.get("/healthz/worker")

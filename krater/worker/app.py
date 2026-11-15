@@ -31,6 +31,7 @@ from krater.services import (
     compute_watch,
     grants,
     live_prices,
+    network_watch,
     ops_alerts,
     ospool_grants,
     people,
@@ -259,6 +260,10 @@ def price_history_record(timestamp: int) -> None:
 #: The scheduler's memory of when it last searched for what (`krater.compute.search_pacing`), for this process.
 SEARCH_PACER = SearchPacer()
 
+#: Whether Krater's own network is up, asked before acting on a silent runner (`krater.services.network_watch`). One
+#: for the process: it remembers whether its outbound test has ever passed here.
+NETWORK_CHECK = network_watch.LiveNetworkCheck()
+
 #: Only one scheduler pass runs at a time, so a slow pass can't overlap the next minute's and rent twice.
 COMPUTE_SCHEDULER_LOCK = "compute_scheduler"
 
@@ -282,6 +287,7 @@ def compute_schedule(timestamp: int) -> None:
             runner_sha256=compute_launch.runner_sha256(settings.compute_runner_binary_path),
             weave_client=get_weave_client(),
             pacer=SEARCH_PACER,
+            network=NETWORK_CHECK,
             registry=get_registry(),
         )
         if result.errors:

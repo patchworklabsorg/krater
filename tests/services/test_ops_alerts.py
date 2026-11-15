@@ -331,3 +331,20 @@ def test_a_one_off_cleared_alert_says_when(db_session: Session) -> None:
     _watch(db_session, slack, NOW + timedelta(hours=2))
 
     assert _texts(slack)[-1].endswith("\nSeen once, at 2026-10-22 12:00 UTC.")
+
+
+def test_alastors_ping_stopping_opens_an_alert(db_session: Session) -> None:
+    from krater.services import network_watch
+
+    _fresh_prices(db_session)
+    slack = FakeSlackClient()
+    assert _watch(db_session, slack, NOW) == []  # never set up: nothing to miss
+
+    network_watch.record_edge_ping(db_session, now=NOW)
+    assert _watch(db_session, slack, NOW + timedelta(minutes=5)) == []
+    assert _watch(db_session, slack, NOW + ops_alerts.EDGE_PING_ALERT) == ["edge_ping_stale"]
+    assert "alastor's ping stopped reaching Krater" in _texts(slack)[-1]
+
+    network_watch.record_edge_ping(db_session, now=NOW + timedelta(minutes=12))
+    assert _watch(db_session, slack, NOW + timedelta(minutes=13)) == ["edge_ping_stale"]
+    assert "cleared" in _texts(slack)[-1]
