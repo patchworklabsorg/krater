@@ -222,7 +222,9 @@ The page also shows Vast's daily search quota and any hourly spend check that di
 ## Alerts
 
 When something behind Krater keeps failing, the worker posts in the admin alerts Slack channel, again every 6 hours
-while it lasts, and when it clears. It covers:
+while it lasts, and when it clears, saying how long it lasted. Each alert quotes the last failure: what failed and its
+root cause (a DNS lookup, a connection refused or timed out ...). The Problems card on `/admin/compute` lists every
+failure of the last 24 hours, kept for 14 days. It covers:
 
 - a background task that keeps failing: the compute scheduler, spend reconciliation, cleaning up unfinished uploads,
   recording Vast's prices, releasing held grants, syncing admins' SSH keys to boxes, importing OSPool usage, delivery

@@ -9,7 +9,15 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from krater.config import Settings
-from krater.models import GpuPrice, OpsAlert, QuiltOutbox, QuiltOutboxState, StashArchive, StashArchiveState
+from krater.models import (
+    GpuPrice,
+    OpsAlert,
+    OpsAlertFailure,
+    QuiltOutbox,
+    QuiltOutboxState,
+    StashArchive,
+    StashArchiveState,
+)
 from krater.services import ops_alerts
 from krater.slack.errors import SlackRequestFailedError
 from krater.slack.fake import FakeSlackClient
@@ -257,3 +265,69 @@ def test_recent_lists_open_alerts_and_failures_under_the_threshold(db_session: S
 
     # An open alert stays listed however old its last failure.
     assert [p.key for p in ops_alerts.recent(db_session, now=NOW + timedelta(days=3))] == ["compute_schedule"]
+
+
+def test_each_failure_is_kept_for_the_admin_page_and_pruned_later(db_session: Session) -> None:
+    for n in range(3):
+        ops_alerts.record_failure(db_session, "compute_schedule", f"failure {n}", now=NOW + timedelta(minutes=n))
+    ops_alerts.record_failure(db_session, "box_admins", "WeaveUnavailableError: x", now=NOW + timedelta(minutes=1))
+
+    problems = {p.key: p for p in ops_alerts.recent(db_session, now=NOW + timedelta(minutes=5))}
+    schedule = problems["compute_schedule"]
+    assert schedule.history_count == 3
+    assert [f.message for f in schedule.history] == ["failure 2", "failure 1", "failure 0"]
+    assert [f.message for f in problems["box_admins"].history] == ["WeaveUnavailableError: x"]
+
+    ops_alerts.check(db_session, Settings(), now=NOW + ops_alerts.HISTORY_KEEP + timedelta(minutes=2))
+    left = db_session.scalars(
+        sa.select(OpsAlertFailure.message)
+        .where(OpsAlertFailure.key.in_(["compute_schedule", "box_admins"]))
+        .order_by(OpsAlertFailure.at)
+    ).all()
+    assert left == ["failure 2"]
+
+
+def test_a_condition_keeps_one_history_row_per_opening(db_session: Session) -> None:
+    slack = FakeSlackClient()
+    for minutes in (0, 5, 10):  # never refreshed: open the whole time
+        _watch(db_session, slack, NOW + timedelta(minutes=minutes))
+
+    rows = db_session.scalars(sa.select(OpsAlertFailure).where(OpsAlertFailure.key == "prices_stale")).all()
+    assert len(rows) == 1 and "hasn't refreshed" in rows[0].message
+
+    _fresh_prices(db_session)
+    _watch(db_session, slack, NOW + timedelta(minutes=15))
+    assert "Seen for 10 minutes (2026-10-22 12:00–12:10 UTC)." in _texts(slack)[-1]
+
+
+def test_a_cleared_alert_says_how_long_it_lasted(db_session: Session) -> None:
+    _fresh_prices(db_session)
+    slack = FakeSlackClient()
+    rule = ops_alerts.FAILURE_RULES["compute_schedule"]
+    for n in range(rule.threshold + 3):  # a pass a minute, all failing: a network blip
+        ops_alerts.record_failure(
+            db_session, "compute_schedule", "VastUnavailableError: x", now=NOW + timedelta(minutes=n)
+        )
+    _watch(db_session, slack, NOW + timedelta(minutes=10))
+
+    _watch(db_session, slack, NOW + timedelta(minutes=7) + rule.window + timedelta(minutes=1))
+
+    assert _texts(slack)[-1] == (
+        ":white_check_mark: *Krater: cleared:* The compute scheduler keeps failing\n"
+        "8 failures over 7 minutes (2026-10-22 12:00–12:07 UTC)."
+    )
+    # The counts stay for the admin page until the next failure starts them again.
+    assert db_session.get(OpsAlert, "compute_schedule").failures == 8
+    ops_alerts.record_failure(db_session, "compute_schedule", "again", now=NOW + timedelta(hours=2))
+    assert db_session.get(OpsAlert, "compute_schedule").failures == 1
+
+
+def test_a_one_off_cleared_alert_says_when(db_session: Session) -> None:
+    _fresh_prices(db_session)
+    slack = FakeSlackClient()
+    ops_alerts.record_failure(db_session, "stalled_jobs", "job 7 cut off", now=NOW)
+    _watch(db_session, slack, NOW + timedelta(minutes=1))
+
+    _watch(db_session, slack, NOW + timedelta(hours=2))
+
+    assert _texts(slack)[-1].endswith("\nSeen once, at 2026-10-22 12:00 UTC.")

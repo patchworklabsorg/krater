@@ -456,6 +456,34 @@ def test_the_sweep_destroys_krater_instances_krater_does_not_know(db_session, cl
     assert other in fake.instances  # not Krater's label prefix: never touched
 
 
+def test_a_failed_step_says_what_failed_and_why(db_session, fake) -> None:
+    """The admin alert quotes these: "1 provider errors in one pass" alone sent admins to a log they couldn't read."""
+    import socket
+
+    fake.add_offer(2001, 2001, "RTX 3060", dph_base=0.1, min_bid=0.05, storage_cost=0.1, gpu_ram_mb=12288)
+    from krater.vast import CreateInstance
+
+    client = fake.client()
+    stray = client.create_instance(2001, CreateInstance(image="x", disk_gb=8, label="krater-job-deadbeef0000-1"))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "DELETE":
+            try:
+                raise socket.gaierror(socket.EAI_AGAIN, "Temporary failure in name resolution")
+            except socket.gaierror as exc:
+                raise httpx.ConnectError(str(exc), request=request) from exc
+        return fake.handle(request)
+
+    client._http = httpx.Client(transport=httpx.MockTransport(handler))
+
+    result = _pass(db_session, client)
+
+    assert result.errors == 1 and stray in fake.instances
+    (problem,) = result.problems
+    assert problem.startswith(f"destroying unknown instance {stray}: VastUnavailableError: could not reach Vast")
+    assert "Temporary failure in name resolution" in problem and "DNS lookup failed" in problem
+
+
 def test_a_refused_create_puts_the_job_back_in_its_place(db_session, member, project, fake) -> None:  # noqa: F811
     job = _submit(db_session, member, project)
 

@@ -127,6 +127,20 @@ The scheduler keeps retrying, and after 5 failures in 15 minutes the alerts chan
 failing". Machines already running keep running and keep billing. If Vast is down for long, or you can't tell whether
 machines are being watched, use the stop switch. Machines that can't reach Krater stop themselves after 3 hours.
 
+Each alert says what failed and why: the error's root cause and what it usually means. The Problems card on
+`/admin/compute` lists every failure of the last 24 hours. Read them before blaming Vast:
+
+| The failure says | What it means |
+| --- | --- |
+| "The DNS lookup failed" (`gaierror`, "Temporary failure in name resolution") | The server's DNS servers didn't answer, or its own internet connection is down |
+| "Nothing answered while connecting" (`ConnectTimeout`), "no route" | The network between the server and Vast is down, often the server's own |
+| "The host refused the connection" | Vast's address answered but refused: likely Vast |
+| "took too long to answer" (`ReadTimeout`), "Vast answered 5xx" | Vast is slow or erroring |
+
+When Weave's syncs or Quilt and Stash deliveries fail at the same minutes as the scheduler, the server's own network is
+down, not Vast. A blip of a few minutes is harmless: the scheduler doesn't fail a machine for heartbeats it missed
+while it couldn't reach out (`WATCH_GAP`).
+
 ## Stuck background jobs
 
 Two alerts are about the worker's own jobs (not members' compute jobs):

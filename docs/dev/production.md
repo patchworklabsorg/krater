@@ -220,7 +220,9 @@ itself starts at boot. `migrate` runs once per `up` and is safe to re-run.
 The worker posts to `KRATER_SLACK_ALERTS_CHANNEL_ID` when something keeps failing: Quilt delivery, Stash archiving,
 Slack tasks, the compute scheduler, spend reconciliation, background jobs ending in errors, stuck waiting or cut off
 by a worker that died, or prices not refreshed for two days
-(`krater/services/ops_alerts.py`). It posts again every 6 hours while a problem lasts, and once when it clears.
+(`krater/services/ops_alerts.py`). It posts again every 6 hours while a problem lasts, and once when it clears, with how
+long it lasted. Each failure names its root cause (`krater/net_errors.py`) and is kept for 14 days
+(`ops_alert_failures`) for the Problems card on `/admin/compute`.
 
 It can't report its own death, so set up one check outside Krater (an uptime service, or the lab's monitoring) on
 `https://<KRATER_DOMAIN>/healthz/worker`, every 5 minutes, alerting on anything but `200`. It answers `503` once the

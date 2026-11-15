@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 
 import procrastinate
 
-from krater import providers
+from krater import net_errors, providers
 from krater.compute import launch as compute_launch
 from krater.compute import reconcile as compute_reconciler
 from krater.compute import scheduler as compute_scheduler
@@ -93,7 +93,25 @@ def _report_failure(key: str, message: str) -> None:
 
 
 def _failure(exc: BaseException) -> str:
-    return f"{type(exc).__name__}: {exc}"[:500]
+    """What failed and why for an alert: the error, its root cause (a DNS lookup, a refused connection ...) and what
+    that usually means (`krater.net_errors`)."""
+    return net_errors.describe(exc, limit=1000)
+
+
+#: Problems an alert quotes from one scheduler pass; the rest are counted.
+PASS_PROBLEMS_SHOWN = 3
+
+
+def _pass_errors(result: compute_scheduler.PassResult) -> str:
+    """The alert text for a scheduler pass that finished with provider errors: what failed and why."""
+    shown = result.problems[:PASS_PROBLEMS_SHOWN]
+    text = f"{result.errors} provider error{'s' if result.errors != 1 else ''} in one pass"
+    if not shown:
+        return text + "; see the worker's log."
+    text += ": " + "; ".join(shown)
+    if result.errors > len(shown):
+        text += f"; and {result.errors - len(shown)} more (see the worker's log)"
+    return text if text.endswith((".", ")")) else text + "."
 
 
 @app.periodic(cron="*/5 * * * *")
@@ -267,7 +285,7 @@ def compute_schedule(timestamp: int) -> None:
             registry=get_registry(),
         )
         if result.errors:
-            _report_failure("compute_schedule", f"{result.errors} provider errors in one pass; see the worker's log.")
+            _report_failure("compute_schedule", _pass_errors(result))
         if result.rented or result.destroyed or result.swept or result.errors:
             logger.info(
                 "krater compute_schedule: rented %d, destroyed %d, swept %d, errors %d",

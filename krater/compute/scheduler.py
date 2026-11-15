@@ -40,7 +40,7 @@ from decimal import ROUND_FLOOR, Decimal
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
-from krater import providers
+from krater import net_errors, providers
 from krater.compute import launch, market, offers, runner_api, search_quota, spend
 from krater.compute.search_pacing import SearchPacer
 from krater.config import Settings
@@ -176,6 +176,9 @@ class PassResult:
     destroyed: list[int] = field(default_factory=list)  # Vast ids
     swept: list[int] = field(default_factory=list)  # Vast ids destroyed without a Krater record
     errors: int = 0
+    #: What failed and why, one line per error (`Scheduler._note_error`), for the admin alert: "1 provider error"
+    #: alone sent admins to a log they may not be able to read.
+    problems: list[str] = field(default_factory=list)
 
 
 def _event(session: Session, job: ComputeJob, kind: str, message: str, *, now: datetime, instance=None, **payload):
@@ -342,6 +345,11 @@ class Scheduler:
         self.session.commit()
         return self.result
 
+    def _note_error(self, what: str, exc: BaseException) -> None:
+        """Count a provider error the pass carried on past, and say what failed and why for the admin alert."""
+        self.result.errors += 1
+        self.result.problems.append(f"{what}: {net_errors.describe(exc, limit=400)}")
+
     def _ours(self) -> sa.ColumnElement[bool]:
         """Instances rented from this pass's provider: another provider's are its own scheduler's to watch."""
         return ComputeInstance.provider == self.provider.name
@@ -391,10 +399,10 @@ class Scheduler:
                 if row.is_live and row.provider_instance_id is not None:
                     try:
                         self._destroy(row, "budget reached")
-                    except ProviderError:
+                    except ProviderError as exc:
                         # The job is finished, so the next pass's watch retries the destroy.
                         logger.exception("krater.compute: budget stop of instance %s failed", row.provider_instance_id)
-                        self.result.errors += 1
+                        self._note_error(f"stopping instance {row.provider_instance_id} at its budget", exc)
                     stopped.append(row.provider_instance_id)
         budget_alerts.record_teardown(
             self.session,
@@ -482,9 +490,9 @@ class Scheduler:
                             instance=row,
                             provider_instance_id=instance.id,
                         )
-            except ProviderError:
+            except ProviderError as exc:
                 logger.exception("krater.compute: sweeping instance %s failed", instance.id)
-                self.result.errors += 1
+                self._note_error(f"destroying unknown instance {instance.id}", exc)
         self.session.commit()
 
     def _destroy_and_confirm(self, provider_instance_id: str) -> bool:
@@ -510,9 +518,9 @@ class Scheduler:
         for row in list(self.session.scalars(stmt)):
             try:
                 self._watch_one(row, listing.get(row.provider_instance_id))
-            except ProviderError:
+            except ProviderError as exc:
                 logger.exception("krater.compute: watching instance %s failed", row.provider_instance_id)
-                self.result.errors += 1
+                self._note_error(f"watching instance {row.provider_instance_id} (job {row.job_id})", exc)
             self.session.commit()
 
     def _destroy(self, row: ComputeInstance, reason: str) -> bool:
@@ -1163,11 +1171,13 @@ class Scheduler:
         (unlike an outbid one), so a failed call is retried on every pass until it runs (`start_requested_at`)."""
         try:
             self.client.start_instance(row.provider_instance_id)
-        except ProviderError:
+        except ProviderError as exc:
             logger.warning(
-                "krater.compute: starting self-stopped instance %s failed; retrying", row.provider_instance_id
+                "krater.compute: starting self-stopped instance %s failed; retrying: %s",
+                row.provider_instance_id,
+                net_errors.describe(exc),
             )
-            self.result.errors += 1
+            self._note_error(f"starting self-stopped instance {row.provider_instance_id} (job {row.job_id})", exc)
 
     # -- Boxes -----------------------------------------------------------------------------------------
 
@@ -1453,9 +1463,9 @@ class Scheduler:
                     logger.warning("krater.compute: %s; not searching until then", exc)
                     job.state_reason = _quota_reason(exc.reset_at, self.provider.title)
                     stop = True
-                except ProviderError:
+                except ProviderError as exc:
                     logger.exception("krater.compute: starting job %s failed", job.id)
-                    self.result.errors += 1
+                    self._note_error(f"starting job {job.id}", exc)
                     stop = True
                 self.session.commit()
                 if stop:

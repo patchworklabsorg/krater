@@ -2497,3 +2497,18 @@ fieldset.choice-list legend {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.problem-history {
+  margin-top: 0.5rem;
+  font-size: var(--text-sm);
+}
+.problem-history__list {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+.problem-history__list time {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
