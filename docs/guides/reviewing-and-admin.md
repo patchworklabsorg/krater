@@ -239,7 +239,7 @@ failure of the last 24 hours, kept for 14 days. It covers:
 - the Vast account's credit under the low credit alert, or out (always on);
 - storage 80% full (when the server knows the store's size).
 - alastor's every-minute ping no longer reaching Krater: runners likely can't either, so Krater holds actions on
-  silent machines until it's back.
+  silent machines until it's back. Only where `KRATER_EDGE_PING_EXPECTED` is on.
 
 What to do about each is in the [compute runbook](compute-runbook.md).
 

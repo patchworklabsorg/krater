@@ -185,6 +185,7 @@ KRATER_WEAVE_MODE=live
 KRATER_PRICING_MODE=live
 KRATER_SLACK_MODE=live
 KRATER_SLACK_ALERTS_CHANNEL_ID=C0987654321          # admin alerts (slack-setup.md); blank logs them instead
+KRATER_EDGE_PING_EXPECTED=true                      # once alastor's krater-edge-ping timer reaches this deploy
 KRATER_S3_MODE=live
 KRATER_S3_PUBLIC_ENDPOINT_URL=https://storage.krater.example.org
 

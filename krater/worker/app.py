@@ -262,7 +262,7 @@ SEARCH_PACER = SearchPacer()
 
 #: Whether Krater's own network is up, asked before acting on a silent runner (`krater.services.network_watch`). One
 #: for the process: it remembers whether its outbound test has ever passed here.
-NETWORK_CHECK = network_watch.LiveNetworkCheck()
+NETWORK_CHECK = network_watch.LiveNetworkCheck(edge_ping_expected=get_settings().edge_ping_expected)
 
 #: Only one scheduler pass runs at a time, so a slow pass can't overlap the next minute's and rent twice.
 COMPUTE_SCHEDULER_LOCK = "compute_scheduler"

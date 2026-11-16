@@ -153,9 +153,13 @@ says "The runner is silent, but so is Krater's network". Once the network is bac
 deadlines again, and Krater looks at Vast's listing before acting. A runner silent for over 6 hours is acted on
 anyway, after one more heartbeat timeout. Live runners stop their own machines after 3 hours without Krater.
 
+All of this is only where `KRATER_EDGE_PING_EXPECTED` is on: turn it on once alastor's timer reaches the deploy.
+Off, pings are recorded but ignored. The endpoint is open, so a setting, not the first ping that arrives, turns
+the check on; a request from anyone else can't start holds or this alert. On and no ping yet counts as stale.
+
 To check: `systemctl status krater-edge-ping` and its journal on alastor; `curl -fsS
-https://krater.patchworklabs.org/healthz/edge` from anywhere. A ping never seen (staging before the timer, local
-development) holds nothing.
+https://krater.patchworklabs.org/healthz/edge` from anywhere answers `{"status":"ok"}` (harmless: it can only make
+the check pass).
 
 ## Stuck background jobs
 
