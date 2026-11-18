@@ -457,7 +457,7 @@ def _box_lines(box: dict, ident: str, *, ended: bool = False, workspace: dict | 
     if trouble:
         lines.append(
             f"NOT SAVING: the last {trouble['failures']} save(s) of /workspace failed, last at {_when(trouble['at'])}: "
-            f"{trouble['error']}. Work since the last good save is only on the machine; a full storage quota is the "
+            f"{trouble['error'].rstrip('.')}. Work since the last good save is only on the machine; a full storage quota is the "
             "usual cause (`krater files <project>`)"
         )
     if kept:
