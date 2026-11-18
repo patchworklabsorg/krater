@@ -41,6 +41,7 @@ from krater.services import (
     ospool_grants,
     people,
     pricing,
+    project_updates,
     residency,
     slack_membership,
     stash_archives,
@@ -519,7 +520,9 @@ def _build_detail_context(
     revisions = sorted(project.revisions, key=lambda revision: revision.number, reverse=True)
 
     reviewer_ids = {review.reviewer_id for revision in revisions for review in revision.reviews}
-    user_ids = reviewer_ids | {project.submitter_id} | {member.user_id for member in project.members}
+    updates = project_updates.list_for(session, actor, project)
+    author_ids = {view.update.author_id for view in updates}
+    user_ids = reviewer_ids | author_ids | {project.submitter_id} | {member.user_id for member in project.members}
     users = list(session.scalars(sa.select(User).where(User.id.in_(user_ids))))
     names_by_id = people.names(weave_client, users)
     subs_by_id = {user.id: user.weave_sub for user in users}
@@ -608,7 +611,8 @@ def _build_detail_context(
             continue
         asked_cents = revision.budget_requested_cents
         if revision.kind is RevisionKind.AMENDMENT:
-            if revision is not current or amendment_adds_cents is None:
+            # A top-up request's estimate is the approved application's, not sized to the top-up: don't flag it.
+            if revision is not current or amendment_adds_cents is None or revision.topup is not None:
                 continue
             asked_cents = amendment_adds_cents
         total_cents = estimate.get("total_cents", 0)
@@ -642,6 +646,10 @@ def _build_detail_context(
         "estimate_mismatch_by_revision": estimate_mismatch_by_revision,
         "amendment_adds_cents": amendment_adds_cents,
         "names_by_id": names_by_id,
+        # Progress updates and top-up requests (`krater.services.project_updates`), newest first.
+        "updates": updates,
+        "can_post_update": project_updates.can_post(actor, project),
+        "can_request_topup": project_updates.can_post(actor, project) and project_updates.can_request_topup(project),
         "is_lead": is_lead,
         "is_team": is_team,
         "team": team,

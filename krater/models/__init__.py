@@ -40,6 +40,7 @@ from krater.models.project import Project
 from krater.models.project_member import ProjectMember
 from krater.models.project_revision import ProjectRevision
 from krater.models.project_secret import ProjectSecret
+from krater.models.project_update import ProjectUpdate
 from krater.models.quilt_outbox import QuiltOutbox
 from krater.models.review import Review
 from krater.models.site_settings import SiteSettings
@@ -83,6 +84,7 @@ __all__ = [
     "ProjectComputeSettings",
     "ProjectMember",
     "ProjectRevision",
+    "ProjectUpdate",
     "ProjectSecret",
     "ProviderAccount",
     "ComputeWaitSample",

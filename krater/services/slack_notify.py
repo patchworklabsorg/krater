@@ -31,6 +31,7 @@ from krater.models import (
     Project,
     ProjectRevision,
     ProjectStatus,
+    ProjectUpdate,
     ReviewDecision,
     RevisionKind,
     RevisionOutcome,
@@ -255,7 +256,7 @@ def _stage_label(revision: ProjectRevision) -> str:
     if revision.kind is RevisionKind.COMPLETION:
         return "Completion review"
     if revision.kind is RevisionKind.AMENDMENT:
-        return "Amendment review"
+        return "Top-up request" if revision.topup is not None else "Amendment review"
     return "Proposal review"
 
 
@@ -269,6 +270,15 @@ def _write_up_excerpt(write_up: str) -> str:
 def _budget_fields(revision: ProjectRevision) -> list[dict]:
     """The amounts on a review message: what approval funds, and for a proposal or amendment the finished product's
     rough total, which approval doesn't fund."""
+    topup = revision.topup
+    if topup is not None:
+        # A top-up request: what it adds, the total that makes, and how much of the budget is used.
+        used = f"{_format_cents(topup.spent_cents)} of {_format_cents(topup.ceiling_cents)}"
+        return [
+            {"type": "mrkdwn", "text": f"*Asks for:*\n{_format_cents(topup.topup_cents or 0)} more"},
+            {"type": "mrkdwn", "text": f"*New total:*\n{_format_cents(revision.budget_requested_cents)}"},
+            {"type": "mrkdwn", "text": f"*Spent when asked:*\n{used}"},
+        ]
     label = "Proof of concept" if revision.kind is RevisionKind.PROPOSAL else "Requested budget"
     fields = [{"type": "mrkdwn", "text": f"*{label}:*\n{_format_cents(revision.budget_requested_cents)}"}]
     if revision.kind is not RevisionKind.COMPLETION and revision.full_budget_cents:
@@ -290,11 +300,9 @@ def _review_message(project: Project, revision: ProjectRevision) -> tuple[list[d
         {"type": "section", "fields": _budget_fields(revision)},
         {
             "type": "section",
-            # The application's one-sentence summary, when it has one: what reviewers should read first.
-            "text": {
-                "type": "mrkdwn",
-                "text": _escape_mrkdwn(_write_up_excerpt(revision.summary or revision.write_up)),
-            },
+            # The application's one-sentence summary, when it has one: what reviewers should read first. For a top-up
+            # request, why the team needs more and what they've done.
+            "text": {"type": "mrkdwn", "text": _review_excerpt(revision)},
         },
         {
             "type": "actions",
@@ -326,6 +334,16 @@ def _review_message(project: Project, revision: ProjectRevision) -> tuple[list[d
         note = f"Only reviewers are in this channel. Talk with the team in <#{project.slack_channel_id}>."
         blocks.insert(-1, {"type": "context", "elements": [{"type": "mrkdwn", "text": note}]})
     return blocks, text
+
+
+def _review_excerpt(revision: ProjectRevision) -> str:
+    topup = revision.topup
+    if topup is None:
+        return _escape_mrkdwn(_write_up_excerpt(revision.summary or revision.write_up))
+    text = f"*Why:* {_escape_mrkdwn(_write_up_excerpt(topup.topup_reason or ''))}"
+    if topup.body:
+        text += f"\n*Progress:* {_escape_mrkdwn(_write_up_excerpt(topup.body))}"
+    return text
 
 
 def _team_notice(project: Project, revision: ProjectRevision) -> tuple[list[dict], str]:
@@ -979,6 +997,97 @@ def sync_missed_review_messages(
         raise failures[0]
 
 
+#: How long after it was posted a progress update is still sent to Slack, if its own job failed.
+PROJECT_UPDATE_WINDOW = timedelta(days=3)
+_MAX_UPDATE_EXCERPT_LENGTH = 2500
+
+
+def _update_message(session: Session, slack_client: SlackClient, update: ProjectUpdate) -> tuple[list[dict], str]:
+    project = session.get(Project, update.project_id)
+    author = session.get(User, update.author_id)
+    slack_id = slack_id_for(session, slack_client, author) if author is not None else None
+    who = f"<@{slack_id}>" if slack_id else "a team member"
+    title = _escape_mrkdwn(project.title)
+    if update.is_topup:
+        header = f":moneybag: *Top-up request* on *{title}* from {who}"
+        text = f"Top-up request on {project.title}: {_format_cents(update.topup_cents or 0)} more"
+    else:
+        header = f":memo: *Progress update* on *{title}* from {who}"
+        text = f"Progress update on {project.title}"
+    blocks: list[dict] = [{"type": "section", "text": {"type": "mrkdwn", "text": header}}]
+    if update.body:
+        body = update.body.strip()
+        if len(body) > _MAX_UPDATE_EXCERPT_LENGTH:
+            body = body[:_MAX_UPDATE_EXCERPT_LENGTH].rstrip() + "…"
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": _escape_mrkdwn(body)}})
+    if update.is_topup:
+        ask = (
+            f"*Asks for {_format_cents(update.topup_cents or 0)} more:* {_escape_mrkdwn(update.topup_reason or '')}\n"
+            "Reviewers decide it like an amendment; the outcome shows here."
+        )
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": ask}})
+    link = f"{get_settings().base_url.rstrip('/')}/projects/{project.id}#updates"
+    used = f"Spent {_format_cents(update.spent_cents)} of {_format_cents(update.ceiling_cents)}"
+    if update.ceiling_cents > 0:
+        used += f" ({round(update.spent_cents * 100 / update.ceiling_cents)}%)"
+    jobs = "1 job or box" if update.jobs_since == 1 else f"{update.jobs_since} jobs and boxes"
+    context = f"{used} · {jobs} since the last update · <{link}|On the project page>"
+    blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": context}]})
+    return blocks, text
+
+
+def post_project_update(session: Session, slack_client: SlackClient, *, update_id: uuid.UUID) -> None:
+    """Post a progress update to its project's channel, once. Locks the row until the caller commits, so the update's
+    own job and the reconcile can't both post it. A project with an archived channel is marked done unposted; one
+    with no channel yet is left for the reconcile."""
+    update = session.scalars(
+        sa.select(ProjectUpdate)
+        .where(ProjectUpdate.id == update_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).one_or_none()
+    if update is None or update.slack_posted_at is not None:
+        return
+    project = session.get(Project, update.project_id)
+    if project.slack_channel_archived:
+        update.slack_posted_at = datetime.now(UTC)
+        session.flush()
+        return
+    if project.slack_channel_id is None:
+        return
+    blocks, text = _update_message(session, slack_client, update)
+    update.slack_message_ts = slack_client.post_message(project.slack_channel_id, blocks=blocks, text=text)
+    update.slack_posted_at = datetime.now(UTC)
+    session.flush()
+
+
+def sync_project_updates(session: Session, slack_client: SlackClient, *, now: datetime | None = None) -> None:
+    """Post the progress updates whose own job failed, posted between `PROJECT_UPDATE_WINDOW` and
+    `MISSED_REVIEW_MESSAGE_GRACE` ago. Each is committed on its own; the step raises at the end if any failed, so the
+    run counts towards the `slack` alert."""
+    now = now or datetime.now(UTC)
+    ids = session.scalars(
+        sa.select(ProjectUpdate.id)
+        .where(
+            ProjectUpdate.slack_posted_at.is_(None),
+            ProjectUpdate.created_at < now - MISSED_REVIEW_MESSAGE_GRACE,
+            ProjectUpdate.created_at > now - PROJECT_UPDATE_WINDOW,
+        )
+        .order_by(ProjectUpdate.created_at)
+    ).all()
+    failures: list[SlackError] = []
+    for update_id in ids:
+        try:
+            post_project_update(session, slack_client, update_id=update_id)
+            session.commit()
+        except SlackError as exc:
+            logger.exception("krater.slack progress update %s failed; continuing", update_id)
+            session.rollback()
+            failures.append(exc)
+    if failures:
+        raise failures[0]
+
+
 def reconcile(
     session: Session, slack_client: SlackClient, weave_client: WeaveClient, *, feed_channel_id: str | None = None
 ) -> list[str]:
@@ -996,6 +1105,7 @@ def reconcile(
             "sync_missed_review_messages",
             lambda: sync_missed_review_messages(session, slack_client, weave_client, feed_channel_id=feed_channel_id),
         ),
+        ("sync_project_updates", lambda: sync_project_updates(session, slack_client)),
     )
     failed = []
     for name, step in steps:
@@ -1023,8 +1133,10 @@ __all__ = [
     "notify_decision",
     "notify_revision_submitted",
     "post_admin_override",
+    "post_project_update",
     "reconcile",
     "sync_budget_notifications",
+    "sync_project_updates",
     "sync_missed_archives",
     "sync_missed_review_messages",
     "sync_reviewer_invites",

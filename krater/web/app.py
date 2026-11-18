@@ -41,6 +41,7 @@ from krater.web.routers import (
     reviews,
     runner,
     slack_interactions,
+    updates,
 )
 from krater.web.security_headers import SecurityHeadersMiddleware, apply_security_headers
 from krater.web.templates import templates
@@ -124,6 +125,7 @@ def create_app() -> FastAPI:
     app.include_router(pages.router)
     app.include_router(auth.router)
     app.include_router(projects.router)
+    app.include_router(updates.router)
     app.include_router(reviews.router)
     app.include_router(admin.router)
     app.include_router(admin_activity.router)

@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+
+{% block title %}{{ "Request a top-up" if topup else "Share progress" }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <a class="back-link" href="/projects/{{ project.id }}#updates">&larr; {{ project.title or "Untitled proposal" }}</a>
+    <h1>{{ "Request a top-up" if topup else "Share progress" }}</h1>
+    <p class="page-subtitle">
+      {% if topup %}
+        Ask for more budget by saying what the budget so far bought and what the extra is for. Reviewers decide it like
+        an amendment, and your current budget keeps working meanwhile.
+      {% else %}
+        Tell reviewers what you've done. The team, reviewers and admins see it on the project page, and it's posted to
+        the project's Slack channel.
+      {% endif %}
+      <a href="/help/using-krater#progress-updates-and-top-ups">About updates and top-ups</a>
+    </p>
+  </div>
+</div>
+
+<dl class="stats stats--compact">
+  <div class="stat"><dt>Budget</dt><dd>{{ ceiling_cents | dollars }}</dd></div>
+  <div class="stat"><dt>Spent</dt><dd>{{ spent_cents | dollars }}{% if percent_used is not none %} ({{ percent_used }}%){% endif %}</dd></div>
+</dl>
+
+<section class="card">
+  {% if errors.form %}<p class="field-error" role="alert">{{ errors.form }}</p>{% endif %}
+  {% if errors.application %}<p class="field-error" role="alert">{{ errors.application }}</p>{% endif %}
+  <form method="post" action="/projects/{{ project.id }}/updates" class="form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {% if topup %}<input type="hidden" name="topup" value="1">{% endif %}
+    <div class="field">
+      <label for="update-body">{{ "What you've done so far" if topup else "What you've done" }}</label>
+      <textarea id="update-body" name="body" rows="10" maxlength="{{ body_max }}"
+                {% if not topup %}required{% endif %}
+                {% if errors.body %}aria-invalid="true" aria-describedby="update-body-error"{% endif %}>{{ posted.body or '' }}</textarea>
+      <p class="field-hint">
+        Results, what worked and what didn't, links to a repo or demo. Markdown works.
+        {% if topup %}Reviewers read this first: a top-up without it is hard to approve.{% endif %}
+      </p>
+      {% if errors.body %}<p class="field-error" id="update-body-error">{{ errors.body }}</p>{% endif %}
+    </div>
+
+    {% if topup %}
+      <div class="field">
+        <label for="update-amount">How much more (USD)</label>
+        <input type="text" id="update-amount" name="amount" inputmode="decimal" required autocomplete="off"
+               placeholder="25.00" value="{{ posted.amount or '' }}"
+               {% if errors.amount %}aria-invalid="true" aria-describedby="update-amount-error"{% endif %}>
+        <p class="field-hint">Added to today's {{ ceiling_cents | dollars }}. Reviewers may approve less or more.</p>
+        {% if errors.amount %}<p class="field-error" id="update-amount-error">{{ errors.amount }}</p>{% endif %}
+      </div>
+      <div class="field">
+        <label for="update-reason">What the extra budget is for</label>
+        <textarea id="update-reason" name="reason" rows="4" maxlength="{{ reason_max }}" required
+                  {% if errors.reason %}aria-invalid="true" aria-describedby="update-reason-error"{% endif %}>{{ posted.reason or '' }}</textarea>
+        <p class="field-hint">The runs you'll do, on which card, for about how long.
+          The <a href="/pricing">GPU prices</a> help size it.</p>
+        {% if errors.reason %}<p class="field-error" id="update-reason-error">{{ errors.reason }}</p>{% endif %}
+      </div>
+      <div class="field">
+        <label class="choice">
+          <input type="checkbox" name="criteria_read" value="yes" required
+                 {% if errors.criteria_read %}aria-invalid="true" aria-describedby="criteria-read-error"{% endif %}>
+          <span>I've read the <a href="{{ submission_criteria_url() }}" target="_blank" rel="noopener">Ganymede Submission
+          Criteria</a>, and my project still meets them.</span>
+        </label>
+        {% if errors.criteria_read %}<p class="field-error" id="criteria-read-error">{{ errors.criteria_read }}</p>{% endif %}
+      </div>
+      <p class="muted">
+        This submits an amendment with your approved application unchanged. To change the application itself, start a
+        full amendment from the project page instead.
+      </p>
+      <div class="action-row">
+        <button type="submit" class="button button--primary">Request top-up</button>
+        <a class="button" href="/projects/{{ project.id }}/updates/new">Just share progress</a>
+      </div>
+    {% else %}
+      <div class="action-row">
+        <button type="submit" class="button button--primary">Post update</button>
+        {% if can_topup %}<a class="button" href="/projects/{{ project.id }}/updates/new?topup=1">Ask for more budget instead</a>{% endif %}
+      </div>
+    {% endif %}
+  </form>
+</section>
+{% endblock %}

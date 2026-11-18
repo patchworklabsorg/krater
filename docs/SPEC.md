@@ -283,7 +283,17 @@ is asked again on every submission, and when it was ticked is kept on the revisi
    under the same policy. **The project stays `approved` and keeps its current ceiling while the amendment is
    reviewed.** If the amendment is approved, the budget difference is written to the ledger. If it's rejected, nothing
    changes.
-7. **Withdraw.** The submitter or an admin can withdraw a project at any point. Unspent budget is reclaimed and the
+7. **Progress updates and top-ups.** While a project is approved (or its completion is in review) its team posts
+   progress updates (`project_updates`, Markdown): the team, reviewers and admins read them on the project page, and
+   Krater posts each to the project's channel (from the worker, and the periodic Slack job posts any it missed for 3
+   days). Each records the ceiling, the spend and the jobs and boxes started since the previous update. A **top-up
+   request** is an update with an amount and a reason (the progress is optional, though that's what it's for): it
+   opens and submits an amendment with the approved answers unchanged and a new total of the ceiling plus the amount
+   (`revision_id`), so it is reviewed and granted exactly like an amendment (step 6), with the reason and progress
+   shown to reviewers in place of the application. One amendment or top-up is in review at a time. Top-ups are asked
+   for on the web, which asks for the Submission Criteria box and passes the submission gates; `krater update` posts
+   plain updates.
+8. **Withdraw.** The submitter or an admin can withdraw a project at any point. Unspent budget is reclaimed and the
    workspace is torn down; the channels are archived a week later.
 
 Only approvals on the **current** revision count. A new revision marks earlier pending ones as `superseded`.

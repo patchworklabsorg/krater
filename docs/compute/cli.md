@@ -194,6 +194,14 @@ fetching fresh URLs when they run out), then symlinks, and gives folders their m
 absolute one, or one that would land outside the folder through an existing symlink is skipped. Where a symlink
 can't be made (Windows without developer mode) it writes `NAME.symlink` saying where it pointed.
 
+### Progress updates
+
+`krater update <project> -m TEXT` (or `-f FILE`, `-` for standard input) posts a progress update with
+`POST /projects/{id}/updates {"body": ...}`; `krater updates <project>` lists them from `GET /projects/{id}/updates`
+(newest first, each with the budget when it was posted and any top-up's outcome). A top-up request is made on the web
+(`topup_url` in the listing): it submits an amendment, which asks for the Submission Criteria box and passes the same
+Slack and demographics checks as a submission.
+
 The CLI waits up to 60 seconds for an answer: a change checks you with Weave first, up to four calls of 10 s each
 when Weave is slow. If `cancel`, `stop`, `resume` or `move` still times out, the CLI doesn't send it again (it may
 have been done). It reads the job, says the action went through if the job shows it (the state it leads to, or its
