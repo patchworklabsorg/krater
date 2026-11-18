@@ -807,7 +807,8 @@ def _box_message(session: Session, slack_client: SlackClient, event: AuditEvent,
         last = f" The last save that worked began at {saved[:16].replace('T', ' ')} UTC." if saved else ""
         text = (
             f":warning: *Workspace not saving*: {who}, the last {payload.get('failures', 3)} saves of *{name}*'s "
-            f"/workspace failed: {_escape_mrkdwn(payload.get('error', ''))}.{last} Work since then is only on the "
+            f"/workspace failed: {_escape_mrkdwn(payload.get('error', '').rstrip('.'))}.{last} "
+            "Work since then is only on the "
             f"machine's disk. <{link}|Check the box>; a full storage quota is freed by deleting old files or "
             f"workspaces on the <{files}|project's Files page>."
         )

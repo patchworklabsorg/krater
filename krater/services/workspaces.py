@@ -182,7 +182,8 @@ def attach(
             raise ValidationFailed(
                 {
                     "workspace": f"The workspace {workspace.name!r} is in use by the stopped box {held_by.name!r}. "
-                    "Tick the box to end it, or start a new workspace."
+                    "End it to continue here (tick the box, or `krater submit --end-holder`), or start a new "
+                    "workspace."
                 }
             )
         _end_for(session, actor, held_by, successor=job, now=now)
