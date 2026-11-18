@@ -34,8 +34,10 @@ from krater.services import (
     compute_settings,
     job_costs,
     price_history,
+    project_files,
     project_secrets,
     teams,
+    workspaces,
 )
 from krater.services import projects as project_service
 from krater.services import users as user_service
@@ -168,6 +170,8 @@ def _job_json(job: ComputeJob, *, detail: bool = False, session: Session | None 
         "spend_cents": job.spend_cents,
         "exit_code": job.exit_code,
         "smoke_minutes": job.smoke_minutes,
+        "workspace": _workspace_ref(job.workspace) if job.workspace is not None else None,
+        "end_requested": job.end_requested_at is not None,
         "queued_at": _iso(job.queued_at),
         "started_at": _iso(job.started_at),
         "ended_at": _iso(job.ended_at),
@@ -204,6 +208,9 @@ def _job_json(job: ComputeJob, *, detail: bool = False, session: Session | None 
                 "destroy_after_hours": policy.box_destroy_hours,
                 "workspace_saved_at": _iso(boxes.last_saved(job)),
                 "workspace_save_minutes": boxes.WORKSPACE_SAVE_MINUTES,
+                "workspace_files": row.workspace_files if row is not None else None,
+                "workspace_bytes": row.workspace_bytes if row is not None else None,
+                "save_trouble": _trouble_json(boxes.save_trouble(row)),
             }
         events = session.scalars(
             sa.select(ComputeEvent).where(ComputeEvent.job_id == job.id).order_by(ComputeEvent.seq.desc()).limit(50)
@@ -219,6 +226,16 @@ def _job_json(job: ComputeJob, *, detail: bool = False, session: Session | None 
             for line in job_costs.breakdown(job).lines
         ]
     return data
+
+
+def _workspace_ref(workspace) -> dict:
+    return {"id": str(workspace.id), "name": workspace.name}
+
+
+def _trouble_json(trouble) -> dict | None:
+    if trouble is None:
+        return None
+    return {"error": trouble.error, "failures": trouble.failures, "at": _iso(trouble.at)}
 
 
 def submit_body(job: ComputeJob) -> dict[str, Any]:
@@ -243,6 +260,9 @@ def submit_body(job: ComputeJob) -> dict[str, Any]:
     }
     if job.smoke_minutes:
         body["smoke_minutes"] = job.smoke_minutes
+    if job.workspace_id is not None:
+        # Queued again (`krater rerun`), a box continues its workspace.
+        body["workspace"] = str(job.workspace_id)
     if job.is_limit_order:
         body["limit_usd_per_hour"] = _rate(job.target_microusd)
     else:
@@ -263,8 +283,9 @@ def _estimate_json(session: Session, project: Project, shape, *, inputs_bytes: i
     return {**estimate.as_json(), "summary": estimate.summary()}
 
 
-def _spec(body: dict) -> JobSpec:
-    """A job spec from a submit body. Raises `ValidationFailed`."""
+def _spec(body: dict, *, session: Session | None = None, project: Project | None = None) -> JobSpec:
+    """A job spec from a submit body. Raises `ValidationFailed`. A box's `workspace` (an id, an id's first 8+
+    characters, or a name) is looked up in `project`; without one, `workspace_name` names its new workspace."""
     gpus = body.get("gpu_names", [])
     if not isinstance(gpus, list) or not all(isinstance(g, str) and len(g) <= 100 for g in gpus) or len(gpus) > 50:
         raise ValidationFailed({"gpu_names": "Give a list of GPU model names."})
@@ -304,7 +325,26 @@ def _spec(body: dict) -> JobSpec:
         data_out_gb=_int(body, "data_out_gb", None),
         inputs=tuple(compute_inputs.check_names(inputs)),
         smoke_minutes=_int(body, "smoke_minutes", None),
+        **_workspace_spec(body, session, project),
     )
+
+
+def _workspace_spec(body: dict, session: Session | None, project: Project | None) -> dict:
+    ref, name = body.get("workspace"), body.get("workspace_name")
+    if ref is None and name is None:
+        return {}
+    if ref is not None and name is not None:
+        raise ValidationFailed({"workspace": "Continue a workspace or name a new one, not both."})
+    if name is not None:
+        if not isinstance(name, str):
+            raise ValidationFailed({"workspace_name": "Give the workspace's name as a string."})
+        return {"workspace_name": name}
+    if not isinstance(ref, str) or session is None or project is None:
+        raise ValidationFailed({"workspace": "Give a workspace's id or name."})
+    found = workspaces.find(session, project, ref)
+    if found is None:
+        raise ValidationFailed({"workspace": f"The project has no workspace {ref!r}."})
+    return {"workspace_id": found.id, "end_holder": body.get("end_holder") is True}
 
 
 async def _body(request: Request) -> dict | None:
@@ -410,7 +450,7 @@ async def submit(
     if body is None:
         return _error(400, "Send a JSON object.")
     try:
-        spec = _spec(body)
+        spec = _spec(body, session=db_session, project=project)
         job = compute_jobs.submit_job(
             db_session,
             actor,
@@ -459,7 +499,7 @@ async def estimate(
     if body is None:
         return _error(400, "Send a JSON object.")
     try:
-        spec = _spec(body)
+        spec = _spec(body, session=db_session, project=project)
         compute_jobs.validate_spec(spec, cap_cents=hourly_cap_cents(project, get_settings()), registry=registry)
         inputs_bytes = compute_jobs.inputs_size(get_compute_store() if spec.inputs else None, project, spec)
     except ValidationFailed as exc:
@@ -606,8 +646,132 @@ def job_files(job_id: uuid.UUID, actor: Me, db_session: Db):
         return _error(503, "Krater's storage didn't answer; try again in a minute.")
 
 
+# -- Stored files and workspaces (`project_files`, `workspaces`) ---------------------------------------------------
+
+
+def _tally(tally) -> dict:
+    return {"files": tally.files, "bytes": tally.bytes}
+
+
+@router.get("/projects/{project_id}/files")
+def project_files_summary(project_id: uuid.UUID, actor: Me, db_session: Db):
+    """What the project stores, by kind, against its quota (`krater files`). Team and admins only."""
+    project = _project(db_session, actor, project_id)
+    try:
+        shown = project_files.summary(db_session, get_compute_store(), actor, project)
+    except NotAllowed as exc:
+        return _error(403, str(exc))
+    except StorageError:
+        return _error(503, "Krater's storage didn't answer; try again in a minute.")
+    return {
+        "quota_bytes": shown.quota_bytes,
+        "total": _tally(shown.total),
+        "inputs": _tally(shown.inputs),
+        "other": _tally(shown.other),
+        "workspaces": [
+            {
+                **_workspace_json(item.workspace, item.holder),
+                "stored": _tally(item.stored),
+            }
+            for item in shown.workspaces
+        ],
+        "jobs": [
+            {
+                "id": str(item.job.id),
+                "name": item.job.name,
+                "kind": item.job.kind.value,
+                "state": item.job.state.value,
+                "areas": {area: _tally(t) for area, t in item.areas.items()},
+            }
+            for item in shown.jobs
+        ],
+    }
+
+
+def _workspace_json(workspace, holder: ComputeJob | None) -> dict:
+    return {
+        **_workspace_ref(workspace),
+        "created_at": _iso(workspace.created_at),
+        "last_saved_at": _iso(workspace.last_saved_at),
+        "files": workspace.files,
+        "bytes": workspace.bytes,
+        "holder": None if holder is None else {"id": str(holder.id), "name": holder.name, "state": holder.state.value},
+    }
+
+
+@router.get("/projects/{project_id}/workspaces")
+def project_workspaces(project_id: uuid.UUID, actor: Me, db_session: Db):
+    """The project's workspaces, newest save first, with the box using each. Team and admins only."""
+    project = _project(db_session, actor, project_id)
+    if not workspaces.can_see(actor, project):
+        return _error(403, "Only the project's team and admins can use its workspaces.")
+    held = workspaces.holders(db_session, project)
+    return {
+        "workspaces": [_workspace_json(ws, held.get(ws.id)) for ws in workspaces.list_workspaces(db_session, project)]
+    }
+
+
+def _workspace(session: Session, actor: Actor, project_id: uuid.UUID, workspace_id: uuid.UUID):
+    project = _project(session, actor, project_id)
+    return project, workspaces.get(session, actor, project, workspace_id)
+
+
+@router.get("/projects/{project_id}/workspaces/{workspace_id}/files")
+def workspace_files(project_id: uuid.UUID, workspace_id: uuid.UUID, actor: Me, db_session: Db):
+    """Everything in a saved workspace (files, folders, symlinks, with modes and times), each file with a download
+    URL that works for 15 minutes: `krater download --workspace` puts it back together."""
+    try:
+        _, workspace = _workspace(db_session, actor, project_id, workspace_id)
+        shown, urls = workspaces.downloads(get_compute_store(), workspace)
+    except NotAllowed as exc:
+        return _error(403, str(exc))
+    except NotFound as exc:
+        return _error(404, str(exc))
+    except StorageError:
+        return _error(503, "Krater's storage didn't answer; try again in a minute.")
+    return {
+        "workspace": _workspace_json(workspace, workspaces.holder(db_session, workspace)),
+        "has_manifest": shown.has_manifest,
+        "entries": [
+            {
+                "path": e.path,
+                "type": e.kind,
+                "size_bytes": e.size_bytes,
+                "mode": e.mode,
+                "mtime_ns": e.mtime_ns,
+                "target": e.target or None,
+                "url": urls.get(e.path) if e.kind == "file" else None,
+            }
+            for e in shown.entries
+        ],
+    }
+
+
+@router.delete("/projects/{project_id}/workspaces/{workspace_id}")
+def delete_workspace(project_id: uuid.UUID, workspace_id: uuid.UUID, actor: Me, db_session: Db):
+    """Delete a workspace and its stored files, unless a box uses it."""
+    try:
+        _, workspace = _workspace(db_session, actor, project_id, workspace_id)
+        count = workspaces.delete(db_session, get_compute_store(), actor, workspace=workspace, now=datetime.now(UTC))
+    except NotAllowed as exc:
+        db_session.rollback()
+        return _error(403, str(exc))
+    except NotFound as exc:
+        db_session.rollback()
+        return _error(404, str(exc))
+    except InvalidState as exc:
+        db_session.rollback()
+        return _error(409, str(exc))
+    except StorageError:
+        db_session.rollback()
+        return _error(503, "Krater's storage didn't answer; try again in a minute.")
+    db_session.commit()
+    return {"deleted": count}
+
+
 _ACTIONS = {
     "cancel": compute_jobs.cancel_job,
+    "end": compute_jobs.end_box,
     "stop": compute_jobs.stop_box,
     "resume": compute_jobs.resume_box,
     "move": compute_jobs.move_box,

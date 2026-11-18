@@ -11,6 +11,10 @@
 //     output (and the runner's own lines) go to the job's log, uploaded every minute, which its team reads in Krater;
 //  6. reports the exit code. Krater then destroys the machine.
 //
+// A box runs no command: the runner restores /workspace from the box's workspace, saves it every 10 minutes and when
+// Krater asks before a stop, reports each save or why it failed (POST /runner/v1/workspace/saved, /save-failed), and
+// uploads its own log lines as the box's log (box.go).
+//
 // The runner is not the container's main process: the bootstrap shell is, and it waits forever after the runner
 // returns, because Vast restarts a container whose main process exits (and keeps billing). Only Krater ends a machine,
 // except that after hours without an answer from Krater the runner stops it (selfstop.go).
@@ -228,6 +232,12 @@ func Run(ctx context.Context, cfg Config, apiHTTP, storageHTTP *http.Client, gpu
 	}
 
 	if info.Kind == "box" {
+		// A box runs no command, but the runner's own lines (restores, saves, why a save failed) go to the box's log,
+		// uploaded every minute, so its team and admins can read them in Krater.
+		if logs, closeLog := boxLog(cfg, info, api, storageHTTP); logs != nil {
+			defer closeLog()
+			go syncLoop(ctx, logs, seconds(info.LogSyncSeconds, 60))
+		}
 		if cfg.SecretsProfile != "" {
 			if err := writeSecretsProfile(cfg.SecretsProfile, info.Secrets); err != nil {
 				logf("could not write the project's secrets for login shells: %v", err)
@@ -411,6 +421,28 @@ func Run(ctx context.Context, cfg Config, apiHTTP, storageHTTP *http.Client, gpu
 		return code, fmt.Errorf("could not report the exit code: %w", err)
 	}
 	return code, nil
+}
+
+// boxLog sends the runner's own log lines to a file uploaded as the box's log (`logs/attempt-<n>.log`). It returns the
+// log's syncer and a function that puts the log back as it was, or nil when the file can't be made.
+func boxLog(cfg Config, info *StartInfo, api *API, storageHTTP *http.Client) (*Syncer, func()) {
+	logDir := cfg.LogDir
+	if logDir == "" {
+		logDir = filepath.Join(os.TempDir(), "krater-logs")
+	}
+	out, err := newLogFile(logDir, info.Attempt, LogMaxBytes)
+	if err != nil {
+		logf("can't save the runner's log for Krater: %v", err)
+		return nil, nil
+	}
+	previous := log.Writer()
+	log.SetOutput(io.MultiWriter(previous, out))
+	logf("box %s, attempt %d (runner %s): this log has the runner's own lines, not what you run", info.JobID,
+		info.Attempt, version)
+	return NewSyncer(api, "logs", logDir, storageHTTP), func() {
+		log.SetOutput(previous)
+		out.Close()
+	}
 }
 
 // smokeStopWhy is the runner's log line when a smoke test's timer stops the command (and how `stop` knows it was).

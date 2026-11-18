@@ -94,6 +94,22 @@
 </section>
 {% endif %}
 
+{% if box and box.trouble %}
+<section class="notice notice--warn" id="save-trouble" role="alert">
+  <h2>/workspace isn't saving</h2>
+  <p>
+    {% if box.trouble.failures == 1 %}The last save{% else %}The last {{ box.trouble.failures }} saves{% endif %} of
+    <code>/workspace</code> failed (last at {{ box.trouble.at.strftime("%Y-%m-%d %H:%M UTC") }}):
+    <code class="break">{{ box.trouble.error }}</code>
+  </p>
+  <p class="muted">
+    Work since the last good save ({{ box.saved_at.strftime("%Y-%m-%d %H:%M UTC") if box.saved_at else "none yet" }})
+    is only on the machine's disk until a save works. A full storage quota is the usual cause: delete old files or
+    workspaces on the <a href="/projects/{{ project.id }}/files">project's Files page</a>. The box's log above says more.
+  </p>
+</section>
+{% endif %}
+
 {% if can_read_files %}
 <section class="card" id="output">
   <div class="card-head">
@@ -106,12 +122,18 @@
     <p class="muted">Krater's storage didn't answer, so the output can't be shown right now.</p>
   {% elif log %}
     <p class="muted">
-      What the command printed{% if job.attempts > 1 %} on attempt {{ log.attempt }}{% endif %}, saved every minute while it
-      runs{% if log.truncated %}; the end of {{ log.size_bytes | filesize }}{% endif %}.
+      {% if job.kind.value == "box" %}
+        What Krater's runner on the box logged{% if job.attempts > 1 %} on attempt {{ log.attempt }}{% endif %}: restoring
+        and saving <code>/workspace</code>, and why a save failed. Not what you run in it.
+      {% else %}
+        What the command printed{% if job.attempts > 1 %} on attempt {{ log.attempt }}{% endif %}, saved every minute
+        while it runs{% if log.truncated %}; the end of {{ log.size_bytes | filesize }}{% endif %}.
+      {% endif %}
     </p>
     <pre class="log">{{ log.text }}</pre>
   {% elif job.kind.value == "box" %}
-    <p class="muted">Boxes have no command output; SSH in to see what's running.</p>
+    <p class="muted">Boxes have no command output; SSH in to see what's running. The runner's own log (saves and
+      restores of <code>/workspace</code>) appears here within a minute of it starting.</p>
   {% else %}
     <p class="muted">Nothing yet. The output appears here within a minute of the command starting.</p>
   {% endif %}
@@ -187,20 +209,21 @@
         <dt>State</dt><dd>{{ instance.state.value }}</dd>
         {% if box and box.destroy_at %}
           <dt>Destroyed</dt>
-          <dd>at {{ box.destroy_at.strftime("%Y-%m-%d %H:%M UTC") }} unless you resume it: the machine and its disk go,
-            and the box can't be brought back</dd>
+          <dd>at {{ box.destroy_at.strftime("%Y-%m-%d %H:%M UTC") }} unless you resume it: the machine and its disk go;
+            its saved <code>/workspace</code> stays in its workspace</dd>
         {% endif %}
         {% if box %}
           <dt>Workspace saved</dt>
-          <dd>{{ box.saved_at.strftime("%Y-%m-%d %H:%M UTC") if box.saved_at else "not yet" }}</dd>
+          <dd>
+            {{ box.saved_at.strftime("%Y-%m-%d %H:%M UTC") if box.saved_at else "not yet" }}{% if box.files is not none and box.saved_at %},
+              {{ "{:,}".format(box.files) }} files ({{ (box.bytes or 0) | filesize }}){% endif %}
+          </dd>
         {% endif %}
       </dl>
       {% if box %}
         <p class="muted">Krater saves <code>/workspace</code> every {{ box.save_minutes }} minutes while the box runs and
           before it stops it, and puts it back when the box resumes or starts on another machine. Nothing else on the
-          machine is saved (packages installed elsewhere, files in <code>/root</code>). Once the box is destroyed, its
-          saved <code>/workspace</code> can't be restored or downloaded, so keep what matters somewhere else too (a git
-          repository, say).</p>
+          machine is saved (packages installed elsewhere, files in <code>/root</code>).</p>
       {% endif %}
       {% if job.kind.value == "box" and instance.ssh_host and instance.ssh_port %}
         <h3>Connect</h3>
@@ -208,6 +231,21 @@
         <p class="muted">Or <code>krater ssh {{ job.id }}</code>. For Jupyter, start it in the box and tunnel to it:
           <code>ssh -L 8888:localhost:8888 -p {{ instance.ssh_port }} root@{{ instance.ssh_host }}</code></p>
       {% endif %}
+    </section>
+  {% endif %}
+
+  {% if box and box.workspace %}
+    <section class="card" id="workspace" aria-labelledby="workspace-head">
+      <h2 id="workspace-head">Workspace</h2>
+      <p>
+        <a href="/projects/{{ project.id }}/files/workspaces/{{ box.workspace.id }}">{{ box.workspace.name }}</a>{% if box.workspace.last_saved_at %},
+          last saved {{ box.workspace.last_saved_at.strftime("%Y-%m-%d %H:%M UTC") }}{% endif %}
+      </p>
+      <p class="muted">
+        This box's saved <code>/workspace</code>. It stays after the box ends: the team can browse and download it, or
+        continue it in a new box ({% if can_rerun %}<a href="/projects/{{ project.id }}/compute/new?from={{ job.id }}">Run again</a> does{% else %}Run again does{% endif %}).
+        Everyone on the project's team can open it, so keep credentials in the project's secrets, not in <code>/workspace</code>.
+      </p>
     </section>
   {% endif %}
 
@@ -237,7 +275,7 @@
     </section>
   {% endif %}
 
-  {% if can_stop or can_resume or can_cancel or can_rerun %}
+  {% if can_stop or can_resume or can_cancel or can_rerun or can_end %}
     <section class="card">
       <h2>Actions</h2>
       <div class="action-row">
@@ -260,22 +298,34 @@
             <button type="submit" class="button">Start it elsewhere from the saved workspace</button>
           </form>
         {% endif %}
+        {% if can_end %}
+          <form method="post" action="/projects/{{ project.id }}/compute/{{ job.id }}/end">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="button">End box</button>
+          </form>
+        {% endif %}
         {% if can_cancel %}
           <form method="post" action="/projects/{{ project.id }}/compute/{{ job.id }}/cancel">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button type="submit" class="button button--danger">Cancel</button>
+            <button type="submit" class="button button--danger">{{ "End now" if box and job.state.value == "running" else ("End box" if box else "Cancel") }}</button>
           </form>
         {% endif %}
       </div>
-      {% if can_cancel and box and instance %}
+      {% if box and box.ending %}
+        <p class="muted">Ending: the box is saving <code>/workspace</code>, then its machine is destroyed (within
+          10 minutes). <strong>End now</strong> destroys it at once, without waiting for the save.</p>
+      {% elif can_cancel and box and instance %}
         <p class="muted">
           {% if job.state.value == "stopped" %}
-            Cancel destroys the stopped machine and its disk now, which ends the disk charge. The box and its saved
-            <code>/workspace</code> can't be brought back.
+            End box destroys the stopped machine and its disk now, which ends the disk charge. Its saved
+            <code>/workspace</code> stays in its workspace{% if box.saved_at %} (saved {{ box.saved_at.strftime("%Y-%m-%d %H:%M UTC") }}){% endif %}.
+          {% elif job.state.value == "running" %}
+            <strong>End box</strong> saves <code>/workspace</code> first, then destroys the machine; its workspace stays.
+            <strong>End now</strong> destroys it at once, without a save: work since the last one
+            ({{ box.saved_at.strftime("%H:%M UTC") if box.saved_at else "none yet" }}) is lost.
           {% else %}
-            Cancel destroys the machine at once, without saving <code>/workspace</code> first: work since its last save
-            ({{ box.saved_at.strftime("%H:%M UTC") if box.saved_at else "none yet" }}) is lost, and the box can't be
-            brought back.{% if can_stop %} To keep your work, stop the box instead.{% endif %}
+            End box destroys the machine now; nothing can be saved while it isn't running. Its workspace keeps the last
+            save{% if box.saved_at %} ({{ box.saved_at.strftime("%Y-%m-%d %H:%M UTC") }}){% endif %}.
           {% endif %}
         </p>
       {% endif %}

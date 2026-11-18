@@ -9,6 +9,7 @@ from krater.models.compute_job import ComputeEvent, ComputeInstance, ComputeJob,
 from krater.models.compute_market import ComputeWaitSample, GpuOfferObservation, ImageSize
 from krater.models.compute_settings import ComputeSettings, ProjectComputeSettings
 from krater.models.compute_watch import ProviderAccount, StorageUsage
+from krater.models.compute_workspace import ComputeWorkspace
 from krater.models.enums import (
     ApprovalStage,
     BudgetEntryKind,
@@ -64,6 +65,7 @@ __all__ = [
     "ComputeInstance",
     "ComputeInstanceState",
     "ComputeJob",
+    "ComputeWorkspace",
     "ComputeJobKind",
     "ComputeJobState",
     "ComputeSettings",

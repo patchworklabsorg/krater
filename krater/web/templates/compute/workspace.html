@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+
+{% block title %}Workspace {{ workspace.name }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <a class="back-link" href="/projects/{{ project.id }}/files">&larr; Stored files</a>
+    <h1>{{ workspace.name }}</h1>
+    <p class="page-subtitle">
+      A saved <code>/workspace</code>{% if workspace.last_saved_at %}, last saved
+      {{ workspace.last_saved_at.strftime("%Y-%m-%d %H:%M UTC") }}{% else %}, not saved yet{% endif %}.
+      {% if holder %}In use by the box <a href="/projects/{{ project.id }}/compute/{{ holder.id }}">{{ holder.name }}</a>
+        ({{ holder.state.value }}), which saves here every 10 minutes.{% endif %}
+      Everyone on the project's team can open, download and continue it.
+    </p>
+  </div>
+  {% if can_continue and not holder %}
+    <div class="page-actions">
+      <a class="button button--primary" href="/projects/{{ project.id }}/compute/new?kind=box&amp;workspace={{ workspace.id }}">Continue in a new box</a>
+    </div>
+  {% endif %}
+</div>
+
+<dl class="stats stats--compact">
+  <div class="stat"><dt>Files</dt><dd>{{ "{:,}".format(file_count) }}</dd></div>
+  <div class="stat"><dt>Stored</dt><dd>{{ stored_bytes | filesize }}</dd></div>
+  <div class="stat"><dt>Id</dt><dd><code>{{ workspace.id | string | truncate(8, True, '') }}</code></dd></div>
+</dl>
+
+<section class="card" id="files">
+  <div class="card-head">
+    <h2>
+      {% if crumbs %}
+        <a href="?">/workspace</a>{% for crumb in crumbs %}/{% if loop.last %}{{ crumb.name }}{% else %}<a href="?path={{ crumb.path | urlencode }}">{{ crumb.name }}</a>{% endif %}{% endfor %}
+      {% else %}/workspace{% endif %}
+    </h2>
+  </div>
+  <p class="muted">
+    Click a file to download it (the link works for 15 minutes). To download all of it, with folders, permissions and
+    symlinks as they were: <code>krater workspaces download {{ project.id | string | truncate(8, True, '') }} {{ workspace.id | string | truncate(8, True, '') }} DIR</code>.
+    {% if not has_manifest %}This workspace was saved before Krater kept a list of its folders and symlinks, so only its files show.{% endif %}
+  </p>
+  {% if rows %}
+    <div class="table-scroll">
+      <table class="table">
+        <thead><tr><th scope="col">Name</th><th scope="col" class="num">Size</th><th scope="col">Modified</th></tr></thead>
+        <tbody>
+          {% for row in rows %}
+            <tr>
+              <td class="cell-title">
+                {% if row.kind == "dir" %}
+                  <a href="?path={{ row.path | urlencode }}">{{ row.name }}/</a>
+                  <span class="cell-sub">{{ "{:,}".format(row.files) }} files</span>
+                {% elif row.kind == "link" %}
+                  <code>{{ row.name }}</code> <span class="cell-sub">symlink to <code>{{ row.target }}</code></span>
+                {% else %}
+                  <a href="/projects/{{ project.id }}/files/workspaces/{{ workspace.id }}/download/{{ row.path | urlencode }}" rel="nofollow">{{ row.name }}</a>
+                {% endif %}
+              </td>
+              <td class="num">{% if row.kind != "link" %}{{ row.size_bytes | filesize }}{% endif %}</td>
+              <td class="nowrap">{{ row.modified.strftime("%Y-%m-%d %H:%M") if row.modified else "" }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% if more %}<p class="muted">Showing the first {{ rows | length }} of {{ "{:,}".format(more + rows | length) }}; use <code>krater workspaces download</code> for the rest.</p>{% endif %}
+  {% elif files_error %}
+    <p class="notice notice--warn" role="alert">Storage didn't answer; reload in a minute.</p>
+  {% else %}
+    <p class="muted">{% if crumbs %}Nothing in this folder.{% else %}Nothing saved yet.{% endif %}</p>
+  {% endif %}
+</section>
+
+{% if can_delete %}
+  <section class="card" id="delete">
+    <div class="card-head"><h2>Delete this workspace</h2></div>
+    {% if holder %}
+      <p class="muted">The box {{ holder.name }} uses it. End that box first, then delete it here.</p>
+    {% else %}
+      <p class="muted">Deletes its {{ "{:,}".format(file_count) }} files ({{ stored_bytes | filesize }}) from Krater's
+        storage for good, which frees the project's storage. Download anything you want to keep first.</p>
+      <form method="post" action="/projects/{{ project.id }}/files/workspaces/{{ workspace.id }}/delete" class="form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label class="choice"><input type="checkbox" name="confirm" required> I understand its files can't be brought back</label>
+        <button type="submit" class="button button--danger">Delete workspace</button>
+      </form>
+    {% endif %}
+  </section>
+{% endif %}
+{% endblock %}

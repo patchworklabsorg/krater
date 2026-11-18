@@ -51,6 +51,41 @@
         </div>
         <p class="field-hint">A box needs one of your <a href="/account/ssh-keys">SSH keys</a>. Krater admins' SSH keys go on every box too, so they can help or check on it; an admin who logs in can read the project's secrets.</p>
       </div>
+      <div class="field" id="workspace-field">
+        <span class="field-label">Workspace (boxes only)</span>
+        {% set chosen = posted.workspace or "new" %}
+        <div class="choice-list choice-list--stacked">
+          <label><input type="radio" name="workspace" value="new" {% if chosen == "new" %}checked{% endif %}> Start a new, empty <code>/workspace</code></label>
+          {% for ws in workspaces %}
+            <label>
+              <input type="radio" name="workspace" value="{{ ws.id }}" {% if chosen == ws.id | string %}checked{% endif %}>
+              Continue <strong>{{ ws.name }}</strong>:
+              {% if ws.last_saved_at %}last saved {{ ws.last_saved_at.strftime("%Y-%m-%d %H:%M UTC") }}{% if ws.files is not none %}, {{ "{:,}".format(ws.files) }} files ({{ (ws.bytes or 0) | filesize }}){% endif %}{% else %}never saved{% endif %}{% if ws.holder %};
+                in use by the box <a href="/projects/{{ project.id }}/compute/{{ ws.holder.id }}">{{ ws.holder.name }}</a> ({{ ws.holder.state.value }}){% endif %}
+            </label>
+          {% endfor %}
+        </div>
+        <div class="field">
+          <label for="workspace-name">New workspace's name</label>
+          <input type="text" id="workspace-name" name="workspace_name" maxlength="200" value="{{ posted.workspace_name or '' }}" placeholder="the box's name">
+        </div>
+        {% if workspaces | selectattr("holder") | list %}
+          <label class="choice"><input type="checkbox" name="end_holder" {% if posted.end_holder %}checked{% endif %}> If the workspace I continue is in use by a stopped box, end that box (its machine and disk go) so this one can continue it</label>
+        {% endif %}
+        {% for ws in workspaces %}
+          {% if ws.holder and ws.holder.state.value == "stopped" and not ws.stop_saved and chosen == ws.id | string %}
+            <p class="notice notice--warn" role="alert">The box {{ ws.holder.name }} stopped without a confirmed save of
+              <code>/workspace</code>: its disk may hold newer work than the saved workspace. Resume it to save, or
+              continue anyway and lose that work.</p>
+          {% endif %}
+        {% endfor %}
+        <p class="field-hint">A box saves <code>/workspace</code> every 10 minutes and before it stops, into its
+          workspace, which stays after the box ends. One box at a time can use a workspace. Everyone on the project's
+          team can open and continue any of its workspaces, so keep credentials in the project's secrets, not in
+          <code>/workspace</code>. <a href="/projects/{{ project.id }}/files">All stored files</a>.</p>
+        {% if errors.workspace %}<p class="field-error">{{ errors.workspace }}</p>{% endif %}
+        {% if errors.workspace_name %}<p class="field-error">{{ errors.workspace_name }}</p>{% endif %}
+      </div>
       <div class="field">
         <label for="job-image">Container image</label>
         <input type="text" id="job-image" name="image" placeholder="{{ default_image }}" value="{{ posted.image if 'image' in posted else default_image }}" autocomplete="off" spellcheck="false">

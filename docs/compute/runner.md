@@ -135,7 +135,7 @@ bootstrap runs as its startup script, starting the runner in the background. The
 
 1. writes the box's SSH keys (from `/start`) as the whole of `~/.ssh/authorized_keys` (0600, `.ssh` 0700, replaced
    in one rename): the owner's, and those of any admin with access now (see "Admin access" below);
-2. restores `/workspace` (`$KRATER_WORKSPACE_DIR`) from the job's stored workspace;
+2. restores `/workspace` (`$KRATER_WORKSPACE_DIR`) from the box's workspace (below);
 3. sends a heartbeat every minute with GPU use, the number of established connections to port 22, read from
    `/proc/net/tcp` and `tcp6`, and `key_updates: true`. Krater's reply carries the box's whole key list as
    `ssh_keys`, and the runner rewrites authorized_keys whenever it differs from what it last wrote. A reply without
@@ -143,7 +143,41 @@ bootstrap runs as its startup script, starting the runner in the background. The
 4. saves `/workspace` every 10 minutes, and when a heartbeat reply says `sync` (Krater is about to stop the box),
    then confirms with `POST /runner/v1/synced`, but only once the save succeeded (retried for up to a minute).
    After a failed save it stays silent: Krater keeps asking on each heartbeat until its sync deadline, and records
-   the box as not saved.
+   the box as not saved;
+5. reports every save, timed or asked for (2026-11-17 on): `POST /runner/v1/workspace/saved {"scan_seconds",
+   "files", "bytes"}` when it stored everything, or `POST /runner/v1/workspace/save-failed {"error"}` (500 characters
+   at most) when it didn't. Krater records the save as of when the scan began (`now - scan_seconds`, clamped to 6
+   hours), so a file changed during a long upload isn't counted as saved; clears the failures on a good save; and
+   counts failures in a row on the instance (`last_save_error`, `save_failures`). The job page shows the error; the
+   third failure in a row writes a `compute_box_save_failing` audit event, posted once in the project's channel. This
+   is separate from `synced`: a timed save never confirms a stop. A Krater that answers 404 (older) turns reporting
+   off for the box's life;
+6. writes its own log lines to `logs/attempt-<n>.log` every minute, like a job's output: restores, saves, and why one
+   failed. A box runs no command, so that log is only the runner's.
+
+### Workspaces
+
+Where a box's `/workspace` is saved is its **workspace** (`ComputeWorkspace`, `krater.services.workspaces`), not the
+box: a row with the project, a name, and a storage prefix, kept after the box ends. A new box starts a workspace (its
+prefix is the box's own `projects/<project>/jobs/<job>/workspace/`) or continues one, and the runner's `start` reply,
+uploads, deletes and restores all use the workspace's prefix. Boxes queued before 2026-11-17 were each given one at
+that path by the migration, so their saves were kept.
+
+One box at a time holds a workspace: any box using it that isn't finished. Continuing locks the workspace's row
+(`SELECT ... FOR UPDATE`) and refuses one held by a box that isn't stopped; a stopped holder can be ended in the same
+step (`end_holder`). Two boxes on one prefix would each delete what the other's manifest doesn't name. The runner
+API refuses workspace writes once the box is finished, so a late save from a box being destroyed can't land on a
+workspace someone else now holds.
+
+**End box** (`compute_jobs.end_box`, `krater end`) sets `end_requested_at`; the scheduler then asks the runner to
+save (`stop_requested_at`, as a stop does), and once the save is confirmed or the sync deadline passes, cancels the
+box and destroys its machine. A box that can't save (not running, or its runner never started) ends at once, as do
+all boxes during an emergency stop without a save. Cancel (**End now**) skips the save.
+
+The team browses and downloads a workspace on the project's **Stored files** page (`/projects/<id>/files`) or with
+`krater workspaces download`, which rebuilds folders, modes, times and symlinks from the manifest (symlinks last, and
+no file is written through one). A workspace is deleted by its team (its files go, the row stays with
+`deleted_at`, and an audit event is written), or with the rest of the project's files after it finishes.
 
 ### How /workspace is saved
 
@@ -249,14 +283,14 @@ machine's host can read anything on the machine. Members should use tokens they 
 
 The runner holds one secret, `KRATER_JOB_TOKEN`. It works for this instance only and only while it is live (Krater
 stores its sha256). Storage is reached through presigned URLs for this job's own keys
-(`projects/<project>/jobs/<job>/checkpoints|outputs|logs|workspace/`), single PUTs up to 64 MB and multipart parts above that, so no
+(`projects/<project>/jobs/<job>/checkpoints|outputs|logs/`, and its workspace's prefix), single PUTs up to 64 MB and multipart parts above that, so no
 request body passes Cloudflare's cap in front of the storage host. Each URL is signed for its exact size, so a
 machine can't upload more than it asked for, and Krater refuses URLs past the project's storage quota (an admin
 setting, 50 GB by default; replacing a file counts only the difference). Checked against SeaweedFS 4.47 on
 2026-10-11: a body of the signed size gets 200, a bigger or smaller one 403, for single PUTs and parts alike.
 Unfinished multipart uploads are aborted hourly once their job has ended (SeaweedFS lists no start time, so age
-alone can't decide). A machine can delete stored files only from its own box's workspace, never checkpoints,
-outputs, logs or the project's inputs. The organization's Vast key never reaches a machine.
+alone can't decide). A machine can delete stored files only from its own box's workspace, while the box isn't finished, never
+checkpoints, outputs, logs or the project's inputs. The organization's Vast key never reaches a machine.
 
 ## Tests
 

@@ -8,7 +8,8 @@ job's old machine is locked out. With it the runner can:
   (`krater.services.project_secrets`: they reach the machine only this way, never in Vast's create request);
 - `heartbeat`: report GPU use and open sessions, and learn whether to stop;
 - `exit`: report the command's exit code (the scheduler destroys the machine on its next pass);
-- `checkpoints`: list, download and upload its own job's checkpoints and outputs, through presigned URLs.
+- `checkpoints`: list, download and upload its own job's checkpoints and outputs, through presigned URLs;
+- `workspace/saved`, `workspace/save-failed` (a box): report how each save of /workspace went, for its page.
 
 Framework-free; `krater.web.routers.runner` maps it onto HTTP.
 """
@@ -38,8 +39,8 @@ from krater.models import (
     Project,
     StorageReservation,
 )
-from krater.models.compute_job import ACTIVE_JOB_STATES
-from krater.services import box_access, compute_settings, project_secrets, smoke
+from krater.models.compute_job import ACTIVE_JOB_STATES, FINISHED_JOB_STATES
+from krater.services import audit, box_access, compute_settings, project_secrets, smoke, workspaces
 from krater.services.errors import NotAllowed, ValidationFailed
 from krater.storage import ObjectStore
 
@@ -274,6 +275,88 @@ def synced(session: Session, instance: ComputeInstance, *, now: datetime) -> Non
     session.flush()
 
 
+#: The longest a save may say it took (its scan began this long before it reported): a bigger figure is cut to this.
+MAX_SAVE_SECONDS = 6 * 3600
+#: How many saves in a row may fail before the box's team is told in Slack (three timed saves: 30 minutes).
+SAVE_FAILURES_TO_NOTIFY = 3
+#: How much of the runner's reason for a failed save Krater keeps.
+SAVE_ERROR_MAX = 500
+AUDIT_BOX_SAVE_FAILING = "compute_box_save_failing"
+
+
+def _box_only(instance: ComputeInstance) -> None:
+    if instance.job.kind is not ComputeJobKind.BOX:
+        raise NotAllowed("Only a box saves /workspace.")
+
+
+def _count(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def workspace_saved(session: Session, instance: ComputeInstance, payload: dict[str, Any], *, now: datetime) -> None:
+    """A box's runner saved /workspace and everything is stored, timed or before a stop. The save counts as of when
+    it began looking at the files (`scan_seconds` before now, by Krater's own clock): a file changed during a long save
+    may not be in it. `files` and `bytes` are what the stored workspace holds."""
+    _box_only(instance)
+    raw = payload.get("scan_seconds")
+    seconds = float(raw) if isinstance(raw, int | float) and not isinstance(raw, bool) else 0.0
+    if not math.isfinite(seconds):
+        seconds = 0.0
+    saved_at = now - timedelta(seconds=min(max(seconds, 0.0), MAX_SAVE_SECONDS))
+    files, size = _count(payload.get("files")), _count(payload.get("bytes"))
+    if instance.workspace_saved_at is None or saved_at >= instance.workspace_saved_at:
+        instance.workspace_saved_at = saved_at
+        instance.workspace_files, instance.workspace_bytes = files, size
+    if instance.save_failures:
+        _event(
+            session,
+            instance,
+            "workspace_saves_ok",
+            f"/workspace saves work again, after {instance.save_failures} that failed.",
+            now=now,
+        )
+    instance.save_failures = 0
+    instance.last_save_error = None
+    instance.last_save_error_at = None
+    instance.save_failure_notified_at = None
+    workspaces.record_save(instance.job, saved_at, files, size)
+    session.flush()
+
+
+def workspace_save_failed(
+    session: Session, instance: ComputeInstance, payload: dict[str, Any], *, now: datetime
+) -> None:
+    """A box's runner tried to save /workspace and not everything was stored. The reason shows on the box's page;
+    after `SAVE_FAILURES_TO_NOTIFY` in a row its team hears in Slack (`AUDIT_BOX_SAVE_FAILING`), once until a save
+    works again."""
+    _box_only(instance)
+    raw = payload.get("error")
+    why = " ".join(raw.split())[:SAVE_ERROR_MAX] if isinstance(raw, str) and raw.strip() else "no reason given"
+    instance.save_failures += 1
+    instance.last_save_error = why
+    instance.last_save_error_at = now
+    if instance.save_failures == 1:
+        _event(session, instance, "workspace_save_failed", f"A save of /workspace failed: {why}", now=now)
+    job = instance.job
+    if instance.save_failures >= SAVE_FAILURES_TO_NOTIFY and instance.save_failure_notified_at is None:
+        instance.save_failure_notified_at = now
+        audit.record(
+            session,
+            None,
+            AUDIT_BOX_SAVE_FAILING,
+            project=job.project,
+            payload={
+                "job_id": str(job.id),
+                "job_name": job.name,
+                "owner_id": str(job.submitter_id),
+                "failures": instance.save_failures,
+                "error": why,
+                "saved_at": instance.workspace_saved_at.isoformat() if instance.workspace_saved_at else None,
+            },
+        )
+    session.flush()
+
+
 def report_exit(
     session: Session, instance: ComputeInstance, exit_code: int, *, now: datetime, smoke_stopped: bool = False
 ) -> ComputeJob:
@@ -318,6 +401,9 @@ def _prefix(instance: ComputeInstance, area: str) -> str:
     job = instance.job
     if area == INPUTS:
         return inputs_prefix(job.project_id)
+    if area == WORKSPACE:
+        # The box's workspace, which an earlier box may have started (`krater.services.workspaces`).
+        return workspaces.prefix_for(job)
     return f"projects/{job.project_id}/jobs/{job.id}/{area}/"
 
 
@@ -380,6 +466,15 @@ def _no_inputs(area: str) -> None:
         raise NotAllowed("A machine can read its project's inputs but not change them.")
 
 
+def _writable(instance: ComputeInstance, area: str) -> None:
+    """A machine may change its files only while its job is live. A finished box's workspace may already be another
+    box's (the team ended it to continue there): a late save from its machine, before Krater destroys it, would
+    overwrite and prune the new box's work."""
+    _no_inputs(area)
+    if area == WORKSPACE and instance.job.state in FINISHED_JOB_STATES:
+        raise NotAllowed("This box has ended: its machine can't change the workspace any more.")
+
+
 def begin_upload(
     session: Session,
     store: ObjectStore,
@@ -398,7 +493,7 @@ def begin_upload(
     Storage lists a file only once its upload finishes, so the size is reserved (`StorageReservation`) until the URLs
     expire, and the quota counts each file at the larger of what's stored and what's reserved for it. The project's
     row lock makes two uploads check the quota one after the other. The caller commits."""
-    _no_inputs(area)
+    _writable(instance, area)
     return reserve_upload(
         session,
         store,
@@ -526,7 +621,7 @@ def begin_uploads(
 
     A file that can't be uploaded (a bad name, a repeated name, the quota) gets `{"name", "error"}` in its place,
     and the others still get URLs. The caller commits."""
-    _no_inputs(area)
+    _writable(instance, area)
     _prefix(instance, area)
     if not isinstance(files, list) or not 0 < len(files) <= MAX_BATCH_UPLOADS:
         raise ValidationFailed({"files": f"Send a list of 1 to {MAX_BATCH_UPLOADS} files."})
@@ -555,7 +650,7 @@ def begin_uploads(
 def complete_upload(
     store: ObjectStore, instance: ComputeInstance, area: str, name: str, upload_id: str, etags: list[str]
 ) -> None:
-    _no_inputs(area)
+    _writable(instance, area)
     finish_upload(store, _key(instance, area, name), upload_id, etags)
 
 
@@ -565,6 +660,7 @@ def delete_files(store: ObjectStore, instance: ComputeInstance, area: str, names
     never deleted by a machine."""
     if area != WORKSPACE or instance.job.kind is not ComputeJobKind.BOX:
         raise NotAllowed("A machine can delete files only from its box's /workspace.")
+    _writable(instance, area)
     if not isinstance(names, list) or len(names) > MAX_DELETE_NAMES or not all(isinstance(name, str) for name in names):
         raise ValidationFailed({"names": f"Send a list of up to {MAX_DELETE_NAMES} stored names."})
     keys = [_key(instance, area, name) for name in names]

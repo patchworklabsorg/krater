@@ -13,11 +13,10 @@
       <a href="/help/compute-jobs">How to run jobs and boxes</a>.
     </p>
   </div>
-  {% if can_launch %}
-    <div class="page-actions">
-      <a class="button button--primary" href="/projects/{{ project.id }}/compute/new">New job or box</a>
-    </div>
-  {% endif %}
+  <div class="page-actions">
+    {% if can_see_files %}<a class="button" href="/projects/{{ project.id }}/files">Stored files</a>{% endif %}
+    {% if can_launch %}<a class="button button--primary" href="/projects/{{ project.id }}/compute/new">New job or box</a>{% endif %}
+  </div>
 </div>
 
 <section aria-labelledby="jobs">

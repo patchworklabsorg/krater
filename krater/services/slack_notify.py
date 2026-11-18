@@ -23,6 +23,7 @@ from decimal import Decimal
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
+from krater.compute.runner_api import AUDIT_BOX_SAVE_FAILING
 from krater.config import get_settings
 from krater.models import (
     AuditEvent,
@@ -740,6 +741,7 @@ BOX_NOTICES = (
     AUDIT_BOX_STOPPED,
     AUDIT_BOX_DESTROY_SOON,
     AUDIT_BOX_DESTROYED,
+    AUDIT_BOX_SAVE_FAILING,
     AUDIT_TRANSFER_WARNING,
     AUDIT_JOB_ENDED,
     AUDIT_JOB_IDLE,
@@ -762,6 +764,13 @@ def _box_message(session: Session, slack_client: SlackClient, event: AuditEvent,
     name = _escape_mrkdwn(payload.get("job_name", "a box"))
     link = f"{get_settings().base_url.rstrip('/')}/projects/{project.id}/compute/{payload.get('job_id', '')}"
     hours = payload.get("destroy_after_hours")
+    # Since 2026-11-18 a box's saved /workspace outlives it (`krater.services.workspaces`); older notices name none.
+    workspace = _escape_mrkdwn(payload.get("workspace_name") or payload.get("job_name", "this box"))
+    files = f"{get_settings().base_url.rstrip('/')}/projects/{project.id}/files"
+    kept = (
+        f"Its saved /workspace stays in Krater as the workspace *{workspace}*: continue it in a new box, or "
+        f"<{files}|download it>."
+    )
     if event.action == AUDIT_JOB_ENDED:
         icon, title = _ENDED.get(payload.get("state", ""), (":information_source:", "Job ended"))
         reason = (payload.get("reason") or "").strip()
@@ -793,12 +802,21 @@ def _box_message(session: Session, slack_client: SlackClient, event: AuditEvent,
             f"project's {_format_cents(payload.get('budget_cents', 0))} budget. Vast bills it per GB on top of the "
             f"hourly price. <{link}|Check the job>, and cancel it if that's more than you expected."
         )
+    elif event.action == AUDIT_BOX_SAVE_FAILING:
+        saved = payload.get("saved_at")
+        last = f" The last save that worked began at {saved[:16].replace('T', ' ')} UTC." if saved else ""
+        text = (
+            f":warning: *Workspace not saving*: {who}, the last {payload.get('failures', 3)} saves of *{name}*'s "
+            f"/workspace failed: {_escape_mrkdwn(payload.get('error', ''))}.{last} Work since then is only on the "
+            f"machine's disk. <{link}|Check the box>; a full storage quota is freed by deleting old files or "
+            f"workspaces on the <{files}|project's Files page>."
+        )
     elif event.action == AUDIT_BOX_STOPPED:
         saved = "/workspace is saved" if payload.get("synced") else "/workspace may not have saved"
         disk = payload.get("disk_microusd")  # absent from notices queued before Krater sent it
         cost = (
             f" While it's stopped only its disk bills: ${Decimal(int(disk)) / Decimal(1_000_000):.4f}/h, about "
-            f"{_format_cents(boxes.per_day_cents(int(disk)))} a day; cancel it to end that sooner."
+            f"{_format_cents(boxes.per_day_cents(int(disk)))} a day; end it to stop that sooner."
             if disk is not None
             else ""
         )
@@ -808,20 +826,20 @@ def _box_message(session: Session, slack_client: SlackClient, event: AuditEvent,
             at = f" at {when.astimezone(UTC).strftime('%Y-%m-%d %H:%M')} UTC"
         text = (
             f":zzz: *Box stopped*: {who}, your box *{name}* stopped ({_escape_mrkdwn(payload.get('reason', ''))}); "
-            f"{saved}.{cost} <{link}|Resume it> within {hours} hours, or Krater destroys it{at}, disk and saved "
-            "/workspace, and it can't be brought back."
+            f"{saved}.{cost} <{link}|Resume it> within {hours} hours, or Krater destroys its machine and disk{at}. "
+            f"{kept}"
         )
     elif event.action == AUDIT_BOX_DESTROY_SOON:
         at = payload.get("destroy_at", "")[:16].replace("T", " ")
         text = (
-            f":hourglass_flowing_sand: *Box destroyed soon*: {who}, your stopped box *{name}* will be destroyed at "
-            f"{at} UTC unless you <{link}|resume it>. Its disk and saved /workspace go with it and can't be brought "
-            "back, so copy out anything you need first."
+            f":hourglass_flowing_sand: *Box destroyed soon*: {who}, your stopped box *{name}*'s machine and disk "
+            f"will be destroyed at {at} UTC unless you <{link}|resume it>; anything on the disk outside /workspace "
+            f"goes with them. {kept}"
         )
     else:
         text = (
-            f":wastebasket: *Box destroyed*: {who}, your box *{name}* was stopped for {hours} hours and is gone, "
-            "with its disk and saved /workspace."
+            f":wastebasket: *Box destroyed*: {who}, your box *{name}* was stopped for {hours} hours, so its machine "
+            f"and disk are gone. {kept}"
         )
     plain = re.sub(r"<[^|>]*\|([^>]*)>", r"\1", text)  # links as their words, for the notification
     return [{"type": "section", "text": {"type": "mrkdwn", "text": text}}], plain
