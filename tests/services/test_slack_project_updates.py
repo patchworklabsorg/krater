@@ -54,6 +54,7 @@ def test_an_update_is_posted_once_to_the_team_channel(db_session, member, review
     assert "Progress update" in text and "<@U_MEMBER>" in text
     assert "<@here>" not in text  # escaped, so it doesn't ping the channel
     assert "Spent $0.00 of $50.00 (0%)" in text
+    assert "0 jobs and boxes so far" in text  # the first update
 
 
 def test_an_archived_channel_marks_it_done_unposted(db_session, member, reviewer, weave) -> None:
