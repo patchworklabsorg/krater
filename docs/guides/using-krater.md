@@ -191,9 +191,25 @@ Then it's yours to spend on compute: [Running jobs and boxes](compute-jobs.md). 
 channel at 80% and 95% of the ceiling, and stops every machine just before 100%. There's no automatic expiry, but an
 admin can reclaim the budget of a project that has stalled.
 
+## Progress updates and top-ups
+
+Once a project is approved, share what you've done with **Share progress** under **Progress updates** on its page:
+results, what worked and what didn't, links to a repo or demo, in Markdown. The team, reviewers and admins see it on
+the project page, and Krater posts it to the project's Slack channel. Each update notes the budget at the time (spent
+of the ceiling) and how many jobs and boxes ran since the previous one, so reviewers can follow along. From a
+terminal: `krater update <project> -m "..."` (or `-f notes.md`), and `krater updates <project>` lists them.
+
+When you need more budget, choose **Request a top-up**. Say what you've done so far (reviewers read that first, and
+a top-up without it is hard to approve), how much more you need, and what it's for, then tick the Submission
+Criteria box. That submits an amendment with your approved application unchanged and a new total of today's budget
+plus the amount, so it's reviewed exactly like one (see below): your current budget keeps working while it's in
+review, reviewers may approve less or more, and if it's rejected nothing changes. One top-up or amendment can be in
+review at a time. To change the application itself, start a full amendment instead.
+
 ## Asking for more budget: amendments
 
-When the first step works and you need more, choose **Start amendment** on the approved project's page. It opens
+When the first step works and you need more, the quickest way is a top-up (above). To change the application
+too, choose **Start amendment** on the approved project's page. It opens
 the application again with your answers, and:
 
 - the compute estimate starts from your **finished product** estimate: the extra compute the next stage needs;

@@ -496,6 +496,22 @@ def slack_notify_revision_submitted(revision_id: str) -> None:
         session.close()
 
 
+@app.task(name="slack_post_project_update")
+def slack_post_project_update(update_id: str) -> None:
+    """Post a progress update (or top-up request) to its project's channel. Deferred from the project pages right
+    after it commits; the periodic Slack reconcile posts any this misses (`slack_notify.sync_project_updates`)."""
+    session = get_sessionmaker()()
+    try:
+        slack_notify.post_project_update(session, get_slack_client(), update_id=uuid.UUID(update_id))
+        session.commit()
+    except SlackError as exc:
+        logger.exception("krater.slack_post_project_update failed")
+        session.rollback()
+        _report_failure("slack", f"slack_post_project_update: {_failure(exc)}")
+    finally:
+        session.close()
+
+
 @app.task(name="slack_notify_decision")
 def slack_notify_decision(revision_id: str) -> None:
     """Update the review message to show a revision's decided outcome. A no-op if the revision is

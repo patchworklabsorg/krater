@@ -342,6 +342,16 @@ def _parser() -> argparse.ArgumentParser:
     inputs_rm.add_argument("project", help=project_help)
     inputs_rm.add_argument("name")
 
+    update = commands.add_parser(
+        "update", help="share progress: post an update to the project page and its Slack channel"
+    )
+    update.add_argument("project", help=project_help)
+    update_text = update.add_mutually_exclusive_group(required=True)
+    update_text.add_argument("-m", "--message", help="the update, in Markdown")
+    update_text.add_argument("-f", "--file", help="read the update from a file (- for standard input)")
+    updates = commands.add_parser("updates", help="a project's progress updates and top-up requests, newest first")
+    updates.add_argument("project", help=project_help)
+
     files = commands.add_parser(
         "files", help="everything a project stores (inputs, workspaces, jobs' files), and its quota"
     )
@@ -1251,6 +1261,21 @@ def run(
             data = krater.delete(f"{base}/{quote(args.name, safe='/')}")
             count = data["deleted"]
             out(data, lambda: say(f"Deleted {count} input file{'s' if count != 1 else ''}."))
+    elif args.command == "update":
+        if args.file is not None:
+            if args.file == "-":
+                text = sys.stdin.read()
+            else:
+                with open(args.file, encoding="utf-8") as handle:
+                    text = handle.read()
+        else:
+            text = args.message
+        project_id = resolve.resolve_project(krater, args.project)
+        data = krater.post(f"/projects/{project_id}/updates", json={"body": text})
+        out(data, lambda: say(f"Posted. It's on the project page ({data['url']}) and in the project's Slack channel."))
+    elif args.command == "updates":
+        data = krater.get(f"/projects/{resolve.resolve_project(krater, args.project)}/updates")
+        out(data, lambda: _say_updates(data, say))
     elif args.command == "files":
         data = krater.get(f"/projects/{resolve.resolve_project(krater, args.project)}/files")
         out(data, lambda: _say_files(data, say))
@@ -1318,6 +1343,24 @@ def run(
 
 
 AREAS = ("outputs", "checkpoints", "logs", "workspace")
+
+
+def _say_updates(data: dict, say: Callable[[str], None]) -> None:
+    if not data["updates"]:
+        say("No updates yet. Post one with `krater update PROJECT -m TEXT`.")
+    for update in data["updates"]:
+        used = f"spent ${update['spent_cents'] / 100:,.2f} of ${update['ceiling_cents'] / 100:,.2f}"
+        if update["percent_used"] is not None:
+            used += f" ({update['percent_used']}%)"
+        say(f"{update['created_at'][:10]}  {update['author']}: {used}")
+        if update["topup_cents"] is not None:
+            outcome = (update["topup_outcome"] or "pending").replace("_", " ")
+            say(f"  top-up: ${update['topup_cents'] / 100:,.2f} more ({outcome}): {update['topup_reason']}")
+        for line in update["body"].splitlines():
+            say(f"  {line}")
+        say("")
+    if data.get("can_post"):
+        say(f"Ask for more budget on the web: {data['topup_url']}")
 
 
 def _say_files(data: dict, say: Callable[[str], None]) -> None:

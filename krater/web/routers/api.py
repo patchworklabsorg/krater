@@ -33,9 +33,11 @@ from krater.services import (
     compute_jobs,
     compute_settings,
     job_costs,
+    people,
     price_history,
     project_files,
     project_secrets,
+    project_updates,
     teams,
     workspaces,
 )
@@ -57,6 +59,7 @@ from krater.storage import StorageError, get_compute_store
 from krater.vast import microusd_to_usd, usd_to_microusd
 from krater.weave import WeaveClient, WeaveUnavailableError, get_weave_client
 from krater.web import live_quote
+from krater.worker.app import slack_post_project_update
 
 router = APIRouter(prefix="/api/v1")
 
@@ -767,6 +770,67 @@ def delete_workspace(project_id: uuid.UUID, workspace_id: uuid.UUID, actor: Me, 
         return _error(503, "Krater's storage didn't answer; try again in a minute.")
     db_session.commit()
     return {"deleted": count}
+
+
+def _update_json(view: project_updates.UpdateView, names: dict) -> dict:
+    update = view.update
+    revision = update.revision
+    return {
+        "id": str(update.id),
+        "author": names.get(update.author_id, "A former team member"),
+        "created_at": update.created_at.isoformat(),
+        "body": update.body,
+        "topup_cents": update.topup_cents,
+        "topup_reason": update.topup_reason,
+        "topup_outcome": revision.outcome.value if revision is not None else None,
+        "ceiling_cents": update.ceiling_cents,
+        "spent_cents": update.spent_cents,
+        "percent_used": view.percent_used,
+        "jobs_since": update.jobs_since,
+    }
+
+
+@router.get("/projects/{project_id}/updates")
+def list_updates(
+    project_id: uuid.UUID,
+    actor: Me,
+    db_session: Db,
+    weave_client: Annotated[WeaveClient, Depends(get_weave_client)],
+):
+    """The project's progress updates and top-up requests, newest first (`krater updates`)."""
+    project = _project(db_session, actor, project_id)
+    views = project_updates.list_for(db_session, actor, project)
+    authors = list(db_session.scalars(sa.select(User).where(User.id.in_({v.update.author_id for v in views}))))
+    names = people.names(weave_client, authors) if authors else {}
+    return {
+        "updates": [_update_json(view, names) for view in views],
+        "can_post": project_updates.can_post(actor, project),
+        "topup_url": f"{get_settings().base_url.rstrip('/')}/projects/{project.id}/updates/new?topup=1",
+    }
+
+
+@router.post("/projects/{project_id}/updates", status_code=201)
+async def post_update(project_id: uuid.UUID, request: Request, actor: Me, db_session: Db):
+    """Post a progress update (`krater update`). A top-up request is made on the web: it submits an amendment, which
+    asks for the Submission Criteria box and the same checks as a submission."""
+    project = _project(db_session, actor, project_id)
+    body = await _body(request)
+    if body is None or not isinstance(body.get("body"), str):
+        return _error(400, 'Send a JSON object with the update as "body".')
+    try:
+        update = project_updates.post(db_session, actor, project=project, body=body["body"])
+    except NotAllowed as exc:
+        db_session.rollback()
+        return _error(403, str(exc))
+    except InvalidState as exc:
+        db_session.rollback()
+        return _error(409, str(exc))
+    except ValidationFailed as exc:
+        db_session.rollback()
+        return _error(422, "Check the update.", fields=exc.errors)
+    db_session.commit()
+    slack_post_project_update.defer(update_id=str(update.id))
+    return {"id": str(update.id), "url": f"{get_settings().base_url.rstrip('/')}/projects/{project.id}#updates"}
 
 
 _ACTIONS = {

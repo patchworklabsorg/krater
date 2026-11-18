@@ -444,6 +444,9 @@ def start_amendment(session: Session, actor: Actor, *, project: Project) -> Proj
         raise InvalidState("Amendments can only be started on an approved project.")
 
     _ensure_no_draft_in_progress(project)
+    if amendment_in_review(project):
+        # A second would supersede the one reviewers are reading (a top-up request is one too).
+        raise InvalidState("This project already has an amendment or top-up in review: wait for its decision first.")
     grants.require_none_pending(session, project)
 
     approved = project.approved_revision
@@ -469,6 +472,17 @@ def start_amendment(session: Session, actor: Actor, *, project: Project) -> Proj
     project.current_revision = draft
     session.flush()
     return draft
+
+
+def amendment_in_review(project: Project) -> bool:
+    """Whether the project's newest revision is a submitted amendment (or top-up request) still awaiting a decision."""
+    current = project.current_revision
+    return (
+        current is not None
+        and current.kind is RevisionKind.AMENDMENT
+        and current.submitted_at is not None
+        and current.outcome is RevisionOutcome.PENDING
+    )
 
 
 def _ensure_no_draft_in_progress(project: Project) -> None:

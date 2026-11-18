@@ -158,6 +158,23 @@
     <div class="write-up prose">{{ current.write_up | markdown }}</div>
     {% if current.demo_url %}<p><a href="{{ current.demo_url }}">Demo</a></p>{% endif %}
   {% endif %}
+  {% if current and current.topup and current.submitted_at and current.outcome.value == "pending" %}
+    {# A top-up request (krater.services.project_updates): what reviewers decide, above the unchanged application. #}
+    {% set topup = current.topup %}
+    <h2>Top-up request (in review)</h2>
+    <p>
+      <strong>{{ topup.topup_cents | dollars }} more</strong>, for a new total of
+      {{ current.budget_requested_cents | dollars }}. When it was asked for, {{ topup.spent_cents | dollars }} of
+      {{ topup.ceiling_cents | dollars }} was spent.
+    </p>
+    <h3>What it's for</h3>
+    <p class="write-up">{{ topup.topup_reason | nl2br }}</p>
+    {% if topup.body %}
+      <h3>Progress so far</h3>
+      <div class="write-up prose">{{ topup.body | markdown }}</div>
+    {% endif %}
+    <p class="muted">The application below is the approved one, unchanged.</p>
+  {% endif %}
   {% if rev %}
     <h2>{{ "Draft application" if not rev.submitted_at else ("Approved application" if rev.outcome.value == "approved" else "Application") }}</h2>
       <div class="answers">
@@ -266,12 +283,54 @@
 </section>
 {% endif %}
 
+<section class="card" id="updates">
+  <div class="card-head">
+    <h2>Progress updates</h2>
+  </div>
+  {% if can_post_update %}
+    <div class="action-row">
+      <a class="button button--primary button--small" href="/projects/{{ project.id }}/updates/new">Share progress</a>
+      {% if can_request_topup %}
+        <a class="button button--small" href="/projects/{{ project.id }}/updates/new?topup=1">Request a top-up</a>
+      {% endif %}
+    </div>
+  {% endif %}
+  {% for view in updates %}
+    {% set update = view.update %}
+    <article class="revision">
+      <div class="revision__head">
+        <h3>{{ names_by_id.get(update.author_id, "A former team member") }}
+          &middot; {{ update.created_at.strftime("%Y-%m-%d") }}</h3>
+        {% if update.is_topup %}
+          {% set outcome = update.revision.outcome.value if update.revision else "pending" %}
+          <span class="badge badge--outcome-{{ outcome }}">Top-up {{ update.topup_cents | dollars }}: {{ outcome | replace("_", " ") }}</span>
+        {% endif %}
+      </div>
+      {% if update.body %}<div class="write-up prose">{{ update.body | markdown }}</div>{% endif %}
+      {% if update.is_topup %}
+        <p><strong>Asked for {{ update.topup_cents | dollars }} more:</strong> {{ update.topup_reason | nl2br }}</p>
+        {% if update.revision and update.revision.outcome.value == "approved" and update.revision.granted_other_amount %}
+          <p class="muted">Approved for a new total of {{ update.revision.budget_approved_cents | dollars }}.</p>
+        {% endif %}
+      {% endif %}
+      <p class="muted">
+        Spent {{ update.spent_cents | dollars }} of {{ update.ceiling_cents | dollars }}
+        {%- if view.percent_used is not none %} ({{ view.percent_used }}%){% endif %}
+        &middot; {{ update.jobs_since }} {{ "job or box" if update.jobs_since == 1 else "jobs and boxes" }} since the previous update
+      </p>
+    </article>
+  {% else %}
+    <p class="muted">No updates yet.{% if can_post_update %} Share what you've done so reviewers can follow along, and
+      ask for a top-up here when you need more budget.{% endif %}</p>
+  {% endfor %}
+</section>
+
 <section class="card">
   <h2>Revision history</h2>
   {% for revision in revisions %}
     <article class="revision">
       <div class="revision__head">
-        <h3>Revision {{ revision.number }} &middot; {{ revision.kind.value | capitalize }}</h3>
+        <h3>Revision {{ revision.number }} &middot; {{ "Top-up request" if revision.topup else revision.kind.value | capitalize }}</h3>
         {% if revision.submitted_at %}
           <span class="badge badge--outcome-{{ revision.outcome.value }}">{{ revision.outcome.value | capitalize }}</span>
         {% else %}
@@ -384,7 +443,8 @@
       finish your amendment with <strong>Edit draft</strong> and submit it. Your current budget keeps working
       meanwhile. <a href="/help/using-krater#asking-for-more-budget-amendments">About amendments</a>
     {% elif status == "approved" and cur and cur.kind.value == "amendment" and cur.outcome.value == "pending" %}
-      reviewers are deciding your amendment. Your current budget keeps working meanwhile.
+      reviewers are deciding your {{ "top-up request" if cur.topup else "amendment" }}. Your current budget keeps
+      working meanwhile.
     {% elif status == "approved" and cur and cur.kind.value == "completion" and not cur.submitted_at %}
       finish your final write-up with <strong>Edit draft</strong>, then choose
       <strong>Submit completion for review</strong>.
@@ -392,7 +452,8 @@
     {% elif status == "approved" %}
       {% if compute_on %}run your work from <a href="/projects/{{ project.id }}/compute">Compute</a>
       (<a href="/help/compute-jobs">how to run jobs</a>).{% else %}do the work on your budget.{% endif %}
-      Need more budget? <strong>Start amendment</strong>. Finished? <strong>Start completion</strong> to write it
+      Need more budget? <strong>Request a top-up</strong> under Progress updates, or <strong>Start amendment</strong>
+      to change the application too. Finished? <strong>Start completion</strong> to write it
       up for the gallery.
     {% elif status == "pending_completion_review" %}
       reviewers are reading your write-up. Once it's approved it's published in the gallery, and unspent budget is

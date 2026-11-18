@@ -16,6 +16,7 @@ from krater.models.mixins import CreatedAtMixin, UUIDPrimaryKeyMixin
 
 if TYPE_CHECKING:
     from krater.models.project import Project
+    from krater.models.project_update import ProjectUpdate
     from krater.models.review import Review
 
 
@@ -98,6 +99,10 @@ class ProjectRevision(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
 
     project: Mapped[Project] = relationship(foreign_keys=[project_id], back_populates="revisions")
     reviews: Mapped[list[Review]] = relationship(back_populates="revision")
+    # The top-up request that opened this amendment, if one did (`krater.services.project_updates`).
+    topup: Mapped[ProjectUpdate | None] = relationship(
+        "ProjectUpdate", foreign_keys="ProjectUpdate.revision_id", viewonly=True, uselist=False
+    )
 
     @property
     def approved_budget_cents(self) -> int:
