@@ -1071,13 +1071,9 @@ def run(
                 + (f"; exit code {job['exit_code']}" if job["exit_code"] is not None else "")
             )
             costs = job.get("costs") or []
-            if any(part["estimate_microusd"] or part["charged_microusd"] for part in costs):
-                say(
-                    "  cost: "
-                    + ", ".join(
-                        f"{part['label'].lower()} ${_best(part) / 1_000_000:.3f}" for part in costs if _best(part)
-                    )
-                )
+            shown = [f"{part['label'].lower()} ${_best(part) / 1_000_000:.3f}" for part in costs if _best(part)]
+            if shown:
+                say("  cost: " + ", ".join(shown))
             machine = job.get("machine")
             if machine:
                 now_rate = machine.get("usd_per_hour_now")  # absent from a Krater before it

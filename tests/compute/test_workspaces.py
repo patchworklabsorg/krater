@@ -113,7 +113,7 @@ def test_a_stopped_holder_is_ended_only_when_asked(db_session, member, project, 
 
     with pytest.raises(ValidationFailed) as caught:
         _box(db_session, member, project, workspace_id=first.workspace_id)
-    assert "Tick the box" in caught.value.errors["workspace"]
+    assert "--end-holder" in caught.value.errors["workspace"]
 
     second = _box(db_session, member, project, name="next", workspace_id=first.workspace_id, end_holder=True)
 
