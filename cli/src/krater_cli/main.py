@@ -1387,8 +1387,8 @@ def _safe_parts(path: str) -> list[str] | None:
 def _inside(root: str, target: str) -> bool:
     """Whether `target` is under `root` once every symlink on its way is followed, so a symlink the workspace
     restored can't carry a later file out of the folder."""
-    real_root = os.path.realpath(root)
-    return os.path.realpath(target).startswith(real_root + os.sep)
+    real_root, real = os.path.realpath(root), os.path.realpath(target)
+    return real == real_root or real.startswith(real_root + os.sep)
 
 
 def _download_workspace(
@@ -1453,7 +1453,11 @@ def _download_workspace(
     for entry, target in links:
         if os.path.lexists(target):
             continue
+        if not _inside(root, os.path.dirname(target)):
+            skipped.append(entry["path"])
+            continue
         try:
+            os.makedirs(os.path.dirname(target), exist_ok=True)
             os.symlink(entry["target"] or "", target)
         except (OSError, NotImplementedError):
             with open(target + ".symlink", "w", encoding="utf-8") as handle:
