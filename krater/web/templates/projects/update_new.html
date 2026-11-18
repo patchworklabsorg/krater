@@ -27,6 +27,12 @@
 
 <section class="card">
   {% if errors.form %}<p class="field-error" role="alert">{{ errors.form }}</p>{% endif %}
+  {% if demographics_url %}
+    <p><a class="button button--primary" href="{{ demographics_url }}">Answer the form in Weave</a>
+      <span class="muted">Weave brings you back here after you save.</span></p>
+  {% elif errors.form and demographics_asked %}
+    <p class="muted">Open your Weave profile and answer the demographics form, then ask again.</p>
+  {% endif %}
   {% if errors.application %}<p class="field-error" role="alert">{{ errors.application }}</p>{% endif %}
   <form method="post" action="/projects/{{ project.id }}/updates" class="form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

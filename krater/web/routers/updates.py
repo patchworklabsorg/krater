@@ -13,6 +13,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Form, Request
 from sqlalchemy.orm import Session
 
+from krater.config import get_settings
 from krater.db import get_session
 from krater.models import Project
 from krater.services import budget as budget_service
@@ -21,6 +22,7 @@ from krater.services.actor import Actor
 from krater.services.demographics import DemographicsCheckUnavailable, DemographicsRequired
 from krater.services.errors import InvalidState, NotFound, ValidationFailed
 from krater.weave import WeaveClient, get_weave_client
+from krater.weave.links import demographics_form_url
 from krater.web.csrf import verify_csrf_token
 from krater.web.deps import fresh_actor
 from krater.web.money import InvalidDollarAmount, parse_dollars
@@ -45,6 +47,7 @@ def _form_context(
     topup: bool,
     posted: dict[str, str] | None = None,
     errors: dict[str, str] | None = None,
+    demographics_url: str | None = None,
 ) -> dict:
     ceiling = budget_service.ceiling_cents(session, project)
     spent = budget_service.latest_spend_cents(session, project)
@@ -60,6 +63,9 @@ def _form_context(
         "errors": errors or {},
         "body_max": project_updates.BODY_MAX_CHARS,
         "reason_max": project_updates.REASON_MAX_CHARS,
+        # Set when Weave's demographics form is unanswered: it brings the member back to this form.
+        "demographics_url": demographics_url,
+        "demographics_asked": demographics_url is not None or bool((errors or {}).get("demographics")),
     }
 
 
@@ -101,9 +107,17 @@ def post_update(
     posted = {"body": body, "amount": amount, "reason": reason}
     wants_topup = topup == "1" or bool(amount.strip()) or bool(reason.strip())
 
-    def _refuse(errors: dict[str, str]):
+    def _refuse(errors: dict[str, str], demographics_url: str | None = None):
         db_session.rollback()
-        context = _form_context(db_session, actor, project, topup=wants_topup, posted=posted, errors=errors)
+        context = _form_context(
+            db_session,
+            actor,
+            project,
+            topup=wants_topup,
+            posted=posted,
+            errors=errors,
+            demographics_url=demographics_url,
+        )
         return templates.TemplateResponse(request, "projects/update_new.html", context, status_code=422)
 
     if not wants_topup:
@@ -136,7 +150,8 @@ def post_update(
     try:
         demographics.require_answered(weave_client, actor.user)
     except DemographicsRequired as exc:
-        return _refuse({"form": str(exc)})
+        back = f"{get_settings().base_url.rstrip('/')}/projects/{project.id}/updates/new?topup=1"
+        return _refuse({"form": str(exc), "demographics": "1"}, demographics_url=demographics_form_url(back))
     except DemographicsCheckUnavailable as exc:
         return _invalid_state_redirect(db_session, request, project_id, exc)
     try:

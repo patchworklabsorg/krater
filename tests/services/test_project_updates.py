@@ -232,6 +232,14 @@ def test_one_topup_at_a_time(db_session, member, reviewer, weave) -> None:
     assert project_updates.can_request_topup(project)
 
 
+def test_no_full_amendment_while_a_topup_is_in_review(db_session, member, reviewer, weave) -> None:
+    project = _approved(db_session, member, reviewer, weave)
+    _topup(db_session, member, project)
+
+    with pytest.raises(InvalidState):
+        projects.start_amendment(db_session, member, project=project)
+
+
 def test_no_topup_while_an_amendment_draft_is_open(db_session, member, reviewer, weave) -> None:
     project = _approved(db_session, member, reviewer, weave)
     projects.start_amendment(db_session, member, project=project)

@@ -662,7 +662,10 @@ def _build_detail_context(
         "can_edit_draft": is_team and has_draft,
         "can_submit": is_team and has_draft and current.kind is not RevisionKind.COMPLETION,
         "can_submit_completion": is_team and has_draft and current.kind is RevisionKind.COMPLETION,
-        "can_start_amendment": is_team and project.status is ProjectStatus.APPROVED and not has_draft,
+        "can_start_amendment": is_team
+        and project.status is ProjectStatus.APPROVED
+        and not has_draft
+        and not project_service.amendment_in_review(project),
         "can_start_completion": is_team and project.status is ProjectStatus.APPROVED and not has_draft,
         "can_withdraw": is_lead and project.status not in _TERMINAL_STATUSES,
         "can_review": can_review,

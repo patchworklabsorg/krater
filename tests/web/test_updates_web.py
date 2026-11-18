@@ -8,6 +8,7 @@ import sqlalchemy as sa
 from krater.config import get_settings
 from krater.models import ProjectUpdate, RevisionKind, RevisionOutcome
 from krater.services import budget
+from krater.slack import get_slack_client
 from krater.weave import StubWeaveClient
 from tests.conftest import ADMIN_SUB, MEMBER_SUB, OTHER_MEMBER_SUB, REVIEWER_SUB, get_csrf_token
 
@@ -124,6 +125,57 @@ def test_someone_off_the_team_sees_nothing(client, project, login_as) -> None:
 def test_posting_needs_csrf(client, project) -> None:
     response = client.post(f"/projects/{project.id}/updates", data={"body": "Hi."}, follow_redirects=False)
     assert response.status_code in (400, 403)
+
+
+def test_reviewers_and_outsiders_cant_post(client, db_session, project, login_as, deferred) -> None:
+    csrf = get_csrf_token(client.get(f"/projects/{project.id}/updates/new").text)
+    for sub in (REVIEWER_SUB, OTHER_MEMBER_SUB):
+        login_as(sub)
+        response = client.post(
+            f"/projects/{project.id}/updates", data={"csrf_token": csrf, "body": "Not mine."}, follow_redirects=False
+        )
+        assert response.status_code in (
+            403,
+            404,
+        )  # 404 for a page they may not open; 403 if the session's token changed
+    assert db_session.scalar(sa.select(sa.func.count()).select_from(ProjectUpdate)) == 0
+
+
+def test_a_slack_guest_shares_progress_but_cant_request_a_topup(client, db_session, project, deferred) -> None:
+    get_slack_client().set_user_info("U0001MEMBER", is_restricted=True)
+    try:
+        refused = _post(client, project, topup="1", amount="25", reason="More.", criteria_read="yes")
+        assert refused.status_code == 422
+        assert db_session.scalar(sa.select(sa.func.count()).select_from(ProjectUpdate)) == 0
+        db_session.refresh(project)
+        assert project.current_revision.kind is RevisionKind.PROPOSAL  # no amendment was opened
+
+        assert _post(client, project, body="Plain progress is fine.").status_code == 303
+    finally:
+        get_slack_client().unset_user_info("U0001MEMBER")
+
+
+def test_unanswered_demographics_link_to_weave(client, db_session, project, weave_stub, deferred) -> None:
+    weave_stub.set_demographics_answered(MEMBER_SUB, False)
+
+    response = _post(client, project, topup="1", amount="25", reason="More.", criteria_read="yes")
+
+    assert response.status_code == 422
+    assert "answer the demographics form" in response.text.lower()
+    assert db_session.scalar(sa.select(sa.func.count()).select_from(ProjectUpdate)) == 0
+
+
+def test_no_full_amendment_while_a_topup_is_in_review(client, db_session, project, deferred) -> None:
+    _post(client, project, topup="1", body="It trains.", amount="25", reason="More.", criteria_read="yes")
+
+    page = client.get(f"/projects/{project.id}")
+    assert "Start amendment" not in page.text
+    response = client.post(
+        f"/projects/{project.id}/amend", data={"csrf_token": get_csrf_token(page.text)}, follow_redirects=False
+    )
+    assert response.status_code == 303
+    db_session.refresh(project)
+    assert project.current_revision.topup is not None  # still the top-up, not superseded
 
 
 # -- The CLI's API ----------------------------------------------------------------------------------------------------

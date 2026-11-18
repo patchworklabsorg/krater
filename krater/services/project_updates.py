@@ -28,8 +28,6 @@ from krater.models import (
     ProjectRevision,
     ProjectStatus,
     ProjectUpdate,
-    RevisionKind,
-    RevisionOutcome,
 )
 from krater.services import budget, projects, teams
 from krater.services.actor import Actor
@@ -63,14 +61,11 @@ def can_post(actor: Actor, project: Project) -> bool:
 
 
 def can_request_topup(project: Project) -> bool:
-    """Whether the project could take a top-up request now (the team check is `can_post`'s)."""
+    """Whether the project could take a top-up request now (the team check is `can_post`'s): approved, with no draft
+    and no amendment or top-up in review (a second would supersede it)."""
     current = project.current_revision
     has_draft = current is not None and current.submitted_at is None
-    # One at a time: a second request would supersede the amendment reviewers are reading.
-    in_review = (
-        current is not None and current.kind is RevisionKind.AMENDMENT and current.outcome is RevisionOutcome.PENDING
-    )
-    return project.status is ProjectStatus.APPROVED and not has_draft and not in_review
+    return project.status is ProjectStatus.APPROVED and not has_draft and not projects.amendment_in_review(project)
 
 
 def list_for(session: Session, actor: Actor, project: Project) -> list[UpdateView]:
