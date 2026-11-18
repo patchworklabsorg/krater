@@ -225,7 +225,7 @@ class Fake:
                 job["smoke_minutes"] = body.get("smoke_minutes")
             self.jobs.append(job)
             return httpx.Response(201, json=job)
-        acted = re.fullmatch(r"/jobs/([0-9a-f-]{36})/(cancel|stop|resume|move)", path)
+        acted = re.fullmatch(r"/jobs/([0-9a-f-]{36})/(cancel|end|stop|resume|move)", path)
         if acted and request.method == "POST":
             if self.slow_action is not None:
                 # Krater took too long to answer: it did the action (or not), and the client gave up waiting.

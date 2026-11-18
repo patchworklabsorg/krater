@@ -53,6 +53,11 @@ type fakeKrater struct {
 	smokeSeconds int
 	// Storage answers 503 to GETs of this key, as when it's briefly unreachable.
 	unreadable string
+	// The checkpoint (and workspace) and log sync intervals /start gives, in seconds (0: an hour, and the default).
+	syncSeconds    int
+	logSyncSeconds int
+	// Answer 404 to the workspace save reports, as a Krater older than them does.
+	noSaveReports bool
 
 	mu         sync.Mutex
 	objects    map[string][]byte // "area/name" -> content
@@ -65,6 +70,10 @@ type fakeKrater struct {
 	// Whether each exit report said the smoke test's timer stopped the command.
 	smokeStops []bool
 	starts     int
+	// The bodies of the workspace save reports, and how many of them were answered 404.
+	saves       []map[string]any
+	saveFails   []map[string]any
+	saveReports int
 }
 
 func newFakeKrater(t *testing.T) *fakeKrater {
@@ -113,9 +122,14 @@ func (f *fakeKrater) handle(w http.ResponseWriter, r *http.Request) {
 		if kind == "" {
 			kind = "job"
 		}
+		syncSeconds := f.syncSeconds
+		if syncSeconds == 0 {
+			syncSeconds = 3600
+		}
 		f.writeJSON(w, map[string]any{"job_id": "j1", "attempt": 1, "resumed": f.resumed, "command": f.command,
-			"kind": kind, "ssh_keys": f.sshKeys, "heartbeat_seconds": 1, "checkpoint_sync_seconds": 3600,
-			"secrets": f.secrets, "inputs": f.inputs, "smoke_seconds": f.smokeSeconds})
+			"kind": kind, "ssh_keys": f.sshKeys, "heartbeat_seconds": 1, "checkpoint_sync_seconds": syncSeconds,
+			"log_sync_seconds": f.logSyncSeconds, "secrets": f.secrets, "inputs": f.inputs,
+			"smoke_seconds": f.smokeSeconds})
 	case path == "/runner/v1/heartbeat":
 		f.heartbeats = append(f.heartbeats, body)
 		n := len(f.heartbeats)
@@ -134,6 +148,19 @@ func (f *fakeKrater) handle(w http.ResponseWriter, r *http.Request) {
 	case path == "/runner/v1/synced":
 		f.synced++
 		f.ckptAtSync = string(f.objects["checkpoints/ckpt.txt"])
+		f.writeJSON(w, map[string]any{"ok": true})
+	case path == "/runner/v1/workspace/saved" || path == "/runner/v1/workspace/save-failed":
+		f.saveReports++
+		if f.noSaveReports {
+			w.WriteHeader(http.StatusNotFound)
+			f.writeJSON(w, map[string]any{"detail": "Not Found"})
+			return
+		}
+		if strings.HasSuffix(path, "/saved") {
+			f.saves = append(f.saves, body)
+		} else {
+			f.saveFails = append(f.saveFails, body)
+		}
 		f.writeJSON(w, map[string]any{"ok": true})
 	case path == "/runner/v1/exit":
 		f.exitCodes = append(f.exitCodes, int(body["exit_code"].(float64)))
@@ -853,5 +880,93 @@ func TestAJobWhoseInputsCantBeCopiedFailsWithoutRunning(t *testing.T) {
 	}
 	if _, statErr := os.Stat(marker); statErr == nil {
 		t.Errorf("the command ran without its inputs")
+	}
+}
+
+// runTimedBox runs a box that saves /workspace every second for `seconds`, holding a notes file.
+func runTimedBox(t *testing.T, f *fakeKrater, seconds time.Duration) Config {
+	f.kind = "box"
+	f.syncSeconds = 1
+	cfg := f.cfg(t)
+	cfg.Home, cfg.WorkspaceDir, cfg.ProcNet = t.TempDir(), t.TempDir(), t.TempDir()
+	os.WriteFile(filepath.Join(cfg.WorkspaceDir, "notes.txt"), []byte("notes"), 0o644)
+	ctx, cancel := context.WithTimeout(context.Background(), seconds)
+	defer cancel()
+	if _, err := Run(ctx, cfg, http.DefaultClient, http.DefaultClient, noGPU); err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}
+
+func TestABoxTellsKraterWhenATimedSaveStoredEverything(t *testing.T) {
+	f := newFakeKrater(t)
+
+	runTimedBox(t, f, 2500*time.Millisecond)
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.saves) == 0 || len(f.saveFails) != 0 {
+		t.Fatalf("saves %v, failures %v: a timed save must be reported", f.saves, f.saveFails)
+	}
+	saved := f.saves[0]
+	if saved["files"] != 1.0 || saved["bytes"] != 5.0 {
+		t.Errorf("report %v: want the stored workspace's 1 file of 5 bytes", saved)
+	}
+	if seconds, ok := saved["scan_seconds"].(float64); !ok || seconds < 0 || seconds > 5 {
+		t.Errorf("scan_seconds %v", saved["scan_seconds"])
+	}
+	if f.synced != 0 {
+		t.Errorf("a timed save confirmed a stop-save (%d): only a save Krater asked for may", f.synced)
+	}
+}
+
+func TestABoxTellsKraterWhyASaveFailed(t *testing.T) {
+	quickRetries(t, 50*time.Millisecond)
+	f := newFakeKrater(t)
+	f.refuse = "notes.txt"
+
+	runTimedBox(t, f, 2500*time.Millisecond)
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.saveFails) == 0 {
+		t.Fatalf("no failure report; saves %v", f.saves)
+	}
+	why, _ := f.saveFails[0]["error"].(string)
+	if !strings.Contains(why, "notes.txt") || !strings.Contains(why, "quota") {
+		t.Errorf("error %q should name the file and the reason", why)
+	}
+}
+
+func TestABoxStopsReportingSavesToAKraterThatDoesntKnowHow(t *testing.T) {
+	f := newFakeKrater(t)
+	f.noSaveReports = true
+
+	runTimedBox(t, f, 3500*time.Millisecond)
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.saveReports != 1 {
+		t.Errorf("%d save reports: after the first 404 the runner should stop sending them", f.saveReports)
+	}
+	if string(f.objects["workspace/notes.txt"]) != "notes" {
+		t.Errorf("the workspace wasn't saved: %v", keys(f.objects))
+	}
+}
+
+func TestABoxSavesTheRunnersLogForItsTeam(t *testing.T) {
+	f := newFakeKrater(t)
+	f.logSyncSeconds = 1
+	var logged strings.Builder
+	log.SetOutput(&logged)
+	defer log.SetOutput(os.Stderr)
+
+	runTimedBox(t, f, 2500*time.Millisecond)
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	saved := string(f.objects["logs/attempt-1.log"])
+	if !strings.Contains(saved, "box j1, attempt 1") || !strings.Contains(saved, "workspace files") {
+		t.Errorf("the box's saved log lacks the runner's lines:\n%s", saved)
 	}
 }

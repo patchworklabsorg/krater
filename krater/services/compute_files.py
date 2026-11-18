@@ -20,7 +20,7 @@ from krater.services.actor import Actor
 from krater.services.errors import NotAllowed, NotFound
 from krater.storage import ObjectStore
 
-#: The areas a member can read. A box's `workspace` is restored onto its next machine instead.
+#: The areas a member can read here. A box's workspace is read through `krater.services.workspaces`.
 AREAS = ("outputs", "checkpoints", "logs")
 #: How much of the end of a log the job page and `krater logs` show by default.
 LOG_TAIL_BYTES = 64 * 1024

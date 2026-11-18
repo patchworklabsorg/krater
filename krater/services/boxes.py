@@ -3,11 +3,13 @@ a stopped box is destroyed. The job page, the API (and so `krater show`) and the
 
 A stopped box keeps its machine's disk, which still bills (at the disk part of its price) until it is resumed or
 destroyed. Krater destroys it after the project's `box_destroy_hours`. Only /workspace is saved to Krater, every
-`WORKSPACE_SAVE_MINUTES` while the box runs and before Krater stops it, and only onto the same box's next machine:
-once the box is destroyed (cancelled, or stopped too long) its member can't restore or download it."""
+`WORKSPACE_SAVE_MINUTES` while the box runs and before Krater stops it, into the box's workspace
+(`krater.services.workspaces`). Destroying the box ends its machine and disk, not its workspace: the team can continue
+it in a new box, browse and download it, or delete it."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from krater.compute.runner_api import CHECKPOINT_SYNC_SECONDS
@@ -18,7 +20,15 @@ from krater.models.compute_job import ComputeInstanceState
 #: How often a running box's runner saves /workspace (it gets the checkpoint sync interval).
 WORKSPACE_SAVE_MINUTES = CHECKPOINT_SYNC_SECONDS // 60
 
-__all__ = ["WORKSPACE_SAVE_MINUTES", "destroy_at", "hourly_rate_microusd", "last_saved", "per_day_cents"]
+__all__ = [
+    "WORKSPACE_SAVE_MINUTES",
+    "SaveTrouble",
+    "destroy_at",
+    "hourly_rate_microusd",
+    "last_saved",
+    "per_day_cents",
+    "save_trouble",
+]
 
 
 def destroy_at(instance: ComputeInstance | None, destroy_hours: int) -> datetime | None:
@@ -29,8 +39,29 @@ def destroy_at(instance: ComputeInstance | None, destroy_hours: int) -> datetime
 
 
 def last_saved(job: ComputeJob) -> datetime | None:
-    """The box's last confirmed save of /workspace, on any of its machines (a move starts from the previous one's)."""
-    return max((row.last_synced_at for row in job.instances if row.last_synced_at is not None), default=None)
+    """The box's last save of /workspace that stored everything, on any of its machines (a move starts from the
+    previous one's): a timed save its runner reported (`workspace_saved_at`), or a stop-save it confirmed
+    (`last_synced_at`; runners before 2026-11-18 report only those)."""
+    times = [
+        moment for row in job.instances for moment in (row.workspace_saved_at, row.last_synced_at) if moment is not None
+    ]
+    return max(times, default=None)
+
+
+@dataclass(frozen=True)
+class SaveTrouble:
+    """Saves of a box's /workspace that keep failing: how many in a row, the last one's reason, and when."""
+
+    failures: int
+    error: str
+    at: datetime
+
+
+def save_trouble(instance: ComputeInstance | None) -> SaveTrouble | None:
+    """Why the box's last save didn't store everything, if it didn't (cleared by the next good save)."""
+    if instance is None or not instance.save_failures or instance.last_save_error_at is None:
+        return None
+    return SaveTrouble(instance.save_failures, instance.last_save_error or "", instance.last_save_error_at)
 
 
 def per_day_cents(microusd_per_hour: int) -> int:

@@ -78,6 +78,7 @@ from krater.services import (
     job_costs,
     network_watch,
     smoke,
+    workspaces,
 )
 from krater.services.compute_settings import ComputePolicy
 from krater.services.launch_rules import LAUNCHABLE_STATUSES, hourly_cap_cents
@@ -333,6 +334,7 @@ class Scheduler:
         compute_halt.record(self.session, self.halt, now=self.now)
         self.session.commit()
 
+        self._give_boxes_workspaces()
         listing = {i.id: i for i in self.client.list_instances(label_prefix=self.prefix)}
         by_label = {i.label: i for i in listing.values() if i.label}
         self._settle_creates(by_label)
@@ -356,6 +358,14 @@ class Scheduler:
         search_quota.record(self.session, self.client.search_quota, now=self.now)
         self.session.commit()
         return self.result
+
+    def _give_boxes_workspaces(self) -> None:
+        """A box queued by an older release (one rolled back to, say) has no workspace row: give it one at its own
+        files, so its team sees it on the Files page and a later box can continue it."""
+        stmt = sa.select(ComputeJob).where(ComputeJob.kind == ComputeJobKind.BOX, ComputeJob.workspace_id.is_(None))
+        for job in list(self.session.scalars(stmt)):
+            workspaces.start_new(self.session, job)
+        self.session.commit()
 
     def _note_error(self, what: str, exc: BaseException) -> None:
         """Count a provider error the pass carried on past, and say what failed and why for the admin alert."""
@@ -634,6 +644,9 @@ class Scheduler:
             return
 
         policy = self._policy(job.project)
+        if job.kind is ComputeJobKind.BOX and job.end_requested_at is not None:
+            self._end_box(row, job, policy)
+            return
         if self.halt is not None:
             self._halt_one(row, job, policy)
             return
@@ -1348,6 +1361,26 @@ class Scheduler:
         if not reason.startswith(compute_jobs.MEMBER_STOP_PREFIX):
             self._box_notice(compute_jobs.AUDIT_BOX_STOPPED, job, reason=reason, synced=synced, **_stopped(row))
 
+    def _end_box(self, row: ComputeInstance, job: ComputeJob, policy: ComputePolicy) -> None:
+        """The team asked to end the box after a save ("End box", `compute_jobs.end_box`): a running box's runner saves
+        /workspace first, then the box is cancelled and its machine destroyed, once the save is confirmed or the sync
+        deadline passes. A box that can't save now (not running, or its runner never started) ends at once, as does
+        any box during an emergency stop of all compute. Its workspace stays (`krater.services.workspaces`)."""
+        can_save = row.state is ComputeInstanceState.RUNNING and row.runner_starts > 0
+        if can_save and not (self.halt is not None and not self.save_first):
+            if row.stop_requested_at is None:
+                row.stop_requested_at = self.now
+                row.stop_reason = "ending"
+            synced = row.last_synced_at is not None and row.last_synced_at >= row.stop_requested_at
+            if not synced and self.now - row.stop_requested_at < timedelta(minutes=policy.box_sync_deadline_minutes):
+                return  # still saving
+        else:
+            synced = None
+        said = {True: "/workspace saved", False: "/workspace not confirmed saved", None: "nothing to save"}[synced]
+        _finish(job, ComputeJobState.CANCELLED, f"Ended by its team; {said}.", now=self.now)
+        _event(self.session, job, "ended", f"Ended the box ({said}).", now=self.now, instance=row, synced=synced)
+        self._destroy(row, "box ended")
+
     def _box_notice(self, action: str, job: ComputeJob, **details) -> None:
         """An audit event the Slack sync posts to the project channel, mentioning the box's owner."""
         policy = self._policy(job.project)
@@ -1361,6 +1394,7 @@ class Scheduler:
                 "job_name": job.name,
                 "owner_id": str(job.submitter_id),
                 "destroy_after_hours": policy.box_destroy_hours,
+                "workspace_name": job.workspace.name if job.workspace is not None else None,
                 **details,
             },
         )
@@ -1421,7 +1455,8 @@ class Scheduler:
             _finish(
                 job,
                 ComputeJobState.CANCELLED,
-                f"Destroyed after {policy.box_destroy_hours} hours stopped, with its disk and saved workspace.",
+                f"Destroyed after {policy.box_destroy_hours} hours stopped: its machine and disk are gone; its "
+                "saved /workspace stays in its workspace.",
                 now=self.now,
             )
             self._destroy(row, "stopped too long")

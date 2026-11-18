@@ -77,6 +77,9 @@ type ErrDenied struct{ Message string }
 
 func (e *ErrDenied) Error() string { return "krater refused the runner: " + e.Message }
 
+// errUnknownEndpoint means Krater answered 404 to the path: it is older than the endpoint (a release rolled back).
+var errUnknownEndpoint = errors.New("krater doesn't know this endpoint")
+
 func (a *API) post(ctx context.Context, path string, body any, out any) error {
 	var payload io.Reader = http.NoBody
 	if body != nil {
@@ -111,6 +114,9 @@ func (a *API) post(ctx context.Context, path string, body any, out any) error {
 		if msg, ok := answer["error"].(string); ok {
 			return &ErrDenied{Message: msg}
 		}
+	}
+	if resp.StatusCode == http.StatusNotFound && fromKrater {
+		return fmt.Errorf("%w: %s", errUnknownEndpoint, path)
 	}
 	if resp.StatusCode/100 != 2 {
 		return fmt.Errorf("krater answered %d to %s: %s", resp.StatusCode, path, truncate(string(data), 300))
@@ -151,6 +157,18 @@ func (a *API) HeartbeatReply(ctx context.Context, beat map[string]any) (*Reply, 
 // Synced confirms /workspace was saved.
 func (a *API) Synced(ctx context.Context) error {
 	return a.post(ctx, "/synced", nil, nil)
+}
+
+// WorkspaceSaved reports a save of /workspace that stored everything: `scanSeconds` ago is when it began looking at
+// the files (Krater records the save as of then, by its own clock), with how many files and bytes the workspace holds.
+func (a *API) WorkspaceSaved(ctx context.Context, scanSeconds float64, files int, bytes int64) error {
+	body := map[string]any{"scan_seconds": scanSeconds, "files": files, "bytes": bytes}
+	return a.post(ctx, "/workspace/saved", body, nil)
+}
+
+// WorkspaceSaveFailed reports a save of /workspace that didn't store everything, and why, for the box's page.
+func (a *API) WorkspaceSaveFailed(ctx context.Context, why string) error {
+	return a.post(ctx, "/workspace/save-failed", map[string]any{"error": truncate(why, 500)}, nil)
 }
 
 // Exit reports the command's exit code.

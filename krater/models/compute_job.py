@@ -30,6 +30,7 @@ from krater.models.enums import (
 from krater.models.mixins import TimestampMixin, UUIDPrimaryKeyMixin
 
 if TYPE_CHECKING:
+    from krater.models.compute_workspace import ComputeWorkspace
     from krater.models.project import Project
 
 
@@ -100,8 +101,17 @@ class ComputeJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # When the scheduler wrote the notice of its end for the project's channel (batch jobs only), or decided none
     # was due. Null until then.
     end_notified_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    # A box's saved /workspace (`krater.services.workspaces`): its own, or one an earlier box saved that it continues.
+    # Null for a box queued by a release before workspaces (it uses its per-job path) and for a batch job.
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), sa.ForeignKey("compute_workspaces.id"), nullable=True, index=True
+    )
+    # When the team asked to end the box after saving /workspace ("End box"): the scheduler asks the runner to save,
+    # then cancels the box and destroys its machine once the save is confirmed or the sync deadline passes.
+    end_requested_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
 
     project: Mapped[Project] = relationship()
+    workspace: Mapped[ComputeWorkspace | None] = relationship()
     instances: Mapped[list[ComputeInstance]] = relationship(back_populates="job", order_by="ComputeInstance.attempt")
 
     @property
@@ -231,6 +241,18 @@ class ComputeInstance(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     stop_reason: Mapped[str | None] = mapped_column(sa.String(200), nullable=True)
     last_synced_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
     stopped_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    # A box's runner reports every save of /workspace (`runner_api.workspace_saved`): the last one that stored
+    # everything, as of when it began, and how many files and bytes the workspace held then. `last_synced_at` stays the
+    # confirmation of a save Krater asked for before a stop; this is any save, timed ones too.
+    workspace_saved_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    workspace_files: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
+    workspace_bytes: Mapped[int | None] = mapped_column(sa.BigInteger, nullable=True)
+    # The last save that didn't store everything, and why (the runner's words, cut short); cleared by the next good
+    # save. How many failed in a row, and when the box's team was told in Slack they keep failing.
+    last_save_error: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    last_save_error_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    save_failures: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=0, server_default="0")
+    save_failure_notified_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
     # When the member asked to resume a stopped box (Vast restarts it only if the machine's GPU is still free).
     start_requested_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
     # Since when the box has looked idle (low GPU use and no open session), by its heartbeats.

@@ -90,7 +90,7 @@ POLICY_FIELDS: tuple[PolicyField, ...] = (
     PolicyField(
         "box_destroy_hours",
         "Destroy stopped box after",
-        "A stopped box is destroyed (its disk too) after this long. Its workspace is in storage.",
+        "A stopped box is destroyed (its disk too) after this long. Its workspace stays in storage for a new box.",
         "hours",
         1,
         720,

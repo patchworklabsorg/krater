@@ -41,10 +41,12 @@ from krater.services import (
     live_prices,
     people,
     price_history,
+    project_files,
     project_secrets,
     smoke,
     ssh_keys,
     teams,
+    workspaces,
 )
 from krater.services import projects as project_service
 from krater.services.actor import Actor
@@ -115,6 +117,20 @@ def _rate(raw: str, field: str) -> int:
     return usd_to_microusd(value)
 
 
+def _workspace_fields(posted: dict, kind: ComputeJobKind) -> dict:
+    """A box's workspace choice from the form: continue a workspace (its id), or start a new one with a name."""
+    if kind is not ComputeJobKind.BOX:
+        return {}
+    chosen = posted.get("workspace", "new").strip()
+    if chosen in ("", "new"):
+        return {"workspace_name": posted.get("workspace_name", "").strip() or None}
+    try:
+        workspace_id = uuid.UUID(chosen)
+    except ValueError:
+        raise ValidationFailed({"workspace": "Choose a workspace from the list."}) from None
+    return {"workspace_id": workspace_id, "end_holder": posted.get("end_holder") == "on"}
+
+
 def _int(raw: str, field: str, label: str) -> int:
     try:
         return int(raw)
@@ -155,6 +171,7 @@ def _index_page(request: Request, db_session: Session, actor: Actor, project: Pr
             "can_manage_secrets": actor.is_member and (_is_team(actor, project) or actor.is_admin),
             "max_secrets": project_secrets.MAX_SECRETS_PER_PROJECT,
             "inputs": _inputs_or_none(project),
+            "can_see_files": compute_files.can_read(actor, project),
             "errors": errors or {},
             "posted": posted or {},
         },
@@ -232,6 +249,19 @@ def _form_page(
     settings = get_settings()
     policy = compute_settings.effective_policy(db_session, project)
     latest = price_history.latest(db_session)
+    held = workspaces.holders(db_session, project)
+    workspace_choices = [
+        {
+            "id": ws.id,
+            "name": ws.name,
+            "last_saved_at": ws.last_saved_at,
+            "files": ws.files,
+            "bytes": ws.bytes,
+            "holder": held.get(ws.id),
+            "stop_saved": workspaces.last_stop_saved(held[ws.id]) if ws.id in held else True,
+        }
+        for ws in workspaces.list_workspaces(db_session, project)
+    ]
     # The newest sample's time: the table is Krater's hourly check, not live prices, and says so.
     sampled_at = max((sample.sampled_at for sample in latest), default=None)
     age_minutes = None if sampled_at is None else max(0, int((datetime.now(UTC) - sampled_at).total_seconds() // 60))
@@ -258,6 +288,7 @@ def _form_page(
             "posted": posted or {},
             "default_image": compute_jobs.DEFAULT_IMAGE,
             "smoke_minutes": smoke.DEFAULT_SMOKE_MINUTES,
+            "workspaces": workspace_choices,
             # Compute is held until Weave clears every team member (`krater.services.clearance`); the page says who
             # first, and the submit checks Weave fresh. `None`: Weave couldn't say right now.
             **_verification(db_session, weave_client, project),
@@ -275,6 +306,7 @@ def new_job(
     actor: Annotated[Actor, Depends(session_actor)],
     weave_client: Annotated[WeaveClient, Depends(get_weave_client)],
     from_job: Annotated[uuid.UUID | None, Query(alias="from")] = None,
+    workspace: uuid.UUID | None = None,
 ):
     _require_compute()
     project = _project(db_session, actor, project_id)
@@ -284,7 +316,9 @@ def new_job(
     # Opening the form searches Vast again for the "Cheapest now" column, if it's stale (`live_prices.TABLE_FRESH`).
     live_table = live_quote.start_table(db_session)
     if source is None:
-        return _form_page(request, db_session, project, weave_client, live_table=live_table)
+        # "Continue in a new box" on a workspace's page: a box with that workspace chosen.
+        posted = {"kind": "box", "workspace": str(workspace)} if workspace is not None else None
+        return _form_page(request, db_session, project, weave_client, posted=posted, live_table=live_table)
     # "Run again": the same job's fields, to queue as they are or change first. Only a job of this project.
     return _form_page(
         request, db_session, project, weave_client, posted=_posted_from(source), source=source, live_table=live_table
@@ -323,6 +357,9 @@ def _posted_from(job: ComputeJob) -> dict:
     }
     if job.smoke_minutes:
         posted["smoke"] = "on"
+    if job.workspace_id is not None:
+        # "Run again" on a box continues its workspace.
+        posted["workspace"] = str(job.workspace_id)
     if job.interruptible:
         posted["interruptible"] = "on"
     if job.is_limit_order:
@@ -377,6 +414,7 @@ async def submit_job(
             data_out_gb=_int(data_out, "data_out_gb", "data out of the machine") if data_out else None,
             inputs=tuple(compute_inputs.check_names(inputs)),
             smoke_minutes=smoke.DEFAULT_SMOKE_MINUTES if posted.get("smoke") == "on" else None,
+            **_workspace_fields(posted, kind),
         )
         store = get_compute_store() if spec.inputs else None
         if posted.get("action") == "estimate":
@@ -513,6 +551,11 @@ def job_page(
             "destroy_hours": policy.box_destroy_hours,
             "saved_at": boxes.last_saved(job),
             "save_minutes": boxes.WORKSPACE_SAVE_MINUTES,
+            "trouble": boxes.save_trouble(instance),
+            "files": instance.workspace_files if instance is not None else None,
+            "bytes": instance.workspace_bytes if instance is not None else None,
+            "workspace": job.workspace,
+            "ending": job.end_requested_at is not None and job.state is ComputeJobState.RUNNING,
         }
     can_read_files = compute_files.can_read(actor, project)
     files, log, files_error = [], None, False
@@ -536,6 +579,11 @@ def job_page(
             "estimate": estimate,
             "costs": job_costs.breakdown(job),
             "can_cancel": (is_team or actor.is_admin) and (job.is_active or job.state is ComputeJobState.QUEUED),
+            # A running box can end after a save ("End box"); "End now" (cancel) skips it.
+            "can_end": (is_team or actor.is_admin)
+            and is_box
+            and job.state is ComputeJobState.RUNNING
+            and job.end_requested_at is None,
             "can_rerun": is_team and actor.is_member,
             "can_stop": is_team and job.kind is ComputeJobKind.BOX and job.state is ComputeJobState.RUNNING,
             "can_resume": is_team and job.kind is ComputeJobKind.BOX and job.state is ComputeJobState.STOPPED,
@@ -571,8 +619,165 @@ def job_file(
     return RedirectResponse(url, status_code=303)
 
 
+@router.get("/projects/{project_id}/files")
+def project_files_page(
+    request: Request,
+    project_id: uuid.UUID,
+    db_session: Annotated[Session, Depends(get_session)],
+    actor: Annotated[Actor, Depends(fresh_actor)],  # it shows what the project stores
+):
+    """Everything the project stores: inputs, workspaces, jobs' files, against its quota. Team and admins only."""
+    _require_compute()
+    project = _project(db_session, actor, project_id)
+    try:
+        files = project_files.summary(db_session, get_compute_store(), actor, project)
+    except StorageError:
+        files = None
+    return templates.TemplateResponse(
+        request,
+        "compute/files.html",
+        {
+            "project": project,
+            "files": files,
+            "areas": project_files.JOB_AREAS,
+            "finished_files_days": compute_settings.org_limits(db_session).finished_files_days,
+        },
+    )
+
+
+def _workspace(session: Session, actor: Actor, project_id: uuid.UUID, workspace_id: uuid.UUID):
+    project = _project(session, actor, project_id)
+    return project, workspaces.get(session, actor, project, workspace_id)
+
+
+#: The most rows a workspace's folder shows on the page; `krater download` gets everything.
+WORKSPACE_ROWS_SHOWN = 2000
+
+
+@router.get("/projects/{project_id}/files/workspaces/{workspace_id}")
+def workspace_page(
+    request: Request,
+    project_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    db_session: Annotated[Session, Depends(get_session)],
+    actor: Annotated[Actor, Depends(fresh_actor)],  # it shows a workspace's files
+    path: str = "",
+):
+    """One workspace's files, a folder at a time (`?path=`), with download links and Delete."""
+    _require_compute()
+    project, workspace = _workspace(db_session, actor, project_id, workspace_id)
+    folder = path.strip("/")
+    shown, files_error = None, False
+    try:
+        shown = workspaces.listing(get_compute_store(), workspace)
+    except StorageError:
+        files_error = True
+    rows = _folder_rows(shown.entries if shown else [], folder)
+    crumbs = []
+    if folder:
+        parts = folder.split("/")
+        crumbs = [{"name": part, "path": "/".join(parts[: i + 1])} for i, part in enumerate(parts)]
+    holder = workspaces.holder(db_session, workspace)
+    return templates.TemplateResponse(
+        request,
+        "compute/workspace.html",
+        {
+            "project": project,
+            "workspace": workspace,
+            "holder": holder,
+            "rows": rows[:WORKSPACE_ROWS_SHOWN],
+            "more": max(0, len(rows) - WORKSPACE_ROWS_SHOWN),
+            "crumbs": crumbs,
+            "has_manifest": shown.has_manifest if shown else True,
+            "file_count": sum(1 for e in shown.entries if e.kind == "file") if shown else 0,
+            "stored_bytes": shown.stored_bytes if shown else 0,
+            "files_error": files_error,
+            "can_continue": _is_team(actor, project) and actor.is_member,
+            "can_delete": _is_team(actor, project) or actor.is_admin,
+        },
+    )
+
+
+def _folder_rows(entries: list[workspaces.WorkspaceEntry], folder: str) -> list[dict]:
+    """What is directly in `folder` of a workspace: its subfolders (with how many files and bytes are under each,
+    whether or not the manifest names the folder itself), then its files and symlinks."""
+    prefix = f"{folder}/" if folder else ""
+    dirs: dict[str, dict] = {}
+    others = []
+    for entry in entries:
+        if not entry.path.startswith(prefix) or entry.path == folder:
+            continue
+        rest = entry.path[len(prefix) :]
+        name, sep, _ = rest.partition("/")
+        if sep or entry.kind == "dir":
+            row = dirs.setdefault(
+                name,
+                {"kind": "dir", "name": name, "path": prefix + name, "files": 0, "size_bytes": 0, "modified": None},
+            )
+            if sep and entry.kind == "file":
+                row["files"] += 1
+                row["size_bytes"] += entry.size_bytes
+            continue
+        others.append(
+            {
+                "kind": entry.kind,
+                "name": name,
+                "path": entry.path,
+                "size_bytes": entry.size_bytes,
+                "target": entry.target,
+                "modified": datetime.fromtimestamp(entry.mtime_ns / 1e9, UTC) if entry.mtime_ns else None,
+            }
+        )
+    by_name = lambda row: row["name"].casefold()  # noqa: E731
+    return sorted(dirs.values(), key=by_name) + sorted(others, key=by_name)
+
+
+@router.get("/projects/{project_id}/files/workspaces/{workspace_id}/download/{path:path}")
+def workspace_file(
+    project_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    path: str,
+    db_session: Annotated[Session, Depends(get_session)],
+    actor: Annotated[Actor, Depends(fresh_actor)],  # it signs a workspace's file
+):
+    """Download one file of a workspace: a redirect to a URL signed for 15 minutes, made on the click."""
+    _require_compute()
+    _, workspace = _workspace(db_session, actor, project_id, workspace_id)
+    return RedirectResponse(workspaces.download_url(get_compute_store(), workspace, path), status_code=303)
+
+
+@router.post("/projects/{project_id}/files/workspaces/{workspace_id}/delete", dependencies=[Depends(verify_csrf_token)])
+def delete_workspace(
+    request: Request,
+    project_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    db_session: Annotated[Session, Depends(get_session)],
+    actor: Annotated[Actor, Depends(fresh_actor)],
+    confirm: Annotated[str, Form()] = "",
+):
+    _require_compute()
+    project, workspace = _workspace(db_session, actor, project_id, workspace_id)
+    back = f"/projects/{project.id}/files/workspaces/{workspace.id}"
+    if confirm != "on":
+        flash(request, "Tick the box to confirm, then delete.", "error")
+        return RedirectResponse(back, status_code=303)
+    try:
+        count = workspaces.delete(db_session, get_compute_store(), actor, workspace=workspace, now=datetime.now(UTC))
+    except InvalidState as exc:
+        db_session.rollback()
+        flash(request, str(exc), "error")
+        return RedirectResponse(back, status_code=303)
+    db_session.commit()
+    flash(request, f"Deleted the workspace {workspace.name} ({count:,} stored files).", "success")
+    return RedirectResponse(f"/projects/{project.id}/files", status_code=303)
+
+
 _ACTIONS = {
     "cancel": (compute_jobs.cancel_job, "Cancelled. Its machine, if any, is destroyed within a minute."),
+    "end": (
+        compute_jobs.end_box,
+        "Ending: the box saves /workspace, then its machine is destroyed. Its workspace stays.",
+    ),
     "stop": (compute_jobs.stop_box, "Stopping: the box saves /workspace first."),
     "resume": (compute_jobs.resume_box, "Resuming on the same machine."),
     "move": (compute_jobs.move_box, "Starting it elsewhere from its last saved workspace."),

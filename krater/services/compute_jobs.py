@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import math
 import re
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -42,6 +43,7 @@ from krater.services import (
     funding_holds,
     smoke,
     teams,
+    workspaces,
 )
 from krater.services.actor import Actor
 from krater.services.errors import ConfirmationRequired, InvalidState, NotAllowed, ValidationFailed
@@ -170,6 +172,12 @@ class JobSpec:
     inputs: tuple[str, ...] = ()
     # A smoke test of this many minutes (`krater.services.smoke`); None for the full run.
     smoke_minutes: int | None = None
+    # A box's /workspace (`krater.services.workspaces`): continue this workspace of the project, or (None) start a new
+    # one, named `workspace_name` (the box's name if blank). `end_holder`: end the stopped box that still holds the
+    # workspace, so this one can continue it.
+    workspace_id: uuid.UUID | None = None
+    workspace_name: str | None = None
+    end_holder: bool = False
 
 
 @dataclass(frozen=True)
@@ -258,6 +266,13 @@ def _validate(spec: JobSpec, *, cap_microusd: int) -> None:
         errors["name"] = "Give the job a name of up to 200 characters."
     if (image_problem := image_error(spec.image)) is not None:
         errors["image"] = image_problem
+    if spec.kind is ComputeJobKind.JOB and (spec.workspace_id is not None or spec.workspace_name or spec.end_holder):
+        errors["workspace"] = "Only a box has a workspace."
+    if spec.workspace_name:
+        try:
+            workspaces.check_name(spec.workspace_name)
+        except ValidationFailed as exc:
+            errors.update(exc.errors)
     if spec.kind is ComputeJobKind.JOB and not (spec.command and spec.command.strip()):
         errors["command"] = "Enter the command to run."
     if spec.command is not None and len(spec.command) > 2000:
@@ -387,6 +402,13 @@ def submit_job(
     session.add(job)
     session.flush()
     session.add(ComputeEvent(job_id=job.id, kind="queued", message="Queued.", payload={}, at=now))
+    if spec.kind is ComputeJobKind.BOX:
+        if spec.workspace_id is not None:
+            workspaces.attach(
+                session, actor, job=job, workspace_id=spec.workspace_id, end_holder=spec.end_holder, now=now
+            )
+        else:
+            workspaces.start_new(session, job, name=spec.workspace_name)
     session.flush()
     return job
 
@@ -487,6 +509,40 @@ def resume_box(session: Session, actor: Actor, *, job: ComputeJob, now: datetime
             job_id=job.id, instance_id=row.id, kind="resume_requested", message=job.state_reason, payload={}, at=now
         )
     )
+    session.flush()
+
+
+#: How an End box the member asked for reads in the stop's reason.
+END_REASON = "ending"
+
+
+def end_box(session: Session, actor: Actor, *, job: ComputeJob, now: datetime) -> None:
+    """End a box after saving /workspace ("End box"), by its team or an admin. A running box's runner saves first and
+    the scheduler then cancels it and destroys its machine (`Scheduler._end_box`), as a regular stop of all compute
+    saves first; a box that can't save now (queued, starting, paused, or stopped, whose stop saved already) ends at
+    once. "End now" (`cancel_job`) skips the save, as an emergency stop does, and also cuts short an End box that is
+    still saving. Either way the box's workspace stays (`krater.services.workspaces`)."""
+    _box_for(actor, job)
+    if job.state in FINISHED_JOB_STATES:
+        raise InvalidState(f"The box is already {job.state.value}.")
+    row = _live_instance(job)
+    if job.state is not ComputeJobState.RUNNING or row is None or row.runner_starts == 0:
+        cancel_job(session, actor, job=job, now=now)
+        job.state_reason = f"Ended by {_who(actor, job)}."
+        return
+    if job.end_requested_at is None:
+        job.end_requested_at = now
+        job.state_reason = "Ending: saving /workspace first, then its machine is destroyed."
+        session.add(
+            ComputeEvent(
+                job_id=job.id,
+                instance_id=row.id,
+                kind="end_requested",
+                message=f"Ending, after a save of /workspace: asked by {_who(actor, job)}.",
+                payload={"by": str(actor.user.id)},
+                at=now,
+            )
+        )
     session.flush()
 
 

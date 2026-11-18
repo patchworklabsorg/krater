@@ -101,6 +101,30 @@ def synced(request: Request, db_session: Annotated[Session, Depends(get_session)
     return {"ok": True}
 
 
+@router.post("/workspace/saved")
+async def workspace_saved(request: Request, db_session: Annotated[Session, Depends(get_session)]):
+    body = await _body(request)
+    try:
+        runner_api.workspace_saved(db_session, _instance(request, db_session), body, now=_now())
+    except NotAllowed as exc:
+        db_session.rollback()
+        return _deny(exc)
+    db_session.commit()
+    return {"ok": True}
+
+
+@router.post("/workspace/save-failed")
+async def workspace_save_failed(request: Request, db_session: Annotated[Session, Depends(get_session)]):
+    body = await _body(request)
+    try:
+        runner_api.workspace_save_failed(db_session, _instance(request, db_session), body, now=_now())
+    except NotAllowed as exc:
+        db_session.rollback()
+        return _deny(exc)
+    db_session.commit()
+    return {"ok": True}
+
+
 @router.post("/exit")
 async def report_exit(request: Request, db_session: Annotated[Session, Depends(get_session)]):
     body = await _body(request)

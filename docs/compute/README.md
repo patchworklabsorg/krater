@@ -59,10 +59,12 @@ above 64 MB, a per-project quota), reports the exit code. One token per machine.
 
 **Boxes**. SSH workspaces in Vast's SSH mode: owner's keys from `/account/ssh-keys`, idle stop after the runner saves
 `/workspace`, resume on the same machine or move elsewhere (the member's choice), destroy after the destroy time.
-Refused while the Vast account has SSH keys.
+`/workspace` is saved into a workspace that outlives the box: a new box starts one or continues one, one box at a
+time (2026-11-17; [runner.md](runner.md) "Workspaces"). Refused while the Vast account has SSH keys.
 
 **Member UI**. `/projects/{id}/compute`: jobs and boxes, the submit form beside current prices, a job page with SSH
-details, stop/resume/move/cancel and an event log.
+details, stop/resume/move/end/cancel and an event log. `/projects/{id}/files`: everything the project stores, its
+workspaces to browse, download and delete.
 
 **SkyPilot removed.** Its code, compose services, policy endpoint, reconcile task and project columns are gone. The
 public GPU catalog behind `/pricing` and the budget estimator stays (`krater/pricing/catalog.py`), and renamed settings

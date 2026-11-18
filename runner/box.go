@@ -98,6 +98,34 @@ func saveWorkspace(ctx context.Context, workspace *Syncer) error {
 	})
 }
 
+// saveReporter tells Krater how each save of /workspace went, so the box's page can say when it was last saved and
+// why a save failed. Krater older than these endpoints answers 404: then it stops asking.
+type saveReporter struct {
+	api       *API
+	workspace *Syncer
+	off       bool
+}
+
+// report sends a save's outcome: `began` is when the save started looking at the files.
+func (r *saveReporter) report(ctx context.Context, began time.Time, saveErr error) {
+	if r.off {
+		return
+	}
+	var err error
+	if saveErr == nil {
+		files, size := r.workspace.StoredTotals()
+		err = r.api.WorkspaceSaved(ctx, time.Since(began).Seconds(), files, size)
+	} else {
+		err = r.api.WorkspaceSaveFailed(ctx, saveErr.Error())
+	}
+	switch {
+	case errors.Is(err, errUnknownEndpoint):
+		r.off = true
+	case err != nil && ctx.Err() == nil:
+		logf("could not tell Krater how the save went: %v", err)
+	}
+}
+
 // sameKeys reports whether two key lists are the same, in order.
 func sameKeys(a, b []string) bool {
 	if len(a) != len(b) {
@@ -115,6 +143,7 @@ func sameKeys(a, b []string) bool {
 // an admin's access starts and ends within a heartbeat), saves /workspace on a timer and whenever Krater is about to
 // stop the machine, and never returns on its own (Krater stops or destroys the machine).
 func runBox(ctx context.Context, api *API, info *StartInfo, workspace *Syncer, gpu func() (float64, bool), procNet, home string) {
+	reporter := &saveReporter{api: api, workspace: workspace}
 	sampler := newGPUSampler(gpu)
 	sampler.take()
 	go sampler.run(ctx, 15*time.Second)
@@ -159,7 +188,10 @@ func runBox(ctx context.Context, api *API, info *StartInfo, workspace *Syncer, g
 				// Confirm only a save that happened: Krater takes the confirmation for "/workspace is safe" and stops
 				// the box. On failure say nothing: Krater keeps asking on every heartbeat until its sync deadline,
 				// when it records the box as not saved.
-				if err := saveWorkspace(ctx, workspace); err != nil {
+				began := time.Now()
+				err := saveWorkspace(ctx, workspace)
+				reporter.report(ctx, began, err)
+				if err != nil {
 					logf("saving /workspace failed, NOT confirming the save to Krater: %v", err)
 				} else if err := api.Synced(ctx); err != nil {
 					logf("could not confirm the save: %v", err)
@@ -168,7 +200,10 @@ func runBox(ctx context.Context, api *API, info *StartInfo, workspace *Syncer, g
 				}
 				lastSync = time.Now()
 			case time.Since(lastSync) >= syncEvery:
-				if n, err := workspace.Push(ctx); err != nil {
+				began := time.Now()
+				n, err := workspace.Push(ctx)
+				reporter.report(ctx, began, err)
+				if err != nil {
 					logf("saving /workspace failed: %v", err)
 				} else if n > 0 {
 					logf("saved %d workspace files", n)

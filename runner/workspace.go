@@ -233,6 +233,20 @@ func (s *Syncer) pushWorkspace(ctx context.Context) (int, error) {
 	return pushed, nil
 }
 
+// StoredTotals is how many files, and how many bytes of them, the stored workspace holds by its manifest.
+func (s *Syncer) StoredTotals() (int, int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	files, size := 0, int64(0)
+	for _, e := range s.storedEntries {
+		if e.Type == "file" {
+			files++
+			size += e.Size
+		}
+	}
+	return files, size
+}
+
 // pruneStored removes stored files the manifest doesn't name: deleted on the machine, or renamed. A failure only
 // leaves them in storage, where a restore ignores them.
 func (s *Syncer) pruneStored(ctx context.Context, entries []manifestEntry) bool {

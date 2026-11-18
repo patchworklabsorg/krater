@@ -176,8 +176,23 @@ and exits with its exit code (replacing the process would detach it from the con
 
 For a box, `krater show` also says when `/workspace` was last saved, and for a stopped one what it costs while
 stopped (only its disk: the API's `machine.usd_per_hour_now`) and when Krater destroys it (`box.destroy_at`). Against
-a Krater without those fields it prints the old machine line. `krater cancel` on a box says that its disk and saved
-`/workspace` go with it, and `show` on an ended box says they're gone.
+a Krater without those fields it prints the old machine line. It names the box's workspace and, when saves are
+failing, says why (`box.save_trouble`). `krater cancel` ends a box at once without a save; `krater end` saves first.
+Either way the workspace stays, and `show` on an ended box says how to download or continue it.
+
+### Workspaces and stored files
+
+`krater submit --box --workspace <name|id>` continues a workspace (`--end-holder` ends the stopped box holding it),
+and `--new-workspace <name>` names a new one; the API takes `workspace` (an id, 8+ characters of one, or a name),
+`workspace_name` and `end_holder`. `krater rerun` on a box continues its workspace (the spec carries `workspace`).
+
+`krater files <project>` prints `GET /projects/{id}/files`: the quota, inputs, each workspace and each job's
+outputs, checkpoints and logs. `krater workspaces list|download|rm <project> ...` use `GET /projects/{id}/workspaces`,
+`GET /projects/{id}/workspaces/{ws}/files` (every entry of the manifest, each file with a URL signed for 15 minutes)
+and `DELETE /projects/{id}/workspaces/{ws}`. `download` makes folders, then files (with mode and modification time,
+fetching fresh URLs when they run out), then symlinks, and gives folders their modes last. A path with `..`, an
+absolute one, or one that would land outside the folder through an existing symlink is skipped. Where a symlink
+can't be made (Windows without developer mode) it writes `NAME.symlink` saying where it pointed.
 
 The CLI waits up to 60 seconds for an answer: a change checks you with Weave first, up to four calls of 10 s each
 when Weave is slow. If `cancel`, `stop`, `resume` or `move` still times out, the CLI doesn't send it again (it may

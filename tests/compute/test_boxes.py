@@ -262,7 +262,7 @@ def test_a_stopped_box_is_destroyed_after_the_destroy_time_with_a_warning_first(
     _pass(db_session, client, NOW + timedelta(minutes=5, hours=24))
 
     assert row.state is ComputeInstanceState.DESTROYED
-    assert job.state is ComputeJobState.CANCELLED and "with its disk and saved workspace" in job.state_reason
+    assert job.state is ComputeJobState.CANCELLED and "its saved /workspace stays" in job.state_reason
 
 
 def test_a_silent_runner_stops_a_box_instead_of_destroying_it(db_session, member, project, client, fake) -> None:  # noqa: F811

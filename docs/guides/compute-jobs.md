@@ -50,7 +50,7 @@ There are two kinds of work:
 | What it is | Runs one command, then the machine is destroyed | A workspace you SSH into |
 | Good for | Training runs, batch inference, data processing, sweeps | Exploring, debugging, notebooks, building your image |
 | Ends when | The command exits, you cancel it, or it hits its max runtime | You cancel it, or it stays stopped for 24 hours. It stops itself when idle and can be resumed |
-| What's kept | Checkpoints, outputs and the log, in Krater's storage | `/workspace`, in Krater's storage, while the box exists. Not after it's destroyed |
+| What's kept | Checkpoints, outputs and the log, in Krater's storage | `/workspace`, in Krater's storage, as a workspace that stays after the box ends: a new box can continue it |
 
 Machines are either **interruptible** or **on demand**:
 
@@ -420,12 +420,10 @@ Open the job from your project's **Compute** page. It shows:
 - **Machine**: the GPU and price it was rented at, and for a box, how to connect, when `/workspace` was last saved,
   and, once it's stopped, what it costs while stopped and when it will be destroyed;
 - **Actions**: **Run again** (the form, filled in from this job), **Cancel** (and for a box: **Stop**, **Resume**,
-  **Start it elsewhere**).
+  **Start it elsewhere**, **End box**, **End now**).
 
 **Cancel** destroys the machine within a minute or so. Anything not yet uploaded is lost, so let a job finish if you
-want its last outputs. Cancelling a box ends it for good: its machine, its disk and its saved `/workspace` go, with no
-last save first, and it can't be resumed or moved. To keep a box's work, **Stop** it instead (that saves `/workspace`
-first). Cancelling a stopped box is how you stop paying for its disk before the 24 hours are up.
+want its last outputs. For a box, see [Ending a box](#ending-a-box).
 
 ### What Krater does on its own
 
@@ -456,19 +454,23 @@ first). Cancelling a stopped box is how you stop paying for its disk before the 
 ## Getting your results
 
 - **On the web:** the job's **Files** section lists outputs, checkpoints and logs. A download link works for 15
-  minutes after you click it.
+  minutes after you click it. **Stored files** on the project's Compute page shows everything the project keeps:
+  inputs, workspaces and every job's files, with how much of the storage quota they use.
 - **From a terminal:** `krater download <job> results/` puts them under `results/outputs/`, `results/checkpoints/` and
   `results/logs/`. `--only outputs` fetches just one kind, and `--skip-existing` leaves alone files you already have
   (handy for logs, which only grow).
 
 Who can see them: everyone on the team, and admins. Reviewers see the job but not its files or output.
 
-Files stay in Krater's storage and count against the project's storage quota. Krater keeps no backup of them, so
-download what you need to keep.
+<a id="files"></a>
+Files stay in Krater's storage and count against the project's storage quota (`krater files <project>` shows it).
+Krater keeps no backup of them, so download what you need to keep. When the quota is full, saves of `/workspace` and
+jobs' uploads fail: delete workspaces you no longer need.
 
 **After the project ends** (completed or withdrawn), its checkpoints, outputs, logs and workspaces are deleted 30 days
 later by default. The exact date is posted in the project's channel when it finishes. Download everything you want to
-keep before then: `krater download <job> results/` for each job.
+keep before then: `krater download <job> results/` for each job, and `krater workspaces download <project> <name>`
+for each workspace.
 
 ## Boxes: working interactively
 
@@ -494,15 +496,48 @@ it into a job.
   restores it when the box starts on a new machine. The job page shows when it was last saved. Anything outside
   `/workspace` (installed packages, files in `/root`) is lost when the box moves or is destroyed. Install into
   `/workspace` (for example a virtual environment at `/workspace/venv`) or put it in your image.
-- **The saved copy is for this box only.** It's restored onto the box's next machine, but you can't download it, and a
-  new box (even **Run again**) starts with an empty `/workspace`. Once the box is destroyed (you cancelled it, or it
-  stayed stopped for 24 hours) it can't be brought back. Keep code in a git repository and push often, and copy out
-  results you need (`scp`, or upload them somewhere) before you end a box.
+- **The saved copy is a workspace, and it stays.** Every box saves into a workspace, named after the box unless you
+  name it. When the box ends (you end it, or it stayed stopped for 24 hours) its machine and disk go, but its
+  workspace keeps the last save. The job page and the Compute page's **Stored files** link to it.
+- **If saves fail**, the job page says so in a red box with the reason, and Krater posts in the project's channel
+  after three failures in a row. Work since the last good save is then only on the machine's disk. A full storage
+  quota is the usual cause. The box's log on its job page has the runner's own lines (restores, saves, why one failed).
 - **What's kept:** files with their permissions (so scripts stay executable) and modification times, symlinks, empty
   folders, and any file name. A file you delete is deleted from the saved copy too, at the next save. A virtual
   environment works after a move as long as the new machine's image has the same Python at the same path (its
   `python` is a symlink to the image's).
 - **Secrets** are in your login shell's environment (from `/etc/profile.d/krater-secrets.sh`).
+
+### Continuing a workspace
+
+A new box can start with an empty `/workspace` or continue a workspace: in **New job or box**, choose **Box**, then
+under **Workspace** pick one of the project's workspaces (each shows when it was last saved and its size). The box
+starts with that workspace's last save in `/workspace` and saves back into it. **Run again** on a box continues its
+workspace. From a terminal: `krater submit --box --workspace <name>`, or `--new-workspace <name>` to name a new one.
+
+- **One box at a time** can use a workspace: two saving into it would overwrite each other's work. A workspace in use
+  by a running box can't be continued until that box is stopped or ended. One in use by a stopped box can, if you
+  tick **end that box** (`--end-holder`): the stopped box is ended and its machine destroyed. If that box stopped
+  without a confirmed save (an admin's emergency stop, or Krater lost touch with it), the form warns you that its disk
+  may hold newer work: resume it to save first, or continue anyway.
+- **Everyone on the project's team** can browse, download, continue and delete any of its workspaces. Keep tokens and
+  keys in the project's **Secrets**, not in `/workspace`.
+
+### Browsing and downloading a workspace
+
+**Stored files** (on the project's Compute page) lists the workspaces. Open one to browse its folders and download a
+file (each link works for 15 minutes). To download all of it, with its folders, permissions, modification times and
+symlinks:
+
+```bash
+krater workspaces list <project>
+krater workspaces download <project> <name> my-workspace/
+```
+
+On Windows, a symlink that can't be made is written as a small `NAME.symlink` file saying where it pointed.
+
+**Deleting a workspace** (its page, or `krater workspaces rm <project> <name>`) removes its files for good and frees
+the project's storage. A workspace in use by a box can't be deleted: end the box first.
 
 ### Idle stop
 
@@ -515,13 +550,24 @@ while it's stopped, and that cost counts against your project's budget like any 
   GPU is still free.
 - **Start it elsewhere from the saved workspace** rents a new machine and restores `/workspace`. Use it when resume
   can't get the GPU back.
-- **Cancel** destroys it now, which ends the disk charge. Nothing is saved first, and it can't be brought back.
-- A box that stays stopped for 24 hours (by default) is **destroyed**, disk and saved `/workspace` and all, and can't
-  be brought back. The job page and `krater show` say when.
+- **End box** destroys it now, which ends the disk charge. Its workspace keeps the save from when it stopped.
+- A box that stays stopped for 24 hours (by default) is **destroyed**: its machine and disk go, and its workspace
+  stays. The job page and `krater show` say when.
 
 Krater posts in the project's Slack channel, mentioning you, when it stops your box for being idle (with what it
 costs while stopped and when it will be destroyed) and an hour before it destroys a stopped one. A stop you asked for
 posts nothing.
+
+### Ending a box
+
+- **End box** (`krater end <box>`), on a running box, saves `/workspace` first, then destroys the machine. It takes
+  a minute or so (up to 10 for a big workspace); the job page says **Ending** meanwhile.
+- **End now** (`krater cancel <box>`) destroys it at once, without a save: work since the last save (the job page says
+  when) is lost.
+- On a stopped box, **End box** destroys it at once: its stop already saved `/workspace`.
+
+Either way the workspace stays, so a new box can continue it. If an admin stops all compute in an emergency, boxes are
+stopped without a save.
 
 A long-running process that keeps the GPU or CPU busy counts as use, so a training run in a box keeps it up. An open
 SSH session counts too, so close your session when you're done, or the box keeps spending.
@@ -655,8 +701,11 @@ queues nothing.
 | `krater inputs list\|upload\|rm <project>` | The project's [inputs](#inputs) |
 | `krater logs <job>` | The end of the output. `-f` follows it; `--attempt 1` shows an earlier attempt |
 | `krater wait <job>` | Blocks until the job is finished. Exits 0 if it succeeded, the command's own code if it failed with one, 124 on `--timeout` |
-| `krater cancel <job>` | Cancels it; the machine is destroyed |
+| `krater cancel <job>` | Cancels it; the machine is destroyed (a box: at once, without a last save) |
+| `krater end <box>` | Saves a running box's `/workspace`, then destroys its machine; the workspace stays |
 | `krater stop`, `resume`, `move <box>` | Stop a box, resume it on the same machine, or start it on another from its saved workspace |
+| `krater files <project>` | Everything the project stores (inputs, workspaces, jobs' files) and its quota |
+| `krater workspaces list`, `download`, `rm <project> ...` | A project's workspaces: list them, download one as it was, delete one |
 | `krater ssh <box>` | SSH into a running box. Anything after `--` goes to `ssh` |
 | `krater download <job> [folder]` | Outputs, checkpoints and logs |
 | `krater open <job or project>` | The web page, in your browser |
@@ -776,8 +825,10 @@ Only rank 0 should write checkpoints and outputs.
 | Box won't resume | Its old machine's GPU is taken. Use **Start it elsewhere from the saved workspace** |
 | `ssh: Permission denied (publickey)` | Your key isn't on the box. Add it under **SSH keys**: a running box picks up key changes within a few minutes. Check you're connecting as `root` with the matching private key |
 | Packages gone after a box restart | Only `/workspace` is kept. Install into `/workspace` or into your image |
-| A stopped box is still spending | Its disk bills until it's resumed or destroyed. Cancel it to stop that now (it can't be brought back), or let Krater destroy it after 24 hours |
-| My old box's files are gone | A destroyed box's `/workspace` can't be restored or downloaded, and a new box starts empty. Keep code in git and copy out results before a box ends |
+| A stopped box is still spending | Its disk bills until it's resumed or destroyed. End it to stop that now (its workspace stays), or let Krater destroy it after 24 hours |
+| My old box's files are gone | Its workspace keeps them: continue it in a new box (**Workspace** on the form, or `--workspace`), or download it from **Stored files**. A box that ended before 18 November 2026 kept its last save too |
+| "Workspace isn't saving" on the job page | Saves are failing; the box keeps running. Usually the storage quota is full: delete old workspaces or files under **Stored files**. The box's log says why |
+| Can't continue a workspace: "in use by" | Another box uses it. Stop or end that box first (both save), or tick **end that box** if it's stopped |
 | A warning about data transfer | Your estimate could cost a big share of your budget. Check the numbers before you confirm |
 | All machines stopped at once | The budget ran out. Ask for more with an amendment |
 

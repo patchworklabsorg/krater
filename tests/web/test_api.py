@@ -136,6 +136,9 @@ def test_a_stopped_box_says_what_it_costs_now_when_it_is_destroyed_and_when_it_w
         "destroy_after_hours": 24,
         "workspace_saved_at": "2026-11-13T09:29:00+00:00",
         "workspace_save_minutes": 10,
+        "workspace_files": None,
+        "workspace_bytes": None,
+        "save_trouble": None,
     }
 
 

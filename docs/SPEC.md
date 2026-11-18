@@ -33,7 +33,8 @@ members' hosts and ignored the hourly cap). The integration details are in
 
 **Compute** (Krater Compute, [compute/](compute/README.md)): Krater's worker rents Vast.ai machines itself. A job waits
 until an offer at or under the member's target price appears, runs with Krater's runner, and ends with its machine
-destroyed; a box is an SSH workspace stopped when idle. The organization's Vast key never leaves the worker. Production
+destroyed; a box is an SSH workspace stopped when idle, whose `/workspace` is saved into a workspace the team can
+continue in a later box, browse and download. The organization's Vast key never leaves the worker. Production
 runs with compute off (`KRATER_COMPUTE_MODE=off`) until the paid checks in [compute/README.md](compute/README.md) pass.
 
 **Core capabilities**

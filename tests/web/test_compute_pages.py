@@ -355,10 +355,11 @@ def test_a_stopped_box_page_says_what_it_costs_now_and_when_it_is_destroyed(
     assert "Running, it's $0.0638/h" in page
     assert "at 2026-11-14 09:30 UTC unless you resume it" in page  # 24 hours after it stopped
     assert "2026-11-13 09:29 UTC" in page  # the last save of /workspace
-    assert "Cancel destroys the stopped machine and its disk now, which ends the disk charge" in page
+    assert "End box destroys the stopped machine and its disk now, which ends the disk charge" in page
+    assert "Its saved <code>/workspace</code> stays in its workspace (saved 2026-11-13 09:29 UTC)" in page
 
 
-def test_a_running_box_page_says_cancel_loses_work_since_the_last_save(
+def test_a_running_box_page_says_end_now_loses_work_since_the_last_save(
     client: TestClient, login_as, project, db_session
 ) -> None:
     member = login_as(MEMBER_SUB)
@@ -367,8 +368,8 @@ def test_a_running_box_page_says_cancel_loses_work_since_the_last_save(
     page = " ".join(client.get(f"/projects/{project.id}/compute/{job.id}").text.split())
 
     assert "while stopped" not in page and "unless you resume it" not in page
-    assert "work since its last save (09:29 UTC) is lost" in page
-    assert "To keep your work, stop the box instead." in page
+    assert "<strong>End now</strong> destroys it at once, without a save: work since the last one (09:29 UTC)" in page
+    assert "<strong>End box</strong> saves <code>/workspace</code> first, then destroys the machine" in page
     assert "every 10 minutes while the box runs" in page
 
 

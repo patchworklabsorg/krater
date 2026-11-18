@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+
+{% block title %}Files: {{ project.title or "Untitled proposal" }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <a class="back-link" href="/projects/{{ project.id }}/compute">&larr; Compute</a>
+    <h1>Stored files</h1>
+    <p class="page-subtitle">
+      Everything this project keeps in Krater's storage: its inputs, its boxes' workspaces, and what its jobs left.
+      Everyone on the team can see and download all of it.
+      {% if project.files_delete_on %}It's all deleted on {{ project.files_delete_on.strftime("%Y-%m-%d") }}.
+      {% elif finished_files_days %}It's all deleted {{ finished_files_days }} days after the project finishes.{% endif %}
+      <a href="/help/compute-jobs#files">How storage works</a>.
+    </p>
+  </div>
+</div>
+
+{% if files is none %}
+  <p class="notice notice--warn" role="alert">Storage didn't answer; reload in a minute.</p>
+{% else %}
+  <dl class="stats stats--compact">
+    <div class="stat{% if files.percent_used >= 90 %} stat--bad{% endif %}">
+      <dt>Used</dt>
+      <dd>{{ files.total.bytes | filesize }} of {{ files.quota_bytes | filesize }}</dd>
+    </div>
+    <div class="stat"><dt>Files</dt><dd>{{ "{:,}".format(files.total.files) }}</dd></div>
+    <div class="stat"><dt>Workspaces</dt><dd>{{ files.workspaces | length }}</dd></div>
+  </dl>
+  <p>
+    <progress max="100" value="{{ files.percent_used }}" aria-label="Storage used">{{ files.percent_used }}%</progress>
+    <span class="muted">{{ files.percent_used }}% of the project's storage.{% if files.percent_used >= 90 %} When it's
+      full, saves of <code>/workspace</code> and job outputs fail: delete workspaces you no longer need.{% endif %}</span>
+  </p>
+
+  <section class="card" id="workspaces">
+    <div class="card-head"><h2>Workspaces</h2></div>
+    <p class="muted">
+      Each box saves <code>/workspace</code> into a workspace, which stays after the box ends. Open one to browse and
+      download its files; continue it in a new box from <a href="/projects/{{ project.id }}/compute/new">New job or
+      box</a>, or with <code>krater submit --box --workspace NAME</code>.
+    </p>
+    {% if files.workspaces %}
+      <div class="table-scroll">
+        <table class="table">
+          <thead>
+            <tr>
+              <th scope="col">Name</th>
+              <th scope="col">Last saved</th>
+              <th scope="col">In use by</th>
+              <th scope="col" class="num">Size</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in files.workspaces %}
+              <tr>
+                <td class="cell-title">
+                  <a href="/projects/{{ project.id }}/files/workspaces/{{ item.workspace.id }}">{{ item.workspace.name }}</a>
+                  <span class="cell-sub"><code>{{ item.workspace.id | string | truncate(8, True, '') }}</code></span>
+                </td>
+                <td class="nowrap">{{ item.workspace.last_saved_at.strftime("%Y-%m-%d %H:%M UTC") if item.workspace.last_saved_at else "never" }}</td>
+                <td>
+                  {% if item.holder %}
+                    <a href="/projects/{{ project.id }}/compute/{{ item.holder.id }}">{{ item.holder.name }}</a>
+                    <span class="cell-sub">{{ item.holder.state.value }}</span>
+                  {% else %}<span class="muted">none</span>{% endif %}
+                </td>
+                <td class="num">{{ item.stored.bytes | filesize }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="muted">No workspaces yet. Each box you start makes one.</p>
+    {% endif %}
+  </section>
+
+  <section class="card" id="jobs">
+    <div class="card-head"><h2>Jobs' files</h2></div>
+    <p class="muted">What jobs left: outputs (<code>$KRATER_OUTPUT_DIR</code>), checkpoints and logs. Open a job to
+      download them, or use <code>krater download JOB dir/</code>.</p>
+    {% if files.jobs %}
+      <div class="table-scroll">
+        <table class="table">
+          <thead>
+            <tr>
+              <th scope="col">Job</th>
+              {% for area in areas %}<th scope="col" class="num">{{ area | capitalize }}</th>{% endfor %}
+              <th scope="col" class="num">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in files.jobs %}
+              <tr>
+                <td class="cell-title">
+                  <a href="/projects/{{ project.id }}/compute/{{ item.job.id }}#output">{{ item.job.name }}</a>
+                  <span class="cell-sub">{{ "Box" if item.job.kind.value == "box" else "Job" }}, {{ item.job.state.value }}</span>
+                </td>
+                {% for area in areas %}
+                  <td class="num">{% if item.areas[area] %}{{ item.areas[area].bytes | filesize }}{% else %}<span class="muted">&ndash;</span>{% endif %}</td>
+                {% endfor %}
+                <td class="num">{{ item.total.bytes | filesize }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="muted">No job has left files yet.</p>
+    {% endif %}
+  </section>
+
+  <section class="card" id="inputs">
+    <div class="card-head"><h2>Inputs</h2></div>
+    <p>{{ "{:,}".format(files.inputs.files) }} files, {{ files.inputs.bytes | filesize }}.
+      <a href="/projects/{{ project.id }}/compute#inputs">See them</a>.</p>
+    {% if files.other.files %}
+      <p class="muted">Also {{ "{:,}".format(files.other.files) }} other files ({{ files.other.bytes | filesize }}):
+        not part of any workspace or job above (an unfinished upload, say). They go with the project's files.</p>
+    {% endif %}
+  </section>
+{% endif %}
+{% endblock %}

@@ -9,6 +9,8 @@
     krater logs <job>                            (what the command printed; -f follows it)
     krater wait <job>                            (until it's done; exits with its exit code)
     krater download <job> results/               (its outputs, checkpoints and logs)
+    krater files <project>                       (everything the project stores, against its quota)
+    krater workspaces download <project> <workspace> ws/   (a box's saved /workspace, as it was)
     krater ssh <job> -- -L 8888:localhost:8888
     krater open <job|project>                    (the web page)
     krater secrets set <project> HF_TOKEN        (reads the value from stdin, or asks without echoing it)
@@ -211,6 +213,21 @@ def _parser() -> argparse.ArgumentParser:
         metavar="N",
         help=f"how long the smoke test runs the command (default {DEFAULT_SMOKE_MINUTES}, at most 30)",
     )
+    submit_workspace = submit.add_mutually_exclusive_group()
+    submit_workspace.add_argument(
+        "--workspace",
+        metavar="WORKSPACE",
+        help="a box: continue this saved /workspace (its name, or its id's first 8+ characters; "
+        "`krater workspaces list` shows them) instead of starting an empty one",
+    )
+    submit_workspace.add_argument(
+        "--new-workspace", metavar="NAME", help="a box: name its new, empty workspace (default: the box's name)"
+    )
+    submit.add_argument(
+        "--end-holder",
+        action="store_true",
+        help="with --workspace: if a stopped box uses that workspace, end it (its machine goes) so this box can continue it",
+    )
 
     run_local = commands.add_parser(
         "run",
@@ -283,7 +300,8 @@ def _parser() -> argparse.ArgumentParser:
         help="leave alone a local file that has the same size (default: fetch everything again)",
     )
     for action, text in (
-        ("cancel", "cancel a job or box (its machine is destroyed; a box isn't saved first and can't be brought back)"),
+        ("cancel", "cancel a job, or end a box now (its machine is destroyed without a last save of /workspace)"),
+        ("end", "end a running box: save /workspace, then destroy its machine (its workspace stays)"),
         ("stop", "stop a box (it saves /workspace first)"),
         ("resume", "start a stopped box again on the same machine"),
         ("move", "start a stopped box on another machine from its saved /workspace"),
@@ -324,6 +342,29 @@ def _parser() -> argparse.ArgumentParser:
     inputs_rm.add_argument("project", help=project_help)
     inputs_rm.add_argument("name")
 
+    files = commands.add_parser(
+        "files", help="everything a project stores (inputs, workspaces, jobs' files), and its quota"
+    )
+    files.add_argument("project", help=project_help)
+    workspaces = commands.add_parser("workspaces", help="a project's workspaces: each box's saved /workspace")
+    workspace_commands = workspaces.add_subparsers(dest="workspaces_command", required=True)
+    workspaces_list = workspace_commands.add_parser("list")
+    workspaces_list.add_argument("project", help=project_help)
+    workspace_help = "its name, or its id's first 8+ characters"
+    workspaces_download = workspace_commands.add_parser(
+        "download", help="download a saved /workspace with its folders, permissions, times and symlinks"
+    )
+    workspaces_download.add_argument("project", help=project_help)
+    workspaces_download.add_argument("workspace", help=workspace_help)
+    workspaces_download.add_argument("folder", nargs="?", help="where to put it (default: a folder named after it)")
+    workspaces_download.add_argument(
+        "--skip-existing", action="store_true", help="leave alone a local file that has the same size"
+    )
+    workspaces_rm = workspace_commands.add_parser("rm", help="delete a workspace and its files for good")
+    workspaces_rm.add_argument("project", help=project_help)
+    workspaces_rm.add_argument("workspace", help=workspace_help)
+    workspaces_rm.add_argument("--yes", action="store_true", help="don't ask first")
+
     prices = commands.add_parser("prices", help="what an hour cost at Krater's last hourly price check, per GPU model")
     prices.add_argument("--all", action="store_true", help="include models nobody is offering right now")
     prices.add_argument("--gpu", help="only models whose name contains this (any case)")
@@ -357,6 +398,7 @@ def _money(value: str | None) -> str:
 #: events it (or what follows it soon after) records, newest first in the job's events.
 _ACTION_SIGNS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
     "cancel": (frozenset({"cancelled"}), frozenset({"cancelled"})),
+    "end": (frozenset({"cancelled"}), frozenset({"end_requested", "ended", "cancelled"})),
     "stop": (frozenset({"stopped"}), frozenset({"stop_requested", "synced", "stopped"})),
     "resume": (frozenset({"running"}), frozenset({"resume_requested", "resumed"})),
     "move": (frozenset({"queued", "starting", "running"}), frozenset({"move_requested", "requeued"})),
@@ -380,22 +422,46 @@ def _when(iso: str) -> str:
     return iso[:16].replace("T", " ") + " UTC"
 
 
-def _box_lines(box: dict, ident: str, *, ended: bool = False) -> list[str]:
+def _box_lines(box: dict, ident: str, *, ended: bool = False, workspace: dict | None = None) -> list[str]:
     """What `krater show` says about a box's saved /workspace and, when stopped, its end."""
+    kept = (
+        f"its workspace {workspace['name']!r} keeps the last save of /workspace "
+        f"(`krater workspaces download <project> {workspace['name']}`; continue it with `krater submit --box "
+        f"--workspace {workspace['name']}`)"
+        if workspace
+        else None
+    )
     if ended:
+        if kept:
+            return [f"destroyed: its machine and disk are gone; {kept}"]
         return ["destroyed: its disk and saved /workspace are gone and can't be brought back"]
     lines = []
     if box.get("destroy_at"):
         lines.append(
             f"destroyed at {_when(box['destroy_at'])} unless resumed (`krater resume {ident}`); "
-            f"`krater cancel {ident}` ends the disk charge now. Once destroyed, it can't be brought back"
+            f"`krater cancel {ident}` ends the disk charge now"
+            + (". Its workspace stays" if kept else ". Once destroyed, it can't be brought back")
         )
     saved = box.get("workspace_saved_at")
+    stored = (
+        f", {box['workspace_files']:,} files ({_size(box['workspace_bytes'] or 0)})"
+        if saved and box.get("workspace_files") is not None
+        else ""
+    )
     lines.append(
-        f"/workspace saved {_when(saved) if saved else 'not yet'}: Krater saves it every "
+        f"/workspace saved {_when(saved) if saved else 'not yet'}{stored}: Krater saves it every "
         f"{box.get('workspace_save_minutes', 10)} minutes while the box runs and before it stops; nothing else on "
         "the machine is saved"
     )
+    trouble = box.get("save_trouble")
+    if trouble:
+        lines.append(
+            f"NOT SAVING: the last {trouble['failures']} save(s) of /workspace failed, last at {_when(trouble['at'])}: "
+            f"{trouble['error']}. Work since the last good save is only on the machine; a full storage quota is the "
+            "usual cause (`krater files <project>`)"
+        )
+    if kept:
+        lines.append(kept)
     return lines
 
 
@@ -931,6 +997,18 @@ def run(
             else {"target_usd_per_hour": args.target, "max_usd_per_hour": args.max}
         )
         body = _job_body(args, prices)
+        if (args.workspace or args.new_workspace or args.end_holder) and not args.box:
+            say("--workspace, --new-workspace and --end-holder are for a box (--box).")
+            return 2
+        if args.end_holder and not args.workspace:
+            say("--end-holder goes with --workspace.")
+            return 2
+        if args.workspace:
+            body["workspace"] = args.workspace
+            if args.end_holder:
+                body["end_holder"] = True
+        elif args.new_workspace:
+            body["workspace_name"] = args.new_workspace
         if smoke is not None:
             # Only this: everything else stays the full run's, so `rerun --no-smoke` queues exactly that.
             body["smoke_minutes"] = smoke
@@ -1018,7 +1096,10 @@ def run(
                     )
             box = job.get("box")
             if box:
-                for line in _box_lines(box, short(job["id"]), ended=job["state"] in follow.FINISHED_STATES):
+                lines = _box_lines(
+                    box, short(job["id"]), ended=job["state"] in follow.FINISHED_STATES, workspace=job.get("workspace")
+                )
+                for line in lines:
                     say(f"  {line}")
             for event in job.get("events", [])[:10]:
                 say(f"  {event['at'][:19].replace('T', ' ')}  {event['message']}")
@@ -1072,7 +1153,7 @@ def run(
         return follow.exit_code_for(job)
     elif args.command == "download":
         return _download(krater, http, resolve.resolve_job(krater, args.job), args, say)
-    elif args.command in ("cancel", "stop", "resume", "move"):
+    elif args.command in ("cancel", "end", "stop", "resume", "move"):
         job_id = resolve.resolve_job(krater, args.job)
         try:
             job = krater.post(f"/jobs/{job_id}/{args.command}")
@@ -1095,11 +1176,19 @@ def run(
                     f"{job['name']}: stopping. Its /workspace is saved first, then the machine stops "
                     f"(`krater show {resolve.short(job['id'])}` says when)."
                 )
+            elif args.command == "end" and job["state"] == "running":
+                say(
+                    f"{job['name']}: ending. Its /workspace is saved first, then the machine is destroyed; "
+                    f"its workspace stays (`krater show {resolve.short(job['id'])}` says when)."
+                )
             else:
                 say(f"{job['name']}: {job['state']}" + (f" - {job['state_reason']}" if job["state_reason"] else ""))
-                if args.command == "cancel" and job["kind"] == "box":
+                if args.command in ("cancel", "end") and job["kind"] == "box":
+                    workspace = job.get("workspace")
                     say(
-                        "  Its machine is destroyed with its disk and saved /workspace, without a last save; "
+                        f"  Its machine is destroyed; its workspace {workspace['name']!r} keeps the last save."
+                        if workspace
+                        else "  Its machine is destroyed with its disk and saved /workspace, without a last save; "
                         "it can't be brought back."
                     )
 
@@ -1166,6 +1255,39 @@ def run(
             data = krater.delete(f"{base}/{quote(args.name, safe='/')}")
             count = data["deleted"]
             out(data, lambda: say(f"Deleted {count} input file{'s' if count != 1 else ''}."))
+    elif args.command == "files":
+        data = krater.get(f"/projects/{resolve.resolve_project(krater, args.project)}/files")
+        out(data, lambda: _say_files(data, say))
+    elif args.command == "workspaces":
+        project_id = resolve.resolve_project(krater, args.project)
+        base = f"/projects/{project_id}/workspaces"
+        if args.workspaces_command == "list":
+            data = krater.get(base)
+            rows = [["ID", "NAME", "LAST SAVED", "SIZE", "IN USE BY"]] + [
+                [
+                    short(w["id"]),
+                    w["name"],
+                    _when(w["last_saved_at"]) if w["last_saved_at"] else "never",
+                    _size(w["bytes"]) if w["bytes"] is not None else "-",
+                    f"{w['holder']['name']} ({w['holder']['state']})" if w["holder"] else "-",
+                ]
+                for w in data["workspaces"]
+            ]
+            out(data, lambda: _table(rows, say) if data["workspaces"] else say("No workspaces yet."))
+            return 0
+        workspace = _find_workspace(krater.get(base)["workspaces"], args.workspace)
+        if args.workspaces_command == "download":
+            return _download_workspace(krater, http, f"{base}/{workspace['id']}/files", workspace, args, say)
+        if workspace["holder"]:
+            say(f"The box {workspace['holder']['name']} uses {workspace['name']}. End it first.")
+            return 1
+        if not args.yes and prompt(
+            f"Delete the workspace {workspace['name']} and its files for good? [y/N] "
+        ).strip().lower() not in ("y", "yes"):
+            say("Nothing deleted.")
+            return 1
+        data = krater.delete(f"{base}/{workspace['id']}")
+        out(data, lambda: say(f"Deleted {workspace['name']} ({data['deleted']:,} stored files)."))
     elif args.command == "prices":
         data = krater.get("/prices")
         rows = [p for p in data["prices"] if not args.gpu or args.gpu.lower() in p["gpu"].lower()]
@@ -1200,6 +1322,169 @@ def run(
 
 
 AREAS = ("outputs", "checkpoints", "logs", "workspace")
+
+
+def _say_files(data: dict, say: Callable[[str], None]) -> None:
+    total, quota = data["total"], data["quota_bytes"]
+    share = f" ({100 * total['bytes'] // quota}%)" if quota else ""
+    say(f"{_size(total['bytes'])} of {_size(quota)} used{share}, {total['files']:,} files.")
+    say(f"inputs: {data['inputs']['files']:,} files, {_size(data['inputs']['bytes'])}")
+    if data["workspaces"]:
+        say("workspaces:")
+        _table(
+            [["  ID", "NAME", "LAST SAVED", "SIZE", "IN USE BY"]]
+            + [
+                [
+                    "  " + short(w["id"]),
+                    w["name"],
+                    _when(w["last_saved_at"]) if w["last_saved_at"] else "never",
+                    _size(w["stored"]["bytes"]),
+                    w["holder"]["name"] if w["holder"] else "-",
+                ]
+                for w in data["workspaces"]
+            ],
+            say,
+        )
+    if data["jobs"]:
+        say("jobs' files:")
+        _table(
+            [["  ID", "NAME", "OUTPUTS", "CHECKPOINTS", "LOGS"]]
+            + [
+                ["  " + short(j["id"]), j["name"]]
+                + [_size(j["areas"][area]["bytes"]) if area in j["areas"] else "-" for area in AREAS[:3]]
+                for j in data["jobs"]
+            ],
+            say,
+        )
+    if data["other"]["files"]:
+        say(f"other: {data['other']['files']:,} files, {_size(data['other']['bytes'])}")
+
+
+def _find_workspace(listed: list[dict], ref: str) -> dict:
+    """A workspace by id, its first 8+ characters, or its exact name."""
+    ref = ref.strip()
+    for workspace in listed:
+        if workspace["id"] == ref:
+            return workspace
+    by_id = [w for w in listed if len(ref) >= 8 and w["id"].startswith(ref)]
+    if len(by_id) == 1:
+        return by_id[0]
+    by_name = [w for w in listed if w["name"] == ref]
+    if len(by_name) == 1:
+        return by_name[0]
+    if len(by_name) > 1:
+        raise KraterError(f"More than one workspace is named {ref!r}; give its id.", status=2)
+    raise KraterError(f"No workspace {ref!r}; `krater workspaces list` shows them.", status=2)
+
+
+def _safe_parts(path: str) -> list[str] | None:
+    parts = path.split("/")
+    if not path or path.startswith("/") or any(part in ("", ".", "..") for part in parts) or "\\" in path:
+        return None
+    return parts
+
+
+def _inside(root: str, target: str) -> bool:
+    """Whether `target` is under `root` once every symlink on its way is followed, so a symlink the workspace
+    restored can't carry a later file out of the folder."""
+    real_root = os.path.realpath(root)
+    return os.path.realpath(target).startswith(real_root + os.sep)
+
+
+def _download_workspace(
+    krater: Krater, http: httpx.Client, path: str, workspace: dict, args: argparse.Namespace, say
+) -> int:
+    """`krater workspaces download`: a saved /workspace as it was. Folders first, then files (each with its mode and
+    modification time), then symlinks last, so none can redirect a file. On Windows, where making a symlink needs
+    rights most accounts lack, a symlink becomes a small `NAME.symlink` file saying where it pointed."""
+    data = krater.get(path)
+    entries = data["entries"]
+    if not entries:
+        say("Nothing saved in this workspace yet.")
+        return 0
+    root = os.path.abspath(args.folder or re.sub(r"[^\w.-]+", "-", workspace["name"]).strip("-") or workspace["id"])
+    os.makedirs(root, exist_ok=True)
+    fetched = already = failed = total = 0
+    skipped = []
+    dirs, files, links = [], [], []
+    for entry in entries:
+        parts = _safe_parts(entry["path"])
+        if parts is None:
+            skipped.append(entry["path"])
+            continue
+        target = os.path.join(root, *parts)
+        kinds = {"dir": dirs, "file": files, "link": links}
+        if entry["type"] in kinds:
+            kinds[entry["type"]].append((entry, target))
+    for entry, target in list(dirs):
+        if not _inside(root, target):
+            dirs.remove((entry, target))
+            skipped.append(entry["path"])
+            continue
+        os.makedirs(target, exist_ok=True)
+    for entry, target in files:
+        label = entry["path"]
+        if not _inside(root, target):
+            skipped.append(label)
+            continue
+        total += entry["size_bytes"]
+        try:
+            if args.skip_existing and os.path.isfile(target) and os.path.getsize(target) == entry["size_bytes"]:
+                already += 1
+                continue
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            refused = _fetch(http, entry["url"], target)
+            if refused is not None and _expired(refused):
+                # The URLs last 15 minutes: ask again for all of them.
+                fresh = {e["path"]: e for e in krater.get(path)["entries"]}
+                for later, _ in files:
+                    if later["path"] in fresh:
+                        later["url"] = fresh[later["path"]]["url"]
+                refused = _fetch(http, entry["url"], target)
+            if refused is not None:
+                refused.raise_for_status()
+            _set_mode_and_time(target, entry)
+        except OSError as exc:
+            say(f"{label}  failed: {exc.strerror or exc}")
+            failed += 1
+            continue
+        fetched += 1
+    noted = 0
+    for entry, target in links:
+        if os.path.lexists(target):
+            continue
+        try:
+            os.symlink(entry["target"] or "", target)
+        except (OSError, NotImplementedError):
+            with open(target + ".symlink", "w", encoding="utf-8") as handle:
+                handle.write(f"A symlink to {entry['target']}\n")
+            noted += 1
+    for entry, target in sorted(dirs, key=lambda d: d[1], reverse=True):
+        _set_mode_and_time(target, entry)
+    for label in skipped:
+        say(f"Skipped {label}: not a plain relative path.")
+    saved = f"{fetched} file" + ("" if fetched == 1 else "s")
+    extra = (
+        (f", {already} already here" if already else "")
+        + (f", {failed} failed" if failed else "")
+        + (f", {len(links)} symlinks" if links else "")
+    )
+    say(f"Saved {saved}{extra}: {_size(total)} in all, under {root}.")
+    if noted:
+        say(f"{noted} symlinks couldn't be made here, so each is a NAME.symlink file saying where it pointed.")
+    if not data.get("has_manifest", True):
+        say("This workspace was saved before Krater kept its folders, modes and symlinks: only its files came back.")
+    return 1 if failed else 0
+
+
+def _set_mode_and_time(target: str, entry: dict) -> None:
+    """Give a restored file or folder its saved permissions (not on Windows) and modification time."""
+    mode = int(entry.get("mode") or 0) & 0o7777
+    if mode and not _is_windows():
+        os.chmod(target, mode)
+    mtime = int(entry.get("mtime_ns") or 0)
+    if mtime:
+        os.utime(target, ns=(mtime, mtime))
 
 
 def _expired(response: httpx.Response) -> bool:

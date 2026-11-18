@@ -926,15 +926,16 @@ def test_a_box_stopped_notice_says_what_it_costs_while_stopped_and_when_it_goes(
 
     (message,) = slack_client.messages.values()
     text = message["blocks"][0]["text"]["text"]
-    assert "within 24 hours, or Krater destroys it" in text and "can't be brought back" in text
+    assert "within 24 hours, or Krater destroys its machine and disk" in text
+    assert "stays in Krater as the workspace *notebook*" in text and "/files|download it>" in text
     if new_fields:
         assert "only its disk bills: $0.0088/h, about $0.22 a day" in text
-        assert "destroys it at 2026-11-14 09:30 UTC" in text
+        assert "destroys its machine and disk at 2026-11-14 09:30 UTC" in text
     else:
         assert "disk bills" not in text and " UTC" not in text
 
 
-def test_box_destroyed_notices_do_not_promise_the_workspace_is_kept(db_session: Session, member: Actor) -> None:
+def test_box_destroyed_notices_say_the_workspace_stays(db_session: Session, member: Actor) -> None:
     from krater.services.compute_jobs import AUDIT_BOX_DESTROY_SOON, AUDIT_BOX_DESTROYED
 
     project = new_project(db_session, member, title="Rover", write_up="w", budget_requested_cents=5000)
@@ -951,9 +952,10 @@ def test_box_destroyed_notices_do_not_promise_the_workspace_is_kept(db_session: 
     slack_notify.sync_box_notifications(db_session, slack_client)
 
     texts = [m["blocks"][0]["text"]["text"] for m in slack_client.messages.values()]
-    assert len(texts) == 2 and not any("is kept" in t for t in texts)
-    assert any("copy out anything you need first" in t for t in texts)
-    assert any("with its disk and saved /workspace" in t for t in texts)
+    assert len(texts) == 2
+    assert all("stays in Krater as the workspace *notebook*" in t for t in texts)  # an older notice: the box's name
+    assert any("anything on the disk outside /workspace goes with them" in t for t in texts)
+    assert any("its machine and disk are gone" in t for t in texts)
 
 
 def _box_notice(db_session: Session, project, member: Actor, name: str) -> AuditEvent:
