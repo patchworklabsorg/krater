@@ -81,6 +81,9 @@ class ComputeJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # A smoke test (`krater.services.smoke`): the runner stops the command after this many minutes and the job
     # succeeds. Null for an ordinary job.
     smoke_minutes: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
+    # How often the runner uploads changed checkpoint files to storage, in minutes (`--checkpoint-upload`). Null: the
+    # default (`krater.compute.runner_api.CHECKPOINT_SYNC_SECONDS`). Jobs only: a box saves /workspace on its own timer.
+    checkpoint_upload_minutes: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
 
     state: Mapped[ComputeJobState] = mapped_column(pg_enum(ComputeJobState, name="compute_job_state"), nullable=False)
     # Why the job is where it is, for the member: "waiting for an RTX 4090 bid at or under $0.20/h", ...

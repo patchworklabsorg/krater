@@ -32,9 +32,10 @@ The runner then:
    `smoke_seconds` (`krater/services/smoke.py`): the command gets `KRATER_SMOKE=1` and is stopped the same way once it
    has run that long, and step 7 reports the exit with `"smoke_stopped": true`, which Krater counts as a pass (only for
    a smoke job: an ordinary job's runner saying so changes nothing);
-5. uploads changed checkpoints once as the command starts and then every 10 minutes, and checkpoints and outputs
-   (`$KRATER_OUTPUT_DIR`, default `/krater/outputs`) when the command exits, retrying a storage error for up to 5
-   minutes (see [Restarts on the same machine](#restarts-on-the-same-machine) for why the first upload is at once);
+5. uploads changed checkpoints once as the command starts and then every 10 minutes (`checkpoint_sync_seconds` from
+   `start`: the job's own interval when it set one, `compute_jobs.checkpoint_upload_minutes`), and checkpoints and
+   outputs (`$KRATER_OUTPUT_DIR`, default `/krater/outputs`) when the command exits, retrying a storage error for up to
+   5 minutes (see [Restarts on the same machine](#restarts-on-the-same-machine) for why the first upload is at once);
 6. saves the command's stdout and stderr, with its own lines, to the job's log (`logs/attempt-<n>.log`, up to
    16 MB; the rest still reaches Vast's container log) and uploads it every minute and at exit;
 7. reports the exit code. The scheduler destroys the machine on its next pass. If the final upload still failed

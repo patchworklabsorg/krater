@@ -712,6 +712,48 @@ func TestTheSavedOutputStopsAtItsCap(t *testing.T) {
 	}
 }
 
+func TestARestartOnTheSameMachineKeepsTheLogFromBeforeIt(t *testing.T) {
+	// An outbid pause: Vast restarts the container, and the runner opens the same attempt's log again.
+	dir := t.TempDir()
+	first, err := newLogFile(dir, 3, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = first.Write([]byte("step 100 before the pause\n"))
+	_ = first.Close()
+
+	again, err := newLogFile(dir, 3, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = again.Write([]byte("step 100 resumed\n"))
+	_ = again.Close()
+
+	saved, _ := os.ReadFile(filepath.Join(dir, "attempt-3.log"))
+	text := string(saved)
+	before, marker, after := strings.Index(text, "before the pause"), strings.Index(text, "the runner started again"),
+		strings.Index(text, "resumed")
+	if before < 0 || marker < before || after < marker {
+		t.Errorf("the log should keep the first run, then the restart line, then the second run:\n%s", text)
+	}
+}
+
+func TestARestartCountsTheEarlierOutputTowardsTheCap(t *testing.T) {
+	dir := t.TempDir()
+	first, _ := newLogFile(dir, 2, 10)
+	_, _ = first.Write([]byte("1234567890abc"))
+	_ = first.Close()
+
+	again, _ := newLogFile(dir, 2, 10)
+	_, _ = again.Write([]byte("more"))
+	_ = again.Close()
+
+	saved, _ := os.ReadFile(filepath.Join(dir, "attempt-2.log"))
+	if strings.Contains(string(saved), "more") || strings.Count(string(saved), "the output passed") != 1 {
+		t.Errorf("a full log stays full across a restart: %q", saved)
+	}
+}
+
 // quickRetries makes the runner's retry windows short enough for a test.
 func quickRetries(t *testing.T, window time.Duration) {
 	oldFirst, oldBox, oldFinal := retryFirstWait, boxSaveWindow, finalPushWindow

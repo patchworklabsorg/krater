@@ -133,7 +133,7 @@ Krater sets these environment variables for your command:
 
 | Variable | What it's for |
 | --- | --- |
-| `KRATER_CHECKPOINT_DIR` | Save checkpoints here. Krater restores the latest ones here before your command starts, and uploads changed files every 10 minutes and when the command exits |
+| `KRATER_CHECKPOINT_DIR` | Save checkpoints here. Krater restores the latest ones here before your command starts, and uploads changed files every 10 minutes (or the job's own **Upload checkpoints every**) and when the command exits |
 | `KRATER_RESUMED` | `1` when this run is a resume: a later attempt after a move, or a restart after a pause. Load your latest checkpoint |
 | `KRATER_OUTPUT_DIR` | Put your results here. Uploaded when the command exits |
 | `KRATER_INPUT_DIR` | The project [inputs](#inputs) the job asked for, copied in before your command starts (`/krater/inputs`) |
@@ -169,8 +169,13 @@ Rules for checkpoints:
   `.partial`, so it never uploads a half-written one. A rename is atomic, so the finished file appears all at once.
 - **Keep only what you need.** Your project has a storage quota (50 GB unless an admin set another) shared by all its
   jobs' checkpoints and outputs. Overwrite `latest.pt` rather than keeping every step.
-- **Save often enough.** Uploads happen every 10 minutes, so work since the last upload is lost on a move. Saving
-  every 10 to 30 minutes of compute is a good balance.
+- **Save often; upload as often as the work is worth.** Saving into the folder is free, and an outbid machine keeps
+  its disk: if it comes back, your command starts again with the newest files you saved. Only a move to another
+  machine loses work, back to the last *upload*. Uploads happen every 10 minutes unless you set **Upload checkpoints
+  every** (1 to 60 minutes; `--checkpoint-upload` in the CLI). Each upload sends every changed file whole and is billed
+  as data out, so a 1 GB checkpoint every 2 minutes is 30 GB an hour: at a typical host's few dollars per TB that's
+  cents, at the $20 per TB Krater allows it's $0.60 an hour. Save every few minutes, and upload more often only when
+  your checkpoints are small or your GPU time is dear.
 
 A PyTorch example:
 

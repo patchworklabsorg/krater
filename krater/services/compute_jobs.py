@@ -144,6 +144,10 @@ def check_image(registry: Registry | None, image: str) -> None:
 
 #: The most data a job may say it moves each way, in GB (100 TB).
 MAX_DATA_GB = 100_000
+#: How often a job's runner uploads its changed checkpoint files, in minutes, unless the job chooses its own interval.
+#: The same as `krater.compute.runner_api.CHECKPOINT_SYNC_SECONDS`, which a test keeps in step.
+DEFAULT_CHECKPOINT_UPLOAD_MINUTES = 10
+MAX_CHECKPOINT_UPLOAD_MINUTES = 60
 
 
 @dataclass(frozen=True)
@@ -172,6 +176,9 @@ class JobSpec:
     inputs: tuple[str, ...] = ()
     # A smoke test of this many minutes (`krater.services.smoke`); None for the full run.
     smoke_minutes: int | None = None
+    # Upload changed checkpoint files every this many minutes; None for the default. More often loses less work when
+    # the job has to move to another machine, and costs more data out (Vast bills it per GB).
+    checkpoint_upload_minutes: int | None = None
     # A box's /workspace (`krater.services.workspaces`): continue this workspace of the project, or (None) start a new
     # one, named `workspace_name` (the box's name if blank). `end_holder`: end the stopped box that still holds the
     # workspace, so this one can continue it.
@@ -307,6 +314,17 @@ def _validate(spec: JobSpec, *, cap_microusd: int) -> None:
             errors["smoke_minutes"] = f"Choose a smoke test of 1 to {smoke.MAX_SMOKE_MINUTES} minutes."
         elif spec.smoke_minutes >= spec.max_runtime_minutes:
             errors["smoke_minutes"] = "The smoke test must be shorter than the max runtime."
+    if spec.checkpoint_upload_minutes is not None:
+        if spec.kind is ComputeJobKind.BOX:
+            errors["checkpoint_upload_minutes"] = (
+                f"A box saves /workspace every {DEFAULT_CHECKPOINT_UPLOAD_MINUTES} minutes; the upload interval is "
+                "for jobs."
+            )
+        elif not 1 <= spec.checkpoint_upload_minutes <= MAX_CHECKPOINT_UPLOAD_MINUTES:
+            errors["checkpoint_upload_minutes"] = (
+                f"Choose a checkpoint upload every 1 to {MAX_CHECKPOINT_UPLOAD_MINUTES} minutes, or leave it blank for "
+                f"every {DEFAULT_CHECKPOINT_UPLOAD_MINUTES}."
+            )
     _check_provider(spec, errors)
     if errors:
         raise ValidationFailed(errors)
@@ -386,6 +404,7 @@ def submit_job(
         input_names=list(spec.inputs),
         inputs_bytes=inputs_bytes,
         smoke_minutes=spec.smoke_minutes,
+        checkpoint_upload_minutes=spec.checkpoint_upload_minutes,
         state=ComputeJobState.QUEUED,
         # While compute is stopped, say so from the start, as the scheduler's next pass would.
         state_reason=f"Waiting: {halted}."

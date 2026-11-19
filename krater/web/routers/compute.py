@@ -288,6 +288,8 @@ def _form_page(
             "posted": posted or {},
             "default_image": compute_jobs.DEFAULT_IMAGE,
             "smoke_minutes": smoke.DEFAULT_SMOKE_MINUTES,
+            "checkpoint_upload_default": compute_jobs.DEFAULT_CHECKPOINT_UPLOAD_MINUTES,
+            "checkpoint_upload_max": compute_jobs.MAX_CHECKPOINT_UPLOAD_MINUTES,
             "workspaces": workspace_choices,
             # Compute is held until Weave clears every team member (`krater.services.clearance`); the page says who
             # first, and the submit checks Weave fresh. `None`: Weave couldn't say right now.
@@ -357,6 +359,8 @@ def _posted_from(job: ComputeJob) -> dict:
     }
     if job.smoke_minutes:
         posted["smoke"] = "on"
+    if job.checkpoint_upload_minutes:
+        posted["checkpoint_upload_minutes"] = str(job.checkpoint_upload_minutes)
     if job.workspace_id is not None:
         # "Run again" on a box continues its workspace.
         posted["workspace"] = str(job.workspace_id)
@@ -387,6 +391,7 @@ async def submit_job(
         kind = ComputeJobKind.BOX if posted.get("kind") == "box" else ComputeJobKind.JOB
         min_vram = posted.get("min_vram", "").strip()
         data_in, data_out = posted.get("data_in_gb", "").strip(), posted.get("data_out_gb", "").strip()
+        upload_every = posted.get("checkpoint_upload_minutes", "").strip()
         inputs = [line.strip() for line in posted.get("inputs", "").splitlines() if line.strip()]
         if posted.get("order") == "limit":
             target = high = _rate(posted.get("limit", ""), "limit")
@@ -414,6 +419,10 @@ async def submit_job(
             data_out_gb=_int(data_out, "data_out_gb", "data out of the machine") if data_out else None,
             inputs=tuple(compute_inputs.check_names(inputs)),
             smoke_minutes=smoke.DEFAULT_SMOKE_MINUTES if posted.get("smoke") == "on" else None,
+            # Blank (or a box, whose form hides the field) keeps the default.
+            checkpoint_upload_minutes=_int(upload_every, "checkpoint_upload_minutes", "checkpoint upload interval")
+            if upload_every and kind is ComputeJobKind.JOB
+            else None,
             **_workspace_fields(posted, kind),
         )
         store = get_compute_store() if spec.inputs else None
@@ -578,6 +587,7 @@ def job_page(
             "transfer_charged_cents": -(-sum(charged) // compute_jobs.MICROUSD_PER_CENT) if charged else None,
             "estimate": estimate,
             "costs": job_costs.breakdown(job),
+            "checkpoint_upload_default": compute_jobs.DEFAULT_CHECKPOINT_UPLOAD_MINUTES,
             "can_cancel": (is_team or actor.is_admin) and (job.is_active or job.state is ComputeJobState.QUEUED),
             # A running box can end after a save ("End box"); "End now" (cancel) skips it.
             "can_end": (is_team or actor.is_admin)

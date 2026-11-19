@@ -46,6 +46,8 @@ from krater.storage import ObjectStore
 
 #: The runner's timings, sent with `start` so they can change without a new runner build.
 HEARTBEAT_SECONDS = 60
+#: How often changed checkpoint files go up, unless the job chose its own interval (`checkpoint_upload_minutes`). A
+#: box saves /workspace on this timer too (`runner/box.go`).
 CHECKPOINT_SYNC_SECONDS = 600
 #: How often the job's output log goes up, so its team can watch it on the job page.
 LOG_SYNC_SECONDS = 60
@@ -196,7 +198,16 @@ def start(session: Session, instance: ComputeInstance, *, now: datetime, setting
         secrets=secrets_env,
         inputs=bool(job.input_names),
         smoke_seconds=(job.smoke_minutes or 0) * 60,
+        checkpoint_sync_seconds=checkpoint_sync_seconds(job),
     )
+
+
+def checkpoint_sync_seconds(job: ComputeJob) -> int:
+    """How often the job's runner uploads its changed checkpoint files: the job's own interval, or the default. A box
+    keeps the default whatever its row says, since the same timer saves its /workspace."""
+    if job.kind is ComputeJobKind.JOB and job.checkpoint_upload_minutes:
+        return job.checkpoint_upload_minutes * 60
+    return CHECKPOINT_SYNC_SECONDS
 
 
 # `key_updates`: the runner applies `ssh_keys` from a heartbeat reply (`krater.services.box_access`).
