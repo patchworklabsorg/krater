@@ -12,6 +12,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -91,6 +92,23 @@ def complete_upload(
     _team_only(actor, project)
     key = runner_api.inputs_prefix(project.id) + runner_api.check_name(name)
     runner_api.finish_upload(store, key, upload_id, etags)
+
+
+#: The starter job (`examples/starter`, also what `krater init` writes): its script, put in a project's inputs
+#: under `STARTER_INPUT` for the web form's "Try the starter job", since the web form takes an image, not a folder.
+STARTER_SCRIPT = Path(__file__).resolve().parents[2] / "examples" / "starter" / "train.py"
+STARTER_INPUT = "starter/"
+
+
+def ensure_starter(store: ObjectStore, actor: Actor, *, project: Project) -> str:
+    """Put the starter's train.py in the project's inputs (again if it changed). Returns the input folder name."""
+    _team_only(actor, project)
+    content = STARTER_SCRIPT.read_bytes()
+    key = runner_api.inputs_prefix(project.id) + STARTER_INPUT + "train.py"
+    stored = store.head(key)
+    if stored is None or stored.size_bytes != len(content):
+        store.put_bytes(key, content, content_type="text/x-python")
+    return STARTER_INPUT
 
 
 def delete_input(store: ObjectStore, actor: Actor, *, project: Project, name: str) -> int:

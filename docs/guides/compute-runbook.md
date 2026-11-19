@@ -137,6 +137,9 @@ Each alert says what failed and why: the error's root cause and what it usually 
 | "The host refused the connection" | Vast's address answered but refused: likely Vast |
 | "took too long to answer" (`ReadTimeout`), "Vast answered 5xx" | Vast is slow or erroring |
 
+When two or more alerts open at once and each says the DNS lookup failed or the network is unreachable, Krater posts
+them as one, "this server's network or DNS looks down", listing them.
+
 When Weave's syncs or Quilt and Stash deliveries fail at the same minutes as the scheduler, the server's own network is
 down, not Vast. A blip of a few minutes is harmless: the scheduler doesn't fail a machine for heartbeats it missed
 while it couldn't reach out (`WATCH_GAP`).

@@ -29,6 +29,8 @@ workspace sync, and step 5 starts and searches for nothing: queued jobs say why.
      holds when outbid (`on_outbid = hold`, which limit orders use) instead keeps the paused machine, with its disk,
      and moves only once a search finds another machine free at or under its target (paced like any search);
    - running past the job's max runtime → job failed, machine destroyed;
+   - spend (`spend_cents`, from the accrual) at or over the job's `max_spend_cents` → job failed ("Stopped at its
+     spend cap"), machine destroyed; a box is stopped instead, like the max runtime;
    - its image refused by the registry (the provider's status message is Docker's `Error response from daemon` with
      `denied`, `unauthorized`, `manifest unknown`, `pull access denied`, `name unknown` or `invalid reference format`:
      `PULL_REFUSALS`) before its container ever ran → job failed at once, quoting the message, and the machine

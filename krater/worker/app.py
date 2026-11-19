@@ -372,6 +372,9 @@ def compute_storage_cleanup(timestamp: int) -> None:
             aborted = compute_storage.abort_abandoned_uploads(session, store, now=now)
             if aborted:
                 logger.info("krater compute_storage_cleanup: aborted %d unfinished uploads", aborted)
+            pruned = compute_storage.prune_code_inputs(session, store, now=now)
+            if pruned:
+                logger.info("krater compute_storage_cleanup: deleted %d unused code folders", pruned)
         compute_watch.record_storage(session, store, get_object_store(), now=now)
         session.commit()
     except StorageError as exc:

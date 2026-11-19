@@ -84,6 +84,9 @@ class ComputeJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # How often the runner uploads changed checkpoint files to storage, in minutes (`--checkpoint-upload`). Null: the
     # default (`krater.compute.runner_api.CHECKPOINT_SYNC_SECONDS`). Jobs only: a box saves /workspace on its own timer.
     checkpoint_upload_minutes: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
+    # Stop the job (a box: stop it) once it has cost this much, in cents; None for no cap of its own. Checked
+    # while it runs, against `spend_cents`.
+    max_spend_cents: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
 
     state: Mapped[ComputeJobState] = mapped_column(pg_enum(ComputeJobState, name="compute_job_state"), nullable=False)
     # Why the job is where it is, for the member: "waiting for an RTX 4090 bid at or under $0.20/h", ...

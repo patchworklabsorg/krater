@@ -36,6 +36,7 @@ _NOT_IN_FILE = frozenset(
         "json",
         "estimate",
         "confirm_transfer_cost",
+        "follow",
         # `krater run`'s own: about this computer, not the job.
         "local",
         "input_dir",

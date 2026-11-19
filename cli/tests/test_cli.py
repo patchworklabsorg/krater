@@ -305,12 +305,6 @@ class Fake:
         )
 
 
-@pytest.fixture(autouse=True)
-def config_dir(tmp_path, monkeypatch):
-    monkeypatch.setenv("KRATER_CONFIG_DIR", str(tmp_path / "krater"))
-    return tmp_path / "krater"
-
-
 @pytest.fixture
 def fake() -> Fake:
     return Fake()

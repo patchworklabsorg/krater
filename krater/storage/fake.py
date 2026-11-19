@@ -10,6 +10,7 @@ real server would otherwise report.
 from __future__ import annotations
 
 import itertools
+from datetime import datetime
 
 from krater.storage.types import ListedObject, MultipartUpload, ObjectMeta, PresignedPost
 
@@ -18,6 +19,8 @@ class FakeObjectStore:
     def __init__(self) -> None:
         self._objects: dict[str, ObjectMeta] = {}
         self._content: dict[str, bytes] = {}
+        #: When a test says an object was written (`put(modified=...)`), for `list_prefix`.
+        self.modified: dict[str, datetime] = {}
         #: upload id -> key, for multipart uploads started and not yet completed.
         self.multipart_uploads: dict[str, str] = {}
         self._upload_ids = itertools.count(1)
@@ -52,6 +55,10 @@ class FakeObjectStore:
             return None
         return content[-n:] if n else b""
 
+    def put_bytes(self, key: str, content: bytes, *, content_type: str = "application/octet-stream") -> None:
+        self._objects[key] = ObjectMeta(size_bytes=len(content), content_type=content_type)
+        self._content[key] = content
+
     def delete(self, key: str) -> None:
         self._objects.pop(key, None)
         self._content.pop(key, None)
@@ -61,7 +68,7 @@ class FakeObjectStore:
 
     def list_prefix(self, prefix: str) -> list[ListedObject]:
         return [
-            ListedObject(key=k, size_bytes=m.size_bytes)
+            ListedObject(key=k, size_bytes=m.size_bytes, last_modified=self.modified.get(k))
             for k, m in sorted(self._objects.items())
             if k.startswith(prefix)
         ]
@@ -97,13 +104,23 @@ class FakeObjectStore:
 
     # -- Test helpers ----------------------------------------------------------------------------------
 
-    def put(self, key: str, *, content_type: str, size_bytes: int, content: bytes = b"") -> None:
+    def put(
+        self,
+        key: str,
+        *,
+        content_type: str,
+        size_bytes: int,
+        content: bytes = b"",
+        modified: datetime | None = None,
+    ) -> None:
         """Simulate a browser having uploaded `key` through the presigned POST above. `content` is the
         object's actual bytes (or just enough of a prefix for a signature check) -- tests that need
         `confirm_screenshot` to accept the upload must pass real magic bytes here; the default (empty)
         deliberately fails any signature check, the same way an empty/garbage upload would for real."""
         self._objects[key] = ObjectMeta(size_bytes=size_bytes, content_type=content_type)
         self._content[key] = content
+        if modified is not None:
+            self.modified[key] = modified
 
 
 __all__ = ["FakeObjectStore"]

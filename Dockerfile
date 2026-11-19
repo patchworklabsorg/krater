@@ -42,6 +42,10 @@ RUN --mount=type=cache,target=/home/krater/.cache/uv,uid=999,gid=999 \
     uv sync --frozen --no-dev
 COPY --chown=krater:krater --from=runner /out/krater-runner-linux-amd64 /app/runner/dist/krater-runner-linux-amd64
 
+# The commit this image was built from, for /healthz (CI passes it; a local build leaves it empty).
+ARG KRATER_REVISION=""
+ENV KRATER_REVISION=$KRATER_REVISION
+
 EXPOSE 8000
 
 # The portal is the default; docker-compose.yml overrides `command` for `migrate` and `worker`.
