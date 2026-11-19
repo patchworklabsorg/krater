@@ -212,6 +212,7 @@ func Run(ctx context.Context, cfg Config, apiHTTP, storageHTTP *http.Client, gpu
 		*dir = usable
 	}
 	checkpoints := NewSyncer(api, "checkpoints", cfg.CheckpointDir, storageHTTP)
+	checkpoints.StampPath = filepath.Join(cfg.CheckpointDir, stampFileName)
 	outputs := NewSyncer(api, "outputs", cfg.OutputDir, storageHTTP)
 	beatEvery := seconds(info.HeartbeatSeconds, 60)
 	whileRestoring(ctx, api, beatEvery, func() {
@@ -362,6 +363,10 @@ func Run(ctx context.Context, cfg Config, apiHTTP, storageHTTP *http.Client, gpu
 	}()
 	go func() {
 		defer wg.Done()
+		// At once, not after a full interval: on a container restarted on the same machine (an outbid machine that
+		// Vast resumed), what the last run wrote and never uploaded was kept (restoreFiles), and a host outbid more
+		// often than the interval would otherwise never upload. With nothing changed, this uploads nothing.
+		pushOnce(loops, checkpoints)
 		syncLoop(loops, checkpoints, seconds(info.CheckpointSyncSeconds, 600))
 	}()
 	if logs != nil {
@@ -519,14 +524,18 @@ func syncLoop(ctx context.Context, s *Syncer, every time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			n, err := s.Push(ctx)
-			switch {
-			case err != nil && ctx.Err() == nil:
-				logf("%s upload failed: %v", s.Area, err)
-			case n > 0 && s.Area != "logs": // a line about the log would change the log, and upload it again
-				logf("uploaded %d %s files", n, s.Area)
-			}
+			pushOnce(ctx, s)
 		}
+	}
+}
+
+func pushOnce(ctx context.Context, s *Syncer) {
+	n, err := s.Push(ctx)
+	switch {
+	case err != nil && ctx.Err() == nil:
+		logf("%s upload failed: %v", s.Area, err)
+	case n > 0 && s.Area != "logs": // a line about the log would change the log, and upload it again
+		logf("uploaded %d %s files", n, s.Area)
 	}
 }
 

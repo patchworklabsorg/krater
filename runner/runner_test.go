@@ -58,6 +58,8 @@ type fakeKrater struct {
 	logSyncSeconds int
 	// Answer 404 to the workspace save reports, as a Krater older than them does.
 	noSaveReports bool
+	// Called with each key storage stores a PUT under.
+	onPut func(key string)
 
 	mu         sync.Mutex
 	objects    map[string][]byte // "area/name" -> content
@@ -278,6 +280,9 @@ func (f *fakeKrater) storage(w http.ResponseWriter, r *http.Request, key string)
 			f.multipart[bits[1]][n] = data
 		} else {
 			f.objects[key] = data
+			if f.onPut != nil {
+				f.onPut(key)
+			}
 		}
 		sum := md5.Sum(data)
 		w.Header().Set("ETag", `"`+hex.EncodeToString(sum[:])+`"`)

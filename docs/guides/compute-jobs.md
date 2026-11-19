@@ -157,6 +157,13 @@ Each time, the job starts again from the beginning of your command, with the lat
 and `KRATER_RESUMED=1`. A program that saves checkpoints carries on where it left off. One that doesn't starts over
 and pays for the same work twice.
 
+An outbid interruptible machine is often paused rather than lost: Vast keeps its disk, and when it comes back your
+command starts again on the same machine, still with `KRATER_RESUMED=1`. Your checkpoint folder is then as your last
+run left it. Files it wrote since they were last uploaded are kept (not replaced by the older stored copy), and Krater
+uploads them as soon as the command starts again, so a machine that keeps getting outbid still gets your checkpoints
+into storage. If the machine stays paused for 30 minutes, Krater moves the job, which resumes from what was uploaded.
+Krater keeps a small file of its own, `.krater-uploaded.json`, in the checkpoint folder: leave it there.
+
 Rules for checkpoints:
 
 - **Write each checkpoint under a temporary name, then rename it.** Krater skips files ending in `.tmp` or
