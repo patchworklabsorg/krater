@@ -35,7 +35,8 @@ class Guide:
 GUIDES: tuple[Guide, ...] = (
     Guide(
         "using-krater",
-        "Applying, your team, review, budgets, amendments, the final write-up and the gallery.",
+        "Applying, your team, review, budgets, progress updates and top-ups, amendments, the final write-up and the "
+        "gallery.",
         "members",
     ),
     Guide(
@@ -46,7 +47,8 @@ GUIDES: tuple[Guide, ...] = (
     Guide("run-when-cheap", "Make a job wait for a GPU price you choose, so your budget goes further.", "members"),
     Guide(
         "reviewing-and-admin",
-        "Reviewing proposals, granting less or more, funding holds, overrides, compute settings and alerts.",
+        "Reviewing proposals and top-ups, granting less or more, funding holds, overrides, compute settings and "
+        "alerts.",
         "admins",
     ),
     Guide("ospool-grants", "Record a grant that runs on the OSPool, and report what the team used.", "admins"),

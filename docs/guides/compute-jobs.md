@@ -215,6 +215,11 @@ Everything your command prints (stdout and stderr) goes to the job's log, which 
 shows on the job page. It keeps up to 16 MB per attempt. Print progress lines (`step 1200/50000, loss 0.84`) so you can
 see the job is alive. The command's exit code decides the outcome: `0` is *succeeded*, anything else *failed*.
 
+When an outbid machine comes back and your command starts again on it, the log carries on in the same attempt: a
+line `[krater: the runner started again on this machine at …]` marks where, and the lines above it are from before
+the pause. A move to another machine is a new attempt with its own log (`krater logs <job> --attempt N` shows an
+earlier one).
+
 ## Trying it before paying
 
 Most failed jobs fail in their first minute: a typo in the command, a package missing from the image, a wrong path.
