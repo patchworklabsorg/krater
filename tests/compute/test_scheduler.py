@@ -1021,6 +1021,23 @@ def test_vasts_other_unavailable_answer_avoids_the_machine_too(db_session, membe
     assert _instance(db_session, job).provider_machine_id not in ("501", None)
 
 
+def test_a_gpu_conflict_avoids_the_machine_too(db_session, member, project, fake) -> None:  # noqa: F811
+    """Seen live 2026-11-19: Vast kept listing the offer, and the job asked for it again on every pass."""
+    refusing, _ = _unavailable_on(
+        fake,
+        "501",
+        status=400,
+        error="invalid_args",
+        msg="error 400/3763: GPU conflict: requesting already rented gpus {205411}",
+    )
+    job = _submit(db_session, member, project, target_microusd=100_000)
+    _pass(db_session, refusing)
+    assert _instance(db_session, job).destroy_reason == scheduler.UNAVAILABLE
+
+    _pass(db_session, refusing, NOW + timedelta(minutes=1))
+    assert _instance(db_session, job).provider_machine_id not in ("501", None)
+
+
 def test_a_create_refused_but_started_is_kept(db_session, member, project, fake) -> None:  # noqa: F811
     """The same refusal on 2026-10-11 rented a machine that ran: only a stopped one is dropped."""
     job = _submit(db_session, member, project)
