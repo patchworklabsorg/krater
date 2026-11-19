@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -13,10 +12,11 @@ import (
 // A container restarted on the same machine (Vast outbids an interruptible machine, pauses it with its disk, and
 // starts the container again) finds the last run's checkpoint directory as it was left.
 
-func checkpointSyncer(f *fakeKrater, dir string) *Syncer {
+// checkpointSyncer is the checkpoints' Syncer of one runner start, keeping its stamps in `state`.
+func checkpointSyncer(f *fakeKrater, dir, state string) *Syncer {
 	api := &API{BaseURL: f.server.URL, Token: f.token, HTTP: http.DefaultClient}
 	s := NewSyncer(api, "checkpoints", dir, http.DefaultClient)
-	s.StampPath = filepath.Join(dir, stampFileName)
+	s.StampPath = filepath.Join(state, "checkpoints-uploaded.json")
 	return s
 }
 
@@ -50,11 +50,11 @@ func read(t *testing.T, dir, name string) string {
 	return string(data)
 }
 
-// firstRun uploads the files as one run of the job does, and returns the directory it left.
-func firstRun(t *testing.T, f *fakeKrater, files map[string]string) string {
+// firstRun uploads the files as one run of the job does, and returns the checkpoint and state directories it left.
+func firstRun(t *testing.T, f *fakeKrater, files map[string]string) (string, string) {
 	t.Helper()
-	dir := t.TempDir()
-	s := checkpointSyncer(f, dir)
+	dir, state := t.TempDir(), t.TempDir()
+	s := checkpointSyncer(f, dir, state)
 	if _, err := s.Restore(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -64,15 +64,15 @@ func firstRun(t *testing.T, f *fakeKrater, files map[string]string) string {
 	if n, err := s.Push(context.Background()); err != nil || n != len(files) {
 		t.Fatalf("first run pushed %d, %v", n, err)
 	}
-	return dir
+	return dir, state
 }
 
 func TestARestartKeepsALocalFileThatGrewSinceItsUploadAndSendsIt(t *testing.T) {
 	f := newFakeKrater(t)
-	dir := firstRun(t, f, map[string]string{"metrics.log": "step 1\n"})
+	dir, state := firstRun(t, f, map[string]string{"metrics.log": "step 1\n"})
 	writeLater(t, dir, "metrics.log", "step 1\nstep 2\n") // the run went on after the upload
 
-	s := checkpointSyncer(f, dir)
+	s := checkpointSyncer(f, dir, state)
 	if n, err := s.Restore(context.Background()); err != nil || n != 0 {
 		t.Fatalf("Restore = %d, %v; want nothing downloaded", n, err)
 	}
@@ -90,10 +90,10 @@ func TestARestartKeepsALocalFileThatGrewSinceItsUploadAndSendsIt(t *testing.T) {
 func TestARestartSendsACheckpointOverwrittenAtTheSameSize(t *testing.T) {
 	// latest.pt is rewritten in place each save, and model weights are always the same size.
 	f := newFakeKrater(t)
-	dir := firstRun(t, f, map[string]string{"latest.pt": "step-0100"})
+	dir, state := firstRun(t, f, map[string]string{"latest.pt": "step-0100"})
 	writeLater(t, dir, "latest.pt", "step-0200")
 
-	s := checkpointSyncer(f, dir)
+	s := checkpointSyncer(f, dir, state)
 	if _, err := s.Restore(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -107,10 +107,10 @@ func TestARestartSendsACheckpointOverwrittenAtTheSameSize(t *testing.T) {
 
 func TestARestartStillDownloadsAFileThatChangedOnlyInStorage(t *testing.T) {
 	f := newFakeKrater(t)
-	dir := firstRun(t, f, map[string]string{"ckpt.txt": "v1"})
+	dir, state := firstRun(t, f, map[string]string{"ckpt.txt": "v1"})
 	f.objects["checkpoints/ckpt.txt"] = []byte("v2, stored since")
 
-	s := checkpointSyncer(f, dir)
+	s := checkpointSyncer(f, dir, state)
 	if n, err := s.Restore(context.Background()); err != nil || n != 1 {
 		t.Fatalf("Restore = %d, %v; want the stored copy downloaded", n, err)
 	}
@@ -124,19 +124,14 @@ func TestARestartStillDownloadsAFileThatChangedOnlyInStorage(t *testing.T) {
 
 func TestARestartWithNothingNewDownloadsAndSendsNothing(t *testing.T) {
 	f := newFakeKrater(t)
-	dir := firstRun(t, f, map[string]string{"a.pt": "aaa", "sub/b.pt": "bb"})
+	dir, state := firstRun(t, f, map[string]string{"a.pt": "aaa", "sub/b.pt": "bb"})
 
-	s := checkpointSyncer(f, dir)
+	s := checkpointSyncer(f, dir, state)
 	if n, err := s.Restore(context.Background()); err != nil || n != 0 {
 		t.Fatalf("Restore = %d, %v", n, err)
 	}
 	if n, err := s.Push(context.Background()); err != nil || n != 0 {
 		t.Errorf("Push = %d, %v; want nothing to send", n, err)
-	}
-	for key := range f.objects {
-		if strings.Contains(key, stampFileName) {
-			t.Errorf("the runner's stamp file was uploaded: %s", key)
-		}
 	}
 }
 
@@ -147,6 +142,7 @@ func TestARestartedJobUploadsWhatTheLastRunLeftAtOnce(t *testing.T) {
 	f.resumed = true
 	f.objects["checkpoints/step-40.pt"] = []byte("weights-40")
 	cfg := f.cfg(t)
+	cfg.StateDir = t.TempDir()
 	if err := os.MkdirAll(cfg.CheckpointDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -168,5 +164,29 @@ func TestARestartedJobUploadsWhatTheLastRunLeftAtOnce(t *testing.T) {
 	}
 	if got := read(t, cfg.CheckpointDir, "step-40.pt"); got != "weights-40" {
 		t.Errorf("step-40.pt = %q", got)
+	}
+}
+
+func TestTheRunnerLeavesNothingOfItsOwnInTheCheckpointFolder(t *testing.T) {
+	// Members' code reads the folder: an emptiness check on a fresh start, the newest file to load.
+	f := newFakeKrater(t)
+	f.command = `test -z "$(ls -A "$KRATER_CHECKPOINT_DIR")" || exit 9; echo 1 > "$KRATER_CHECKPOINT_DIR/latest.pt"`
+	cfg := f.cfg(t)
+	cfg.StateDir = t.TempDir()
+
+	if code, err := Run(context.Background(), cfg, http.DefaultClient, http.DefaultClient, noGPU); err != nil || code != 0 {
+		t.Fatalf("Run = %d, %v; want 0 (an empty checkpoint folder on a fresh start)", code, err)
+	}
+	entries, err := os.ReadDir(cfg.CheckpointDir)
+	if err != nil || len(entries) != 1 || entries[0].Name() != "latest.pt" {
+		t.Errorf("checkpoint folder holds %v (%v); want only latest.pt", entries, err)
+	}
+	if _, err := os.Stat(filepath.Join(cfg.StateDir, "checkpoints-uploaded.json")); err != nil {
+		t.Errorf("no upload record in the state folder: %v", err)
+	}
+	for key := range f.objects {
+		if filepath.Base(key) == "checkpoints-uploaded.json" {
+			t.Errorf("the runner's upload record was uploaded: %s", key)
+		}
 	}
 }

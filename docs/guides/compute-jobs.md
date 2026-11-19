@@ -162,7 +162,6 @@ command starts again on the same machine, still with `KRATER_RESUMED=1`. Your ch
 run left it. Files it wrote since they were last uploaded are kept (not replaced by the older stored copy), and Krater
 uploads them as soon as the command starts again, so a machine that keeps getting outbid still gets your checkpoints
 into storage. If the machine stays paused for 30 minutes, Krater moves the job, which resumes from what was uploaded.
-Krater keeps a small file of its own, `.krater-uploaded.json`, in the checkpoint folder: leave it there.
 
 Rules for checkpoints:
 

@@ -49,9 +49,10 @@ Vast pauses an outbid interruptible machine with its disk kept, and restarts the
 `$KRATER_CHECKPOINT_DIR` still holds what the last run wrote, some of it newer than storage or never uploaded. So
 (`runner/files.go`):
 
-- **The runner records what it uploaded.** After each upload and each restore it writes `.krater-uploaded.json` in the
-  checkpoint folder: every file storage holds as this machine uploaded or restored it, with its size and modification
-  time in nanoseconds. It is written under a `.krater-partial` name and renamed, and is never uploaded.
+- **The runner records what it uploaded.** After each upload and each restore it writes `checkpoints-uploaded.json` in
+  its state folder (beside `selfstop.json`; a restart keeps it): every file storage holds as this machine uploaded or
+  restored it, with its size and modification time in nanoseconds, written under a `.krater-partial` name and
+  renamed. Not in the checkpoint folder, which the member's code reads (an emptiness check, the newest file to load).
 - **A restore keeps the newer local file.** A file already here is downloaded only when it is exactly as recorded
   (same size and time) and storage now holds a different size. Anything else here (changed since its upload, or not
   recorded at all) was written by the command on this machine: it's kept, and goes up with the next upload. Before,
@@ -66,7 +67,8 @@ Vast pauses an outbid interruptible machine with its disk kept, and restarts the
   paused it started again from step 0 though the old disk held newer checkpoints. Now each restart uploads what the
   run before it wrote. A checkpoint too big to upload within one run still doesn't get there.
 
-Outputs, logs and a box's workspace keep no record (a workspace restore has its own rule, by the manifest's times;
+Without a state folder the runner keeps no record and restores by size as before. Outputs, logs and a box's
+workspace keep no record (a workspace restore has its own rule, by the manifest's times;
 see [How /workspace is saved](#how-workspace-is-saved)).
 
 ## Network use
@@ -280,7 +282,7 @@ page instead.
 | Variable | Meaning |
 | --- | --- |
 | `KRATER_RESUMED` | `1` when this is a resume (a later attempt, or a restart after a pause): load the latest checkpoint |
-| `KRATER_CHECKPOINT_DIR` | Save checkpoints here. Restored before the command starts (a file the last run on this machine changed is kept). The runner's `.krater-uploaded.json` lives here too: leave it |
+| `KRATER_CHECKPOINT_DIR` | Save checkpoints here. Restored before the command starts (a file the last run on this machine changed is kept) |
 | `KRATER_OUTPUT_DIR` | Put results here. Uploaded when the command exits |
 | `KRATER_INPUT_DIR` | The project inputs the job asked for, copied in before the command |
 | `KRATER_JOB_ID`, `KRATER_ATTEMPT` | For logs |

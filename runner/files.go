@@ -35,15 +35,12 @@ type Syncer struct {
 	storedEntries []manifestEntry
 	manifestRead  bool
 	pruned        bool
-	// StampPath, when set, keeps `uploaded` in a file (inside Dir, named stampFileName) so that a restart on the same
-	// machine knows which local files it already uploaded and which the command changed since (see restoreFiles).
+	// StampPath, when set, keeps `uploaded` in a file (outside Dir) so that a restart on the same machine knows which
+	// local files it already uploaded and which the command changed since (see restoreFiles).
 	StampPath string
 	// One push at a time: the timed sync and a save Krater asks for can overlap.
 	mu sync.Mutex
 }
-
-// stampFileName is the file a Syncer with StampPath keeps its upload stamps in. It is never uploaded.
-const stampFileName = ".krater-uploaded.json"
 
 type fileStamp struct {
 	size    int64
@@ -87,9 +84,6 @@ func (s *Syncer) restoreFiles(ctx context.Context, files []RemoteFile, onlyMissi
 	var targets []pendingDownload
 	kept := 0
 	for _, f := range files {
-		if f.Name == stampFileName {
-			continue
-		}
 		local, err := s.localPath(f.Name)
 		if err != nil {
 			logf("skipping stored file %q: %v", f.Name, err)
@@ -258,8 +252,8 @@ func (s *Syncer) Push(ctx context.Context) (int, error) {
 			return nil
 		}
 		name := filepath.ToSlash(rel)
-		if isPartial(name) || name == stampFileName {
-			// Still being written (the usual pattern: write to a temporary name, then rename), or the runner's own.
+		if isPartial(name) {
+			// Still being written (the usual pattern: write to a temporary name, then rename).
 			return nil
 		}
 		stamp := stampOf(info)
