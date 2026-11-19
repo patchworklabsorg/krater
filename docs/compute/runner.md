@@ -32,15 +32,45 @@ The runner then:
    `smoke_seconds` (`krater/services/smoke.py`): the command gets `KRATER_SMOKE=1` and is stopped the same way once it
    has run that long, and step 7 reports the exit with `"smoke_stopped": true`, which Krater counts as a pass (only for
    a smoke job: an ordinary job's runner saying so changes nothing);
-5. uploads changed checkpoints every 10 minutes (`checkpoint_sync_seconds` from `start`: the job's own interval when it
-   set one, `compute_jobs.checkpoint_upload_minutes`), and checkpoints and outputs (`$KRATER_OUTPUT_DIR`, default
-   `/krater/outputs`) when the command exits, retrying a storage error for up to 5 minutes;
+5. uploads changed checkpoints once as the command starts and then every 10 minutes (`checkpoint_sync_seconds` from
+   `start`: the job's own interval when it set one, `compute_jobs.checkpoint_upload_minutes`), and checkpoints and
+   outputs (`$KRATER_OUTPUT_DIR`, default `/krater/outputs`) when the command exits, retrying a storage error for up to
+   5 minutes (see [Restarts on the same machine](#restarts-on-the-same-machine) for why the first upload is at once);
 6. saves the command's stdout and stderr, with its own lines, to the job's log (`logs/attempt-<n>.log`, up to
    16 MB; the rest still reaches Vast's container log) and uploads it every minute and at exit;
 7. reports the exit code. The scheduler destroys the machine on its next pass. If the final upload still failed
    after its retries, the exit is reported anyway (the machine mustn't bill forever) and the runner logs which of
    checkpoints and outputs were not saved, before the final log upload so the line reaches the job's log. `/exit`
    carries only the code (and `smoke_stopped`), so the job still shows as finished.
+
+## Restarts on the same machine
+
+Vast pauses an outbid interruptible machine with its disk kept, and restarts the container when the machine comes back
+(also after a self-stop or a host reboot). The runner then starts again with `KRATER_RESUMED=1`, and
+`$KRATER_CHECKPOINT_DIR` still holds what the last run wrote, some of it newer than storage or never uploaded. So
+(`runner/files.go`):
+
+- **The runner records what it uploaded.** After each upload and each restore it writes `checkpoints-uploaded.json` in
+  its state folder (beside `selfstop.json`; a restart keeps it): every file storage holds as this machine uploaded or
+  restored it, with its size and modification time in nanoseconds, written under a `.krater-partial` name and
+  renamed. Not in the checkpoint folder, which the member's code reads (an emptiness check, the newest file to load).
+- **A restore keeps the newer local file.** A file already here is downloaded only when it is exactly as recorded
+  (same size and time) and storage now holds a different size. Anything else here (changed since its upload, or not
+  recorded at all) was written by the command on this machine: it's kept, and goes up with the next upload. Before,
+  a restore downloaded any stored file whose size differed from the local one, so a growing metrics log was rolled
+  back to its stored copy, and counted a same-size file as uploaded, so an overwritten `latest.pt` never went up again.
+  Only one machine runs a job at a time, so storage changes only through the job's own machines; without a record (the
+  first restart after this runner was deployed) the cost is one extra upload.
+- **The first checkpoint upload is at the start, not after a full interval.** It runs beside the command, so a large
+  upload doesn't hold it up, and with nothing new it uploads nothing. Seen on staging (2026-11-19, job 8aeddf70):
+  Vast outbid the machine 3 times in 15 minutes and restarted the container each time; every run's first upload was
+  10 minutes away, none lasted that long, so nothing was ever stored, and when Krater moved the job after 30 minutes
+  paused it started again from step 0 though the old disk held newer checkpoints. Now each restart uploads what the
+  run before it wrote. A checkpoint too big to upload within one run still doesn't get there.
+
+Without a state folder the runner keeps no record and restores by size as before. Outputs, logs and a box's
+workspace keep no record (a workspace restore has its own rule, by the manifest's times;
+see [How /workspace is saved](#how-workspace-is-saved)).
 
 ## Network use
 
@@ -253,7 +283,7 @@ page instead.
 | Variable | Meaning |
 | --- | --- |
 | `KRATER_RESUMED` | `1` when this is a resume (a later attempt, or a restart after a pause): load the latest checkpoint |
-| `KRATER_CHECKPOINT_DIR` | Save checkpoints here. Restored before the command starts |
+| `KRATER_CHECKPOINT_DIR` | Save checkpoints here. Restored before the command starts (a file the last run on this machine changed is kept) |
 | `KRATER_OUTPUT_DIR` | Put results here. Uploaded when the command exits |
 | `KRATER_INPUT_DIR` | The project inputs the job asked for, copied in before the command |
 | `KRATER_JOB_ID`, `KRATER_ATTEMPT` | For logs |

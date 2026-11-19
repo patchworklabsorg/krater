@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -34,6 +35,9 @@ type Syncer struct {
 	storedEntries []manifestEntry
 	manifestRead  bool
 	pruned        bool
+	// StampPath, when set, keeps `uploaded` in a file (outside Dir) so that a restart on the same machine knows which
+	// local files it already uploaded and which the command changed since (see restoreFiles).
+	StampPath string
 	// One push at a time: the timed sync and a save Krater asks for can overlap.
 	mu sync.Mutex
 }
@@ -67,16 +71,37 @@ func (s *Syncer) Restore(ctx context.Context) (int, error) {
 
 // restoreFiles downloads each listed file that isn't here at the same size; with `onlyMissing`, only those not
 // here at all.
+//
+// With StampPath, a file that is here is downloaded only when it is exactly as this machine last uploaded or
+// restored it and storage now holds something else. Any other local file was written by the command on this machine
+// since (the container restarted, as when Vast outbids an interruptible machine and resumes it), and is newer than
+// the stored copy: it is kept, and left out of `uploaded` so that the next Push sends it. Without the stamps, a
+// growing log of a different size was rolled back to the stored copy, and an overwritten checkpoint of the same size
+// counted as uploaded.
 func (s *Syncer) restoreFiles(ctx context.Context, files []RemoteFile, onlyMissing bool) (int, error) {
+	recorded := s.loadStamps()
 	var names []string
 	var targets []pendingDownload
+	kept := 0
 	for _, f := range files {
 		local, err := s.localPath(f.Name)
 		if err != nil {
 			logf("skipping stored file %q: %v", f.Name, err)
 			continue
 		}
-		if info, err := os.Stat(local); err == nil && (onlyMissing || info.Size() == f.Size) {
+		info, statErr := os.Stat(local)
+		if statErr == nil && s.StampPath != "" && !onlyMissing {
+			stamp := stampOf(info)
+			prev, ok := recorded[f.Name]
+			if !ok || prev != stamp {
+				kept++
+				continue
+			}
+			if prev.size == f.Size {
+				s.uploaded[f.Name] = stamp
+				continue
+			}
+		} else if statErr == nil && (onlyMissing || info.Size() == f.Size) {
 			if info.Size() == f.Size {
 				s.uploaded[f.Name] = stampOf(info)
 			}
@@ -85,6 +110,10 @@ func (s *Syncer) restoreFiles(ctx context.Context, files []RemoteFile, onlyMissi
 		names = append(names, f.Name)
 		targets = append(targets, pendingDownload{f.URL, local})
 	}
+	if kept > 0 {
+		logf("kept %d %s files written here since they were last uploaded; they go up next", kept, s.Area)
+	}
+	defer s.saveStamps()
 	restored := 0
 	var firstErr error
 	for i, err := range s.downloadAll(ctx, targets) {
@@ -262,7 +291,55 @@ func (s *Syncer) Push(ctx context.Context) (int, error) {
 		s.uploaded[name] = stamps[name]
 		pushed++
 	}
+	if pushed > 0 {
+		s.saveStamps()
+	}
 	return pushed, firstErr
+}
+
+// loadStamps reads the stamps a Syncer with StampPath saved (on an earlier start on this machine); none without.
+func (s *Syncer) loadStamps() map[string]fileStamp {
+	out := map[string]fileStamp{}
+	if s.StampPath == "" {
+		return out
+	}
+	data, err := os.ReadFile(s.StampPath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			logf("can't read %s: %v", s.StampPath, err)
+		}
+		return out
+	}
+	var saved map[string][2]int64 // name -> [size, modification time in Unix nanoseconds]
+	if err := json.Unmarshal(data, &saved); err != nil {
+		logf("ignoring %s: %v", s.StampPath, err)
+		return out
+	}
+	for name, v := range saved {
+		out[name] = fileStamp{v[0], v[1]}
+	}
+	return out
+}
+
+// saveStamps records `uploaded` at StampPath, by way of a temporary name so a restart never reads half a file.
+// Failing only costs uploading those files again after a restart.
+func (s *Syncer) saveStamps() {
+	if s.StampPath == "" {
+		return
+	}
+	saved := make(map[string][2]int64, len(s.uploaded))
+	for name, st := range s.uploaded {
+		saved[name] = [2]int64{st.size, st.modTime}
+	}
+	data, _ := json.Marshal(saved)
+	tmp := s.StampPath + ".krater-partial"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		logf("can't save %s: %v", s.StampPath, err)
+		return
+	}
+	if err := os.Rename(tmp, s.StampPath); err != nil {
+		logf("can't save %s: %v", s.StampPath, err)
+	}
 }
 
 func (s *Syncer) localPath(name string) (string, error) {

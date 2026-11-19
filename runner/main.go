@@ -59,6 +59,9 @@ type Config struct {
 	SecretsProfile string
 	// Where the job's output log is kept before upload; blank means a krater-logs folder in the temp directory.
 	LogDir string
+	// The runner's own state on the container's disk, which a restart on the same machine keeps (selfstop.json,
+	// net.json, checkpoints-uploaded.json); blank keeps none.
+	StateDir string
 	// The dead-man switch main runs beside the job (selfstop.go); nil in tests that don't need it.
 	SelfStop *SelfStop
 }
@@ -122,6 +125,7 @@ func main() {
 	if dir, err := usableDir(envOr("KRATER_STATE_DIR", "/krater/state"), os.TempDir()); err != nil {
 		logf("nowhere to keep the self-stop settings: %v", err)
 	} else {
+		cfg.StateDir = dir
 		cfg.SelfStop.StatePath = filepath.Join(dir, "selfstop.json")
 		if cfg.SelfStop.Load() {
 			// The container restarted on the same machine: until /start answers, stop as Krater last said.
@@ -212,6 +216,10 @@ func Run(ctx context.Context, cfg Config, apiHTTP, storageHTTP *http.Client, gpu
 		*dir = usable
 	}
 	checkpoints := NewSyncer(api, "checkpoints", cfg.CheckpointDir, storageHTTP)
+	if cfg.StateDir != "" {
+		// Not in the checkpoint folder: the member's code reads it (an emptiness check, the newest file).
+		checkpoints.StampPath = filepath.Join(cfg.StateDir, "checkpoints-uploaded.json")
+	}
 	outputs := NewSyncer(api, "outputs", cfg.OutputDir, storageHTTP)
 	beatEvery := seconds(info.HeartbeatSeconds, 60)
 	whileRestoring(ctx, api, beatEvery, func() {
@@ -362,6 +370,10 @@ func Run(ctx context.Context, cfg Config, apiHTTP, storageHTTP *http.Client, gpu
 	}()
 	go func() {
 		defer wg.Done()
+		// At once, not after a full interval: on a container restarted on the same machine (an outbid machine that
+		// Vast resumed), what the last run wrote and never uploaded was kept (restoreFiles), and a host outbid more
+		// often than the interval would otherwise never upload. With nothing changed, this uploads nothing.
+		pushOnce(loops, checkpoints)
 		syncLoop(loops, checkpoints, seconds(info.CheckpointSyncSeconds, 600))
 	}()
 	if logs != nil {
@@ -519,14 +531,18 @@ func syncLoop(ctx context.Context, s *Syncer, every time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			n, err := s.Push(ctx)
-			switch {
-			case err != nil && ctx.Err() == nil:
-				logf("%s upload failed: %v", s.Area, err)
-			case n > 0 && s.Area != "logs": // a line about the log would change the log, and upload it again
-				logf("uploaded %d %s files", n, s.Area)
-			}
+			pushOnce(ctx, s)
 		}
+	}
+}
+
+func pushOnce(ctx context.Context, s *Syncer) {
+	n, err := s.Push(ctx)
+	switch {
+	case err != nil && ctx.Err() == nil:
+		logf("%s upload failed: %v", s.Area, err)
+	case n > 0 && s.Area != "logs": // a line about the log would change the log, and upload it again
+		logf("uploaded %d %s files", n, s.Area)
 	}
 }
 
