@@ -37,7 +37,9 @@ The runner then:
    outputs (`$KRATER_OUTPUT_DIR`, default `/krater/outputs`) when the command exits, retrying a storage error for up to
    5 minutes (see [Restarts on the same machine](#restarts-on-the-same-machine) for why the first upload is at once);
 6. saves the command's stdout and stderr, with its own lines, to the job's log (`logs/attempt-<n>.log`, up to
-   16 MB; the rest still reaches Vast's container log) and uploads it every minute and at exit;
+   16 MB; the rest still reaches Vast's container log) and uploads it every minute and at exit. After a restart on
+   the same machine (same attempt) it appends to the log already on disk, after a line marking the restart, and what
+   is already there counts toward the 16 MB (`runner/logfile.go`);
 7. reports the exit code. The scheduler destroys the machine on its next pass. If the final upload still failed
    after its retries, the exit is reported anyway (the machine mustn't bill forever) and the runner logs which of
    checkpoints and outputs were not saved, before the final log upload so the line reaches the job's log. `/exit`

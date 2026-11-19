@@ -52,6 +52,23 @@ There are three kinds of review, each under the same approval policy:
 A reason is required to reject, and the team sees it. A rejected proposal or completion reopens as a draft for the
 team to revise; a rejected amendment just leaves the budget as it was.
 
+### Top-up requests
+
+A **top-up request** is the quick way an approved team asks for more budget without changing its application. It is
+an amendment, decided like one: the same approval policy, the same **Approve** form, and on approval the amount you
+enter is the **new total** (see [Approving for less, or more](#approving-for-less-or-more)). Rejecting it changes
+nothing. What's different is what you read:
+
+- The Slack review message says **Top-up request**, with how much more they ask for, the new total that makes, and
+  how much of the budget they had spent when they asked.
+- The project page shows **Top-up request (in review)** above the application: the amount, what it's for, and their
+  progress so far. The application below it is the approved one, unchanged.
+
+Judge it on the progress and the reason: what the first money bought, and what the next will. Teams also post plain
+**progress updates** under **Progress updates** on the project page (and in the project's channel). Each one notes
+the spend and the jobs and boxes run since the previous update, so the history is there when a top-up arrives. A
+project has one amendment or top-up in review at a time.
+
 ### Rules
 
 - **No self-review.** You can't review a project you lead, are on the team of, or are invited to. An approval from a
@@ -79,7 +96,7 @@ what you want to give, and say why in **Why another amount**. The team sees the 
 - The project page, the revision history and the Slack decision say "Approved for $50.00 of the $180.00 asked for"
   (or "Approved for $250.00, more than the $180.00 asked for"). The ledger and Quilt only ever see the amount granted.
 
-When you grant less, the team asks for the rest later with an amendment.
+When you grant less, the team asks for the rest later with a top-up or an amendment.
 
 ## Funding holds
 
