@@ -5,15 +5,17 @@ these same files, so edit them here.
 
 For members:
 
-- [Using Krater](using-krater.md): applying, your team, review, budgets, amendments, the final write-up and the
-  gallery.
+- [Using Krater](using-krater.md): applying, your team, review, budgets, progress updates and top-ups, amendments,
+  the final write-up and the gallery.
+- [Your first job](first-job.md): start here for compute. Copy the [starter](../../examples/starter/), try it
+  free, run it on a GPU for a few cents, get the results.
 - [Running jobs and boxes](compute-jobs.md): preparing an image, submitting a job, choosing a price, results, boxes,
   secrets and the `krater` command.
 - [Run only when compute is cheap](run-when-cheap.md): make a job wait for a GPU price you choose.
 
 For reviewers and admins:
 
-- [Reviewing and running Krater](reviewing-and-admin.md): reviewing, granting less or more, funding holds, overrides,
+- [Reviewing and running Krater](reviewing-and-admin.md): reviewing proposals and top-ups, granting less or more, funding holds, overrides,
   compute settings and alerts.
 - [Record and report an OSPool grant](ospool-grants.md)
 - [Share proposals with OSPool](share-with-ospool.md)

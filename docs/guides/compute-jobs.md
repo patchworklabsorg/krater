@@ -7,24 +7,23 @@ getting your results back, and working interactively in a box. Everything here w
 > **Is compute open?** If your project page says *Launching machines from Krater isn't open yet*, an admin hasn't
 > switched Krater Compute on for this site. Everything below applies once it is.
 
-- [The short version](#the-short-version)
-- [How it works](#how-it-works)
-- [Before your first job](#before-your-first-job)
-- [Preparing your image](#preparing-your-image)
-- [What your command sees](#what-your-command-sees)
-- [Submitting a job on the web](#submitting-a-job-on-the-web)
-- [Choosing a price](#choosing-a-price)
-- [Data transfer](#data-transfer)
-- [Inputs](#inputs)
-- [After you queue it](#after-you-queue-it)
-- [Getting your results](#getting-your-results)
-- [Boxes: working interactively](#boxes-working-interactively)
-- [Secrets](#secrets)
-- [From a terminal: the `krater` command](#from-a-terminal-the-krater-command)
-- [Recipes](#recipes)
-- [Your budget and compute](#your-budget-and-compute)
-- [Troubleshooting](#troubleshooting)
-- [Limits and defaults](#limits-and-defaults)
+**New to Krater compute?** Do [Your first job](first-job.md) first: it runs a ready-made job end to end in about
+half an hour, for a few cents. This guide is the reference for everything after that.
+
+**Basics:** [The short version](#the-short-version) · [How it works](#how-it-works) ·
+[Before your first job](#before-your-first-job) · [Preparing your image](#preparing-your-image) ·
+[What your command sees](#what-your-command-sees)
+
+**Running a job:** [On the web](#submitting-a-job-on-the-web) · [Choosing a price](#choosing-a-price) ·
+[Inputs](#inputs) · [Data transfer](#data-transfer) · [After you queue it](#after-you-queue-it) ·
+[Getting your results](#getting-your-results)
+
+**Working interactively:** [Boxes](#boxes-working-interactively) · [Secrets](#secrets)
+
+**From a terminal:** [The `krater` command](#from-a-terminal-the-krater-command) · [Recipes](#recipes)
+
+**When you need it:** [Your budget and compute](#your-budget-and-compute) · [Troubleshooting](#troubleshooting) ·
+[Limits and defaults](#limits-and-defaults)
 
 ## The short version
 
@@ -32,7 +31,7 @@ getting your results back, and working interactively in a box. Everything here w
 2. Build a container image with your code, push it to a registry the internet can reach (Docker Hub, GitHub
    Container Registry), and make sure it has `sh` and one of curl, wget or Python.
 3. Make your program save checkpoints to `$KRATER_CHECKPOINT_DIR`, resume from them when `$KRATER_RESUMED` is `1`, and
-   write its results to `$KRATER_OUTPUT_DIR`.
+   write its results to `$KRATER_OUTPUT_DIR`. The [starter](first-job.md) does all three: copy it.
 4. On your project's page, open **Compute**, then **New job or box**. Fill in the image, the command, the GPU, and a
    price, and choose **Queue it**.
 5. Watch the job's page. When it finishes, download your results from **Files**, or run `krater download <job>`.
@@ -101,13 +100,15 @@ Things to know:
   (see [Data transfer](#data-transfer)). A 15 GB image pulled on every move adds up.
 - **Non-root images work.** If your image's user can't create `/krater/...`, Krater uses `/tmp/krater/...` instead,
   and the environment variables point there.
-- **Use a CUDA build that matches your framework.** Hosts provide recent NVIDIA drivers. A
-  `pytorch/pytorch:*-cuda12.*-runtime` image is a safe start.
+- **Use a CUDA build that matches your framework.** Hosts provide recent NVIDIA drivers. Newer GPUs (the RTX 50
+  series) need CUDA 12.8 or later, so `pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime` is a safe start: it runs on
+  every GPU Krater rents (Krater's own tests ran it on an RTX 5060 Ti). Older CUDA builds fail on those cards with
+  *no kernel image is available*.
 
-A minimal training image:
+A minimal training image (the [starter](first-job.md) is a complete one to copy):
 
 ```dockerfile
-FROM pytorch/pytorch:2.4.1-cuda12.1-cudnn9-runtime
+FROM pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

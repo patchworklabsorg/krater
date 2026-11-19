@@ -1,0 +1,14 @@
+# `krater submit -f job.toml` queues this job. Options typed on the command line win, so
+#   krater submit -f job.toml --smoke          tries it for a few cents first
+#   krater submit -f job.toml --estimate       says what it may cost and queues nothing
+#   krater run -f job.toml                     runs it on your own computer in Docker, free
+
+project = "your-project"            # your project's name or id
+name = "starter"
+image = "ghcr.io/YOUR-GITHUB-NAME/krater-starter:v1"
+command = "cd /app && python train.py --minutes 20"
+
+gpu = ["RTX 3060", "RTX 4060 Ti", "RTX 3090"]   # any of these; cheap and plenty for this model
+limit = 0.15                         # a limit order: never pay more than $0.15/h for the GPU
+max-runtime = 45                     # minutes; a safety net for a job that hangs
+data-out = 1                         # GB of results and checkpoints, for the cost estimate
