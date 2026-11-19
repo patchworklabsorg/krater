@@ -126,12 +126,12 @@ def post_update(
         except ValidationFailed as exc:
             return _refuse(exc.errors)
         except InvalidState as exc:
-            return _invalid_state_redirect(db_session, request, project_id, exc)
+            return _invalid_state_redirect(db_session, request, project.id, exc)
         update_id = update.id
         return _success_redirect(
             db_session,
             request,
-            project_id,
+            project.id,
             "Update posted. It's on the project page and in the project's Slack channel.",
             after_commit=lambda: slack_post_project_update.defer(update_id=str(update_id)),
         )
@@ -153,7 +153,7 @@ def post_update(
         back = f"{get_settings().base_url.rstrip('/')}/projects/{project.id}/updates/new?topup=1"
         return _refuse({"form": exc.message, "demographics": "1"}, demographics_url=demographics_form_url(back))
     except DemographicsCheckUnavailable as exc:
-        return _invalid_state_redirect(db_session, request, project_id, exc)
+        return _invalid_state_redirect(db_session, request, project.id, exc)
     try:
         update = project_updates.request_topup(
             db_session,
@@ -170,7 +170,7 @@ def post_update(
             errors["amount"] = amount_error
         return _refuse(errors)
     except InvalidState as exc:
-        return _invalid_state_redirect(db_session, request, project_id, exc)
+        return _invalid_state_redirect(db_session, request, project.id, exc)
     # (An amount that didn't parse reached the service as None, which refused it above.)
     update_id, revision_id = update.id, update.revision_id
 
@@ -181,7 +181,7 @@ def post_update(
     return _success_redirect(
         db_session,
         request,
-        project_id,
+        project.id,
         "Top-up requested. Reviewers decide it like an amendment; your current budget keeps working meanwhile.",
         after_commit=_notify,
     )
