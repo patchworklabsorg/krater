@@ -46,6 +46,7 @@ from krater.services.compute_jobs import (
     AUDIT_BOX_DESTROY_SOON,
     AUDIT_BOX_DESTROYED,
     AUDIT_BOX_STOPPED,
+    AUDIT_CHECKPOINT_OVERDUE,
     AUDIT_JOB_ENDED,
     AUDIT_JOB_IDLE,
     AUDIT_TRANSFER_WARNING,
@@ -763,6 +764,7 @@ BOX_NOTICES = (
     AUDIT_TRANSFER_WARNING,
     AUDIT_JOB_ENDED,
     AUDIT_JOB_IDLE,
+    AUDIT_CHECKPOINT_OVERDUE,
 )
 #: How each ended state reads in a job-ended notice.
 _ENDED = {
@@ -812,6 +814,14 @@ def _box_message(session: Session, slack_client: SlackClient, event: AuditEvent,
             f"{payload.get('minutes', 0)} minutes while the machine bills "
             f"${hourly / 1_000_000:.2f}/h. It may not be using the GPU, or it may be stuck. <{link}|Check its log>, "
             "and cancel it if it isn't doing what you expect."
+        )
+    elif event.action == AUDIT_CHECKPOINT_OVERDUE:
+        ago = payload.get("minutes_ago")
+        when = f"for {ago} minutes" if ago is not None else "yet"
+        text = (
+            f":floppy_disk: *Checkpoints not saving*: {who}, *{name}* hasn't stored a checkpoint {when} (it uploads "
+            f"every {payload.get('every_minutes', 10)} minutes). If its machine is outbid and it moves, it starts "
+            f"again from its last stored checkpoint. <{link}|Check the job>: it should save to $KRATER_CHECKPOINT_DIR."
         )
     elif event.action == AUDIT_TRANSFER_WARNING:
         text = (

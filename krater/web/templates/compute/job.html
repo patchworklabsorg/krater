@@ -313,6 +313,24 @@
           </form>
         {% endif %}
       </div>
+      {% if can_cancel and not job.smoke_minutes %}
+        <details class="limits">
+          <summary>Change limits</summary>
+          <form method="post" action="/projects/{{ project.id }}/compute/{{ job.id }}/limits" class="stack">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <label>Stop after (minutes of running)
+              <input type="number" name="max_runtime_minutes" min="1" max="10080" value="{{ job.max_runtime_minutes }}">
+            </label>
+            <label>Stop once it has cost ($, blank for no cap)
+              <input type="text" inputmode="decimal" name="max_spend"
+                     value="{{ '%.2f' | format(job.max_spend_cents / 100) if job.max_spend_cents else '' }}">
+            </label>
+            <p class="muted">A longer runtime holds more of the project's budget while it runs. A box stopped at its
+              spend cap can be resumed once the cap is above what it has cost.</p>
+            <button type="submit" class="button">Save limits</button>
+          </form>
+        </details>
+      {% endif %}
       {% if box and box.ending %}
         <p class="muted">Ending: the box is saving <code>/workspace</code>, then its machine is destroyed (within
           10 minutes). <strong>End now</strong> destroys it at once, without waiting for the save.</p>

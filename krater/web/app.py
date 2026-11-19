@@ -6,6 +6,7 @@ Run with: `uv run uvicorn krater.web.app:create_app --factory --reload`
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -85,6 +86,19 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         procrastinate_app.close()
 
 
+def _cli_version() -> str | None:
+    """The CLI version in this checkout (`cli/src/krater_cli/__init__.py`, copied into the image), if it's there."""
+    path = Path(__file__).resolve().parents[2] / "cli" / "src" / "krater_cli" / "__init__.py"
+    try:
+        found = re.search(r'__version__ = "([0-9.]+)"', path.read_text(encoding="utf-8"))
+    except OSError:
+        return None
+    return found[1] if found else None
+
+
+CLI_LATEST = _cli_version()
+
+
 def create_app() -> FastAPI:
     settings = get_settings()
     configure_logging(settings)
@@ -141,6 +155,14 @@ def create_app() -> FastAPI:
     app.include_router(help_pages.router)
     app.include_router(slack_interactions.router)
     app.include_router(api.router)
+
+    @app.middleware("http")
+    async def _cli_latest(request: Request, call_next):
+        # The newest `krater` this Krater knows, so an older CLI can say it's out of date (`krater_cli.newer`).
+        response = await call_next(request)
+        if request.url.path.startswith("/api/v1/") and CLI_LATEST:
+            response.headers["X-Krater-CLI-Latest"] = CLI_LATEST
+        return response
 
     @app.exception_handler(NotAllowed)
     def _handle_not_allowed(request: Request, exc: NotAllowed):

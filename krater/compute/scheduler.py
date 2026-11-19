@@ -75,6 +75,7 @@ from krater.services import (
     compute_settings,
     compute_watch,
     funding_holds,
+    image_checks,
     job_costs,
     network_watch,
     smoke,
@@ -729,7 +730,13 @@ class Scheduler:
             _finish(
                 job,
                 ComputeJobState.FAILED,
-                "The machine didn't start within 30 minutes. Check that the image exists and can be pulled.",
+                "The machine didn't start within 30 minutes. "
+                + (
+                    f"Its image is {job.image_bytes / 1e9:.1f} GB, which this host may have been too slow to download; "
+                    "a smaller image starts faster."
+                    if (job.image_bytes or 0) > image_checks.BIG_IMAGE_BYTES
+                    else "Check that the image exists and can be pulled."
+                ),
                 now=self.now,
             )
             self._destroy(row, "never started")
@@ -1938,6 +1945,7 @@ class Scheduler:
             transfer_cap_microusd_per_gb=policy.transfer_cap_microusd_per_gb,
             limit=SEARCH_LIMIT,
             max_price_microusd=limit,
+            min_cuda_major=job.min_cuda_major,
         )
         key = json.dumps(query.to_body(), sort_keys=True)
         # The price is part of what's paced: an escalated job (a higher limit) searches at once.

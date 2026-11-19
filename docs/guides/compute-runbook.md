@@ -137,8 +137,10 @@ Each alert says what failed and why: the error's root cause and what it usually 
 | "The host refused the connection" | Vast's address answered but refused: likely Vast |
 | "took too long to answer" (`ReadTimeout`), "Vast answered 5xx" | Vast is slow or erroring |
 
-When two or more alerts open at once and each says the DNS lookup failed or the network is unreachable, Krater posts
-them as one, "this server's network or DNS looks down", listing them.
+When two or more alerts are open at once and each says the DNS lookup failed or the network is unreachable, Krater
+opens one alert for them, `network_outage` ("this server's network or DNS looks down"), listing them, and keeps
+theirs quiet. It's reminded like any other while they stay open, and posts one "cleared" when the last of them
+clears, instead of one per alert.
 
 When Weave's syncs or Quilt and Stash deliveries fail at the same minutes as the scheduler, the server's own network is
 down, not Vast. A blip of a few minutes is harmless: the scheduler doesn't fail a machine for heartbeats it missed
@@ -159,6 +161,10 @@ anyway, after one more heartbeat timeout. Live runners stop their own machines a
 All of this is only where `KRATER_EDGE_PING_EXPECTED` is on: turn it on once alastor's timer reaches the deploy.
 Off, pings are recorded but ignored. The endpoint is open, so a setting, not the first ping that arrives, turns
 the check on; a request from anyone else can't start holds or this alert. On and no ping yet counts as stale.
+
+alastor posts to Slack itself after 3 minutes without an answer from a Krater URL, hourly while it lasts, and
+once when it's back (infra#112, on once `secrets/krater-edge-alert.age` holds a webhook URL): that's the alert
+that still arrives when Krater, and so its own alerts, are down.
 
 To check: `systemctl status krater-edge-ping` and its journal on alastor; `curl -fsS
 https://krater.patchworklabs.org/healthz/edge` from anywhere answers `{"status":"ok"}` (harmless: it can only make

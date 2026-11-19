@@ -189,7 +189,24 @@ Ctrl-C stops following and leaves the job running. `krater logs` (without `--att
 the logs API and says when that attempt has no output yet and an earlier one's is shown.
 
 `krater compare <job>...` reads each job's `outputs/metrics.json` (a JSON object; nested objects become dotted keys
-such as `eval.acc`) and prints one column per job. `--json` prints them as read. Exit code 1 when none had metrics.
+such as `eval.acc`) and prints one column per job, under rows for its state, cost (`spend_cents`), runtime
+(started to ended, or now) and GPU. `--sweep NAME --project P` adds every job in the project named `NAME-<index>`,
+oldest first. `--json` prints them as read. Exit code 1 when none had metrics.
+
+`krater limits <job> --max-runtime MINUTES --max-spend DOLLARS` posts to `POST /api/v1/jobs/{id}/limits` (either
+or both; `--max-spend none` removes the cap) and prints what changed. The server refuses a cap at or below what the
+job has cost, a runtime outside 1 to 10,080 minutes, and a smoke test's runtime (`compute_jobs.change_limits`).
+
+`submit` and `--estimate` print the image warnings Krater returns (`warnings`, `docs/compute/images.md`).
+`--code` adds its own when the folder builds CUDA code (`code.builds_cuda`: `load_inline`, `cpp_extension`, `.cu`
+files, or flash-attn, deepspeed and friends in requirements.txt) and the image isn't a `-devel` one. Its command
+starts with a check that `python` exists (exit 127 with a message otherwise) and installs requirements with
+`PIP_BREAK_SYSTEM_PACKAGES=1`, which a venv or conda Python ignores.
+
+Every API answer carries `X-Krater-CLI-Latest`, the version in `cli/src/krater_cli/__init__.py` of the deployed
+code. When it's newer than the CLI's own, `krater_cli.newer` prints how to update, to stderr and at most once a day
+(`update-notice.json` in the config folder). `KRATER_NO_UPDATE_NOTICE=1` turns it off. Bump the version in
+`__init__.py`, `pyproject.toml` and `uv.lock` together when the CLI changes.
 
 `--max-spend DOLLARS` (job files: `max-spend = 25`) sends `max_spend_cents`: the scheduler fails the job (or stops
 the box) once its spend reaches it (`docs/compute/scheduler.md`).

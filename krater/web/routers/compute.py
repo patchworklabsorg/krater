@@ -7,6 +7,7 @@ jobs and requests, and the worker's scheduler acts on them.
 from __future__ import annotations
 
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Annotated
@@ -130,13 +131,14 @@ def _checkpoint_freshness(files: list[compute_files.JobFile], job: ComputeJob, *
     nothing stored, or the newest stored more than twice the interval ago. None for a box or a job not running."""
     if job.kind is not ComputeJobKind.JOB or job.state is not ComputeJobState.RUNNING:
         return None
-    every = (job.checkpoint_upload_minutes or compute_jobs.DEFAULT_CHECKPOINT_UPLOAD_MINUTES) * 60
-    times = [f.modified for f in files if f.area == "checkpoints" and f.modified is not None]
-    newest = max(times) if times else None
-    since = newest or job.started_at
-    overdue = since is not None and (now - since).total_seconds() > 2 * every + (0 if newest else 300)
-    minutes = int((now - newest).total_seconds() // 60) if newest else None
-    return {"newest": newest, "minutes_ago": minutes, "overdue": overdue}
+    live = [row for row in getattr(job, "instances", None) or () if getattr(row, "is_live", False)]
+    running_since = live[-1].entered_running_at if live else None
+    return compute_files.checkpoint_freshness(
+        files,
+        every_minutes=job.checkpoint_upload_minutes or compute_jobs.DEFAULT_CHECKPOINT_UPLOAD_MINUTES,
+        running_since=running_since or job.started_at,
+        now=now,
+    )
 
 
 def _spend_cap(raw: str) -> int:
@@ -289,6 +291,7 @@ def _form_page(
     quote: dict | None = None,
     live_table: dict | None = None,
     starter: bool = False,
+    image_warnings: list[str] | None = None,
 ):
     settings = get_settings()
     policy = compute_settings.effective_policy(db_session, project)
@@ -328,6 +331,7 @@ def _form_page(
             "live_table": live_table,
             "source": source,
             "starter": starter,
+            "image_warnings": image_warnings or [],
             "escalations": ESCALATION_LABELS,
             "errors": errors or {},
             "posted": posted or {},
@@ -491,7 +495,10 @@ async def submit_job(
         store = get_compute_store() if spec.inputs else None
         if posted.get("action") == "estimate":
             # Only the price: nothing is queued, and the form comes back as it was.
-            compute_jobs.validate_spec(spec, cap_cents=hourly_cap_cents(project, get_settings()), registry=registry)
+            report = compute_jobs.validate_spec(
+                spec, cap_cents=hourly_cap_cents(project, get_settings()), registry=registry, session=db_session
+            )
+            spec = replace(spec, min_cuda_major=report.min_cuda_major)
             policy = compute_settings.effective_policy(db_session, project)
             estimate = job_costs.estimate(
                 db_session,
@@ -511,6 +518,7 @@ async def submit_job(
                 estimate=estimate,
                 quote=quote,
                 live_table=live_table,
+                image_warnings=report.warnings,
             )
         job = compute_jobs.submit_job(
             db_session,
@@ -856,6 +864,44 @@ _ACTIONS = {
     "resume": (compute_jobs.resume_box, "Resuming on the same machine."),
     "move": (compute_jobs.move_box, "Starting it elsewhere from its last saved workspace."),
 }
+
+
+@router.post("/projects/{project_id}/compute/{job_id}/limits", dependencies=[Depends(verify_csrf_token)])
+async def job_limits(
+    request: Request,
+    project_id: uuid.UUID,
+    job_id: uuid.UUID,
+    db_session: Annotated[Session, Depends(get_session)],
+    actor: Annotated[Actor, Depends(fresh_actor)],
+):
+    """The job page's "Change limits": its max runtime and spend cap (blank: no cap)."""
+    _require_compute()
+    project = _project(db_session, actor, project_id)
+    job = _job(db_session, project, job_id)
+    form = await request.form()
+    try:
+        raw_runtime = str(form.get("max_runtime_minutes", "")).strip()
+        try:
+            runtime = int(raw_runtime) if raw_runtime else None
+        except ValueError:
+            raise ValidationFailed({"max_runtime_minutes": "Give the max runtime in whole minutes."}) from None
+        raw_cap = str(form.get("max_spend", "")).strip()
+        changed = compute_jobs.change_limits(
+            db_session,
+            actor,
+            job=job,
+            now=datetime.now(UTC),
+            max_runtime_minutes=runtime,
+            max_spend_cents=_spend_cap(raw_cap) if raw_cap else None,
+        )
+    except (ValidationFailed, InvalidState) as exc:
+        db_session.rollback()
+        text = "; ".join(exc.errors.values()) if isinstance(exc, ValidationFailed) else exc.message
+        flash(request, text, "error")
+    else:
+        db_session.commit()
+        flash(request, ("Changed: " + "; ".join(changed) + ".") if changed else "Nothing to change.", "success")
+    return RedirectResponse(f"/projects/{project.id}/compute/{job.id}", status_code=303)
 
 
 @router.post("/projects/{project_id}/compute/{job_id}/{action}", dependencies=[Depends(verify_csrf_token)])

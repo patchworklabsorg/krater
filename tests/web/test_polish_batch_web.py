@@ -142,3 +142,67 @@ def test_checkpoint_freshness() -> None:
     assert _checkpoint_freshness([], _running(started_at=NOW - timedelta(minutes=14)), now=NOW)["overdue"] is False
     assert _checkpoint_freshness([], _running(), now=NOW)["overdue"] is True
     assert _checkpoint_freshness([], SimpleNamespace(kind=ComputeJobKind.BOX, state=None), now=NOW) is None
+
+
+def test_the_api_changes_a_queued_jobs_limits(client: TestClient, project) -> None:
+    queued = client.post(f"/api/v1/projects/{project.id}/jobs", json=BODY, headers=_as(MEMBER_SUB)).json()
+
+    changed = client.post(
+        f"/api/v1/jobs/{queued['id']}/limits",
+        json={"max_runtime_minutes": 300, "max_spend_cents": 900},
+        headers=_as(MEMBER_SUB),
+    )
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["changed"] == ["max runtime 240 → 300 minutes", "spend cap none → $9.00"]
+
+    removed = client.post(
+        f"/api/v1/jobs/{queued['id']}/limits", json={"max_spend_cents": None}, headers=_as(MEMBER_SUB)
+    )
+    assert removed.json()["changed"] == ["spend cap $9.00 → none"] and removed.json()["max_spend_cents"] is None
+
+    bad = client.post(f"/api/v1/jobs/{queued['id']}/limits", json={"max_runtime_minutes": 0}, headers=_as(MEMBER_SUB))
+    assert bad.status_code == 422
+
+
+def test_a_reviewer_cant_change_a_jobs_limits(client: TestClient, project) -> None:
+    queued = client.post(f"/api/v1/projects/{project.id}/jobs", json=BODY, headers=_as(MEMBER_SUB)).json()
+    response = client.post(
+        f"/api/v1/jobs/{queued['id']}/limits", json={"max_runtime_minutes": 300}, headers=_as(REVIEWER_SUB)
+    )
+    assert response.status_code == 403
+
+
+def test_the_job_page_changes_its_limits(client: TestClient, login_as, project, db_session) -> None:
+    queued = client.post(f"/api/v1/projects/{project.id}/jobs", json=BODY, headers=_as(MEMBER_SUB)).json()
+    login_as(MEMBER_SUB)
+    page = client.get(f"/projects/{project.id}/compute/{queued['id']}")
+    assert "Change limits" in page.text
+
+    response = client.post(
+        f"/projects/{project.id}/compute/{queued['id']}/limits",
+        data={"max_runtime_minutes": "360", "max_spend": "15", "csrf_token": get_csrf_token(page.text)},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    job = db_session.get(ComputeJob, queued["id"])
+    db_session.refresh(job)
+    assert job.max_runtime_minutes == 360 and job.max_spend_cents == 1500
+
+
+def test_submit_says_what_the_image_checks_warn_of(client: TestClient, project, db_session) -> None:
+    body = {**BODY, "image": "pytorch/pytorch:2.4.0-cuda12.4-cudnn9-runtime", "gpu_names": ["RTX 5090"]}
+    estimate = client.post(f"/api/v1/projects/{project.id}/jobs/estimate", json=body, headers=_as(MEMBER_SUB))
+    assert any("CUDA 12.8" in w for w in estimate.json()["warnings"])
+
+    queued = client.post(f"/api/v1/projects/{project.id}/jobs", json=body, headers=_as(MEMBER_SUB))
+    assert queued.status_code == 201, queued.text
+    assert any("CUDA 12.8" in w for w in queued.json()["warnings"])
+    job = db_session.get(ComputeJob, queued.json()["id"])
+    assert job.min_cuda_major == 12
+
+
+def test_api_answers_name_the_newest_cli(client: TestClient, project) -> None:
+    from krater.web.app import CLI_LATEST
+
+    response = client.get("/api/v1/me", headers=_as(MEMBER_SUB))
+    assert CLI_LATEST and response.headers["X-Krater-CLI-Latest"] == CLI_LATEST

@@ -75,6 +75,8 @@ class Shape:
     reliability_floor: float
     transfer_cap_microusd_per_gb: int | None
     bid_margin_percent: int
+    # The image's CUDA major version (`krater.services.image_checks`), so a check sees the machines a job would.
+    min_cuda_major: int | None = None
 
     @property
     def key(self) -> str:
@@ -97,6 +99,7 @@ def shape_of(spec, policy: ComputePolicy) -> Shape:
         reliability_floor=policy.reliability_floor,
         transfer_cap_microusd_per_gb=policy.transfer_cap_microusd_per_gb,
         bid_margin_percent=policy.bid_margin_percent,
+        min_cuda_major=getattr(spec, "min_cuda_major", None),
     )
 
 
@@ -174,6 +177,7 @@ def check(session: Session, client: ComputeProvider, key: str, *, now: datetime)
         transfer_cap_microusd_per_gb=shape.transfer_cap_microusd_per_gb,
         limit=QUOTE_ROWS,
         order_by_price=True,
+        min_cuda_major=shape.min_cuda_major,
     )
     count_searches(session, PURPOSE_QUOTE, 1, now=now)
     try:

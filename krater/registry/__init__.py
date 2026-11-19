@@ -67,6 +67,10 @@ class ImageUnavailable(RegistryError):
     reach, rate limits, odd answers) stays a plain RegistryError: it says nothing about the image."""
 
 
+class WrongPlatform(ImageUnavailable):
+    """The image has no linux/amd64 version, so no machine Vast rents could run it."""
+
+
 class UnsafeHostError(RegistryError):
     """A request would go to a host Krater must not reach (not HTTPS, or a private, loopback or link-local address)."""
 
@@ -350,7 +354,15 @@ class LiveRegistry:
                 None,
             )
             if wanted is None:
-                raise RegistryError("This image has no linux/amd64 version, which is what Vast's machines run.")
+                found = sorted(
+                    f"{each.get('platform', {}).get('os')}/{each.get('platform', {}).get('architecture')}"
+                    for each in manifest.get("manifests", [])
+                    if each.get("platform", {}).get("os") not in (None, "unknown")
+                )
+                raise WrongPlatform(
+                    f"This image is built only for {', '.join(found) or 'other platforms'}, and Vast's machines are "
+                    "linux/amd64. Build it with docker buildx build --platform linux/amd64, then push it again."
+                )
             platform_digest, manifest, _ = self._manifest(ref, wanted["digest"])
         return digest, platform_digest, manifest
 

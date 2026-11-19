@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 import procrastinate
 
 from krater import net_errors, providers
+from krater.compute import checkpoint_watch
 from krater.compute import launch as compute_launch
 from krater.compute import reconcile as compute_reconciler
 from krater.compute import scheduler as compute_scheduler
@@ -381,6 +382,27 @@ def compute_storage_cleanup(timestamp: int) -> None:
         logger.exception("krater.compute_storage_cleanup failed")
         session.rollback()
         _report_failure("compute_storage_cleanup", _failure(exc))
+    finally:
+        session.close()
+
+
+@app.periodic(cron="*/15 * * * *")
+@app.task(name="compute_checkpoint_watch")
+def compute_checkpoint_watch(timestamp: int) -> None:
+    """Every 15 minutes, with compute on: tell a running job's team once per attempt when its checkpoints have
+    stopped reaching storage (`krater.compute.checkpoint_watch`)."""
+    if providers.active(get_settings()) is None:
+        return
+    now = datetime.fromtimestamp(timestamp, tz=UTC)
+    session = get_sessionmaker()()
+    try:
+        warned = checkpoint_watch.warn_overdue(session, get_compute_store(), now=now)
+        session.commit()
+        if warned:
+            logger.info("krater compute_checkpoint_watch: warned about %d jobs", warned)
+    except Exception:
+        logger.exception("krater.compute_checkpoint_watch failed")
+        session.rollback()
     finally:
         session.close()
 

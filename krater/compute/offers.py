@@ -114,6 +114,7 @@ def shape_query(
     limit: int,
     max_price_microusd: int | None = None,
     order_by_price: bool = False,
+    min_cuda_major: int | None = None,
 ) -> OfferQuery:
     """The search for a job's shape: what the scheduler rents from, and what a live price check asks Vast for, so the
     two can't drift. A box needs a direct port for SSH."""
@@ -129,6 +130,8 @@ def shape_query(
         max_price_microusd=max_price_microusd,
         max_transfer_microusd_per_gb=transfer_cap_microusd_per_gb,
         order_by_price=order_by_price,
+        # Only hosts whose driver supports the image's CUDA major version (`krater.services.image_checks`).
+        min_cuda=float(min_cuda_major) if min_cuda_major else None,
     )
 
 

@@ -313,6 +313,11 @@ func Run(ctx context.Context, cfg Config, apiHTTP, storageHTTP *http.Client, gpu
 	if info.SmokeSeconds > 0 {
 		cmd.Env = append(cmd.Env, "KRATER_SMOKE=1")
 	}
+	// Python buffers stdout when it isn't a terminal, so a job's log would stay empty for minutes and then arrive in
+	// a block. Unbuffered unless the job or image says otherwise.
+	if _, set := os.LookupEnv("PYTHONUNBUFFERED"); !set && !hasEnv(secrets, "PYTHONUNBUFFERED") {
+		cmd.Env = append(cmd.Env, "PYTHONUNBUFFERED=1")
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		_ = api.Exit(ctx, 127)
@@ -590,4 +595,14 @@ func restoreInputs(ctx context.Context, api *API, cfg *Config, storage *http.Cli
 	logf("copying the job's inputs failed: %v", err)
 	_ = api.Exit(ctx, SetupFailed)
 	return SetupFailed, fmt.Errorf("copying inputs: %w", err)
+}
+
+// hasEnv says whether `env` (NAME=value entries) sets `name`.
+func hasEnv(env []string, name string) bool {
+	for _, entry := range env {
+		if strings.HasPrefix(entry, name+"=") {
+			return true
+		}
+	}
+	return false
 }

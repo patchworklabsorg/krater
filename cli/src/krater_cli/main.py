@@ -334,8 +334,20 @@ def _parser() -> argparse.ArgumentParser:
     wait.add_argument("job", help=job_help)
     wait.add_argument("--timeout", type=_positive, help="give up after this many minutes (exit code 124)")
     wait.add_argument("--interval", type=_positive, default=5, help="seconds between checks (default 5)")
-    compare = commands.add_parser("compare", help="jobs' outputs/metrics.json side by side")
-    compare.add_argument("jobs", nargs="+", metavar="job", help=job_help)
+    compare = commands.add_parser("compare", help="jobs' outputs/metrics.json side by side, with cost and runtime")
+    compare.add_argument("jobs", nargs="*", metavar="job", help=job_help)
+    compare.add_argument(
+        "--sweep",
+        metavar="NAME",
+        help="every job of a sweep (or --count): the jobs named NAME-0, NAME-1, ... (with --project)",
+    )
+    compare.add_argument("--project", help="the project the sweep is in")
+    limits = commands.add_parser("limits", help="change a queued or running job's max runtime or spend cap")
+    limits.add_argument("job", help=job_help)
+    limits.add_argument("--max-runtime", type=int, metavar="MINUTES", help="minutes of running (1 to 10080)")
+    limits.add_argument(
+        "--max-spend", metavar="DOLLARS", help="stop it once it has cost this much; `none` removes the cap"
+    )
     download = commands.add_parser("download", help="download a job's outputs, checkpoints and logs")
     download.add_argument("job", help=job_help)
     download.add_argument("folder", nargs="?", help="the folder to put them in (default: here)")
@@ -833,6 +845,13 @@ def _apply_code(args: argparse.Namespace, from_command_line: str | None) -> code
         folder = os.path.join(os.path.dirname(os.path.abspath(args.file)), folder)
     found = code_mod.collect(folder)
     args.image = args.image or code_mod.DEFAULT_IMAGE
+    builds = found.builds_cuda()
+    if builds and "devel" not in args.image.rsplit("/", 1)[-1]:
+        args.code_warning = (
+            f"This code builds CUDA code on the machine ({', '.join(builds[:3])}), which needs the CUDA toolkit, and "
+            f"{args.image} looks like it has none. Use a -devel image (such as "
+            f"{code_mod.DEFAULT_IMAGE.replace('-runtime', '-devel')}) with --image, or a prebuilt wheel."
+        )
     args.job_command = found.command(args.job_command)
     args.input = [*args.input, found.input_name]
     return found
@@ -1176,6 +1195,8 @@ def run(
             runs = runs[:1]
             args.smoke_of_sweep = True
         project_id = resolve.resolve_project(krater, args.project)
+        if getattr(args, "code_warning", None):
+            say(args.code_warning)
         if found is not None:
             _upload_code(krater, http, project_id, found, say)
         path = f"/projects/{project_id}/jobs"
@@ -1318,7 +1339,47 @@ def run(
     elif args.command == "download":
         return _download(krater, http, resolve.resolve_job(krater, args.job), args, say)
     elif args.command == "compare":
-        return _compare(krater, http, args.jobs, say, out)
+        refs = list(args.jobs)
+        if args.sweep:
+            if not args.project:
+                say("Give --project with --sweep: the project the sweep is in.")
+                return 2
+            project_id = resolve.resolve_project(krater, args.project)
+            listed = krater.get(f"/projects/{project_id}/jobs")["jobs"]
+            pattern = re.compile(rf"^{re.escape(args.sweep)}-\d+$")
+            found = [j["id"] for j in reversed(listed) if pattern.match(str(j.get("name", "")))]
+            if not found:
+                say(f"No jobs named {args.sweep}-0, {args.sweep}-1, ... in that project.")
+                return 1
+            refs += found
+        if not refs:
+            say("Give the jobs to compare, or --sweep NAME --project PROJECT.")
+            return 2
+        return _compare(krater, http, refs, say, out)
+    elif args.command == "limits":
+        if args.max_runtime is None and args.max_spend is None:
+            say("Give --max-runtime, --max-spend, or both.")
+            return 2
+        body: dict = {}
+        if args.max_runtime is not None:
+            body["max_runtime_minutes"] = args.max_runtime
+        if args.max_spend is not None:
+            if args.max_spend.strip().lower() in ("none", "off", "0"):
+                body["max_spend_cents"] = None
+            else:
+                try:
+                    body["max_spend_cents"] = _spend(args.max_spend)
+                except argparse.ArgumentTypeError as exc:
+                    say(str(exc))
+                    return 2
+        job_id = resolve.resolve_job(krater, args.job)
+        changed = krater.post(f"/jobs/{job_id}/limits", body)
+        out(
+            changed,
+            lambda: say(
+                ("Changed: " + "; ".join(changed["changed"]) + ".") if changed.get("changed") else "Nothing to change."
+            ),
+        )
     elif args.command in ("cancel", "end", "stop", "resume", "move"):
         job_id = resolve.resolve_job(krater, args.job)
         try:
@@ -1860,6 +1921,7 @@ def _follow_then_download(
 def _compare(krater: Krater, http: httpx.Client, refs: list[str], say, out) -> int:
     """`krater compare`: each job's outputs/metrics.json (a JSON object), one column per job."""
     columns: list[tuple[str, dict]] = []
+    facts: list[dict] = []
     for ref in refs:
         job_id = resolve.resolve_job(krater, ref)
         job = krater.get(f"/jobs/{job_id}")
@@ -1881,18 +1943,49 @@ def _compare(krater: Krater, http: httpx.Client, refs: list[str], say, out) -> i
                 else:
                     say(f"{label}: its metrics.json isn't a JSON object.")
         columns.append((label, metrics))
+        facts.append(_job_facts(job))
     keys = sorted({key for _, metrics in columns for key in metrics})
 
     def render() -> None:
-        if not keys:
-            say("No metrics to compare. A job writes them to $KRATER_OUTPUT_DIR/metrics.json, as a JSON object.")
-            return
         rows = [["", *(label for label, _ in columns)]]
+        rows += [[name, *(f[name] for f in facts)] for name in ("state", "cost", "runtime", "gpu")]
         rows += [[key, *(_cell(metrics.get(key)) for _, metrics in columns)] for key in keys]
         _table(rows, say)
+        if not keys:
+            say("No metrics to compare. A job writes them to $KRATER_OUTPUT_DIR/metrics.json, as a JSON object.")
 
-    out({"jobs": [{"job": label, "metrics": metrics} for label, metrics in columns]}, render)
+    out(
+        {
+            "jobs": [
+                {"job": label, **fact, "metrics": metrics}
+                for (label, metrics), fact in zip(columns, facts, strict=True)
+            ]
+        },
+        render,
+    )
     return 0 if keys else 1
+
+
+def _job_facts(job: dict) -> dict:
+    """What `compare` shows above the metrics: the job's state, what it cost, how long it ran, and its GPU."""
+    started, ended = job.get("started_at"), job.get("ended_at")
+    runtime = "-"
+    if started:
+        from datetime import UTC, datetime
+
+        begin = datetime.fromisoformat(started)
+        finish = datetime.fromisoformat(ended) if ended else datetime.now(UTC)
+        minutes = max(0, int((finish - begin).total_seconds() // 60))
+        runtime = f"{minutes // 60}h{minutes % 60:02d}m" if minutes >= 60 else f"{minutes}m"
+    machine = job.get("machine") or {}
+    gpu = machine.get("gpu") or "/".join(job.get("gpu_names") or []) or "-"
+    cents = job.get("spend_cents")
+    return {
+        "state": job.get("state", "-"),
+        "cost": "-" if cents is None else f"${cents / 100:,.2f}",
+        "runtime": runtime,
+        "gpu": gpu,
+    }
 
 
 def _flat(data: dict, prefix: str = "") -> dict:

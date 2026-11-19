@@ -32,6 +32,7 @@ from krater.models.enums import (
 from krater.models.gpu_price import GpuPrice
 from krater.models.gpu_price_sample import GpuPriceSample
 from krater.models.held_grant import HeldGrant
+from krater.models.image_fact import ImageFact
 from krater.models.image_inspection import ImageInspection
 from krater.models.live_price import LivePrice, LivePriceUsage, LiveQuote
 from krater.models.ops_alert import EdgePing, OpsAlert, OpsAlertFailure, WorkerHeartbeat
@@ -74,6 +75,7 @@ __all__ = [
     "GpuPrice",
     "GpuPriceSample",
     "HeldGrant",
+    "ImageFact",
     "ImageInspection",
     "EdgePing",
     "OpsAlert",

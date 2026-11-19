@@ -19,6 +19,33 @@ The form, the API's submit and its estimate (so the CLI too) check the image bef
   so an expired anonymous token is replaced, not taken for a refusal. The shell submitter (`krater.compute.submit`)
   doesn't ask.
 
+- **The platform.** An image with no `linux/amd64` variant (an arm64 build from a Mac) is refused
+  (`registry.WrongPlatform`), naming the platforms it has and the `docker buildx --platform` fix.
+- **The size.** An image whose compressed size is larger than the job's disk is refused (on `disk_gb`).
+
+Then `krater.services.image_checks` reads the image's config (env, user, history) and returns warnings, which the
+form, the submit and estimate answers (`warnings`) and the CLI show, and which are kept on the job as
+`image_warning` events. None of them refuses the job:
+
+- an RTX 50-series (Blackwell) GPU among the job's GPUs, with an image older than CUDA 12.8;
+- an image that may not fit unpacked (`UNPACKED_FACTOR` 2.5 times its compressed size) in the disk;
+- an image over 10 GB (`BIG_IMAGE_BYTES`): slow starts. The scheduler's "didn't start in time" message names the
+  size too;
+- `pip install` in the command with a system Python marked externally managed (PEP 668: Debian/Ubuntu's apt Python,
+  no conda or venv on `PATH`) and no `PIP_BREAK_SYSTEM_PACKAGES`;
+- a command that builds CUDA code (flash-attn, `nvcc`, `load_inline` ...) on an image without the toolkit
+  (`-runtime`, or no `nvcc` and no `-devel`);
+- `python` in the command and no sign of Python in the image;
+- `apt-get` in the command on an image whose `USER` isn't root.
+
+The CUDA version comes from the image's `CUDA_VERSION` variable, else its tag (`cuda12.8`, `cu128`). Its major
+version is stored on the job (`min_cuda_major`) and the scheduler and the live quote only take offers whose
+`cuda_max_good` is at least that (CUDA minor-version compatibility lets a 12.x image run on any 12.x driver).
+
+An inspection costs a few registry calls and Docker Hub counts manifest GETs against its pull limit, so the result
+is kept by digest in `image_facts`: the next job on the same digest asks only for the digest (a HEAD, which Docker
+Hub doesn't count). A registry that can't say still gets the tag-based checks.
+
 The form starts with `compute_jobs.DEFAULT_IMAGE` (`pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime`), a public image
 with a shell and Python, so the example on the form works as it is.
 
