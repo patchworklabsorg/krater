@@ -56,6 +56,8 @@ class Fake:
         self.secrets: dict[str, str] = {}
         # An older Krater ignores `smoke_minutes` and doesn't send it back.
         self.knows_smoke = True
+        # An older Krater ignores `checkpoint_upload_minutes` and doesn't send it back.
+        self.knows_checkpoint_upload = True
         self.jobs_422 = False
         # Krater asks before queuing a job whose data transfer could cost a lot (409 with `confirm`).
         self.transfer_confirm = False
@@ -223,6 +225,8 @@ class Fake:
             }
             if self.knows_smoke:
                 job["smoke_minutes"] = body.get("smoke_minutes")
+            if self.knows_checkpoint_upload:
+                job["checkpoint_upload_minutes"] = body.get("checkpoint_upload_minutes")
             self.jobs.append(job)
             return httpx.Response(201, json=job)
         acted = re.fullmatch(r"/jobs/([0-9a-f-]{36})/(cancel|end|stop|resume|move)", path)
@@ -1669,6 +1673,61 @@ def test_submit_sends_the_data_estimate(http, fake) -> None:
     body = fake.jobs[0]["body"]
     assert (body["data_in_gb"], body["data_out_gb"]) == (400, 100)
     assert "confirm_transfer_cost" not in body
+
+
+def test_submit_sends_the_checkpoint_upload_interval(http, fake) -> None:
+    _login(http, [])
+    said: list[str] = []
+
+    run([*SUBMIT_4090, "--checkpoint-upload", "2"], http=http, say=said.append)
+
+    assert fake.jobs[0]["body"]["checkpoint_upload_minutes"] == 2
+    assert not any("--checkpoint-upload" in s for s in said)
+
+
+def test_submit_without_an_interval_sends_none(http, fake) -> None:
+    _login(http, [])
+    run(SUBMIT_4090, http=http, say=lambda _: None)
+    assert "checkpoint_upload_minutes" not in fake.jobs[0]["body"]
+
+
+def test_submit_says_when_krater_ignores_the_interval(http, fake) -> None:
+    _login(http, [])
+    fake.knows_checkpoint_upload = False
+    said: list[str] = []
+
+    assert run([*SUBMIT_4090, "--checkpoint-upload", "2"], http=http, say=said.append) == 0
+
+    assert "This Krater doesn't take --checkpoint-upload yet: the job uploads its checkpoints every 10 minutes." in said
+
+
+def test_a_job_file_sets_the_interval(http, fake, tmp_path) -> None:
+    _login(http, [])
+    path = _job_file(
+        tmp_path,
+        'project = "Vision Lab"\nname = "t"\nimage = "x"\ncommand = "go"\nlimit = 0.4\ncheckpoint_upload = 3\n',
+    )
+    run(["submit", "-f", path], http=http, say=lambda _: None)
+    assert fake.jobs[0]["body"]["checkpoint_upload_minutes"] == 3
+
+
+@pytest.mark.parametrize(
+    ("own", "effective", "line"),
+    [
+        (None, 10, "  checkpoints: changed files upload every 10 minutes (the default)"),
+        (2, 2, "  checkpoints: changed files upload every 2 minutes"),
+        (None, None, None),  # an older Krater says nothing about it
+    ],
+)
+def test_show_says_how_often_checkpoints_upload(http, fake, own, effective, line) -> None:
+    _login(http, [])
+    _show_ready(fake, JOB)
+    fake.details[JOB].update(kind="job", checkpoint_upload_minutes=own, checkpoint_upload_minutes_effective=effective)
+    said: list[str] = []
+
+    run(["show", JOB], http=http, say=said.append)
+
+    assert [s for s in said if s.startswith("  checkpoints:")] == ([line] if line else [])
 
 
 def test_submit_asks_before_a_costly_transfer_and_sends_again_on_yes(http, fake) -> None:

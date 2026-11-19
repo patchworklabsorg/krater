@@ -150,6 +150,13 @@ def _add_job_options(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--data-out", type=int, help="GB the job moves out of its machine (checkpoints, outputs)")
     parser.add_argument(
+        "--checkpoint-upload",
+        type=int,
+        metavar="MINUTES",
+        help="upload the changed files in $KRATER_CHECKPOINT_DIR every this many minutes (1 to 60; default 10). "
+        "More often loses less work when the job moves machines; each upload is billed as data out",
+    )
+    parser.add_argument(
         "--input",
         action="append",
         default=[],
@@ -663,6 +670,9 @@ def _queue(
                 "started. Try `krater run` to test it on this computer.",
                 status=1,
             )
+        if body.get("checkpoint_upload_minutes") and "checkpoint_upload_minutes" not in job:
+            # A Krater from before per-job intervals ignores the field: the job runs, uploading on the default timer.
+            say("This Krater doesn't take --checkpoint-upload yet: the job uploads its checkpoints every 10 minutes.")
         queued.append((job, variables))
 
     if len(queued) == 1:
@@ -751,6 +761,8 @@ def _job_body(args: argparse.Namespace, prices: dict) -> dict:
         body["data_in_gb"] = args.data_in
     if args.data_out is not None:
         body["data_out_gb"] = args.data_out
+    if getattr(args, "checkpoint_upload", None) is not None:
+        body["checkpoint_upload_minutes"] = args.checkpoint_upload
     if args.input:
         body["inputs"] = args.input
     return body
@@ -1075,6 +1087,12 @@ def run(
                         if job["state"] == "succeeded"
                         else ""
                     )
+                )
+            if job["kind"] == "job" and job.get("checkpoint_upload_minutes_effective"):
+                every = job["checkpoint_upload_minutes_effective"]
+                say(
+                    f"  checkpoints: changed files upload every {local.minutes(every)}"
+                    + ("" if job.get("checkpoint_upload_minutes") else " (the default)")
                 )
             say(
                 f"  spent ${job['spend_cents'] / 100:.2f}"

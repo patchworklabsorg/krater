@@ -22,6 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
+from krater.compute import runner_api
 from krater.config import get_settings
 from krater.db import get_session
 from krater.models import ComputeEscalation, ComputeEvent, ComputeJob, ComputeJobKind, ComputeOutbid, Project, User
@@ -173,6 +174,9 @@ def _job_json(job: ComputeJob, *, detail: bool = False, session: Session | None 
         "spend_cents": job.spend_cents,
         "exit_code": job.exit_code,
         "smoke_minutes": job.smoke_minutes,
+        # Null: the default (`checkpoint_upload_minutes_effective` says what that is).
+        "checkpoint_upload_minutes": job.checkpoint_upload_minutes,
+        "checkpoint_upload_minutes_effective": runner_api.checkpoint_sync_seconds(job) // 60,
         "workspace": _workspace_ref(job.workspace) if job.workspace is not None else None,
         "end_requested": job.end_requested_at is not None,
         "queued_at": _iso(job.queued_at),
@@ -263,6 +267,8 @@ def submit_body(job: ComputeJob) -> dict[str, Any]:
     }
     if job.smoke_minutes:
         body["smoke_minutes"] = job.smoke_minutes
+    if job.checkpoint_upload_minutes:
+        body["checkpoint_upload_minutes"] = job.checkpoint_upload_minutes
     if job.workspace_id is not None:
         # Queued again (`krater rerun`), a box continues its workspace.
         body["workspace"] = str(job.workspace_id)
@@ -328,6 +334,7 @@ def _spec(body: dict, *, session: Session | None = None, project: Project | None
         data_out_gb=_int(body, "data_out_gb", None),
         inputs=tuple(compute_inputs.check_names(inputs)),
         smoke_minutes=_int(body, "smoke_minutes", None),
+        checkpoint_upload_minutes=_int(body, "checkpoint_upload_minutes", None),
         **_workspace_spec(body, session, project),
     )
 

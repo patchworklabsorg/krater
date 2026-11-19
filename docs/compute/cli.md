@@ -136,6 +136,12 @@ transfer price cap would cost a large share of the project's budget, Krater asks
 shows the cost and asks `Queue it anyway? [y/N]`, and without a terminal the answer is no. `--confirm-transfer-cost`
 queues it without asking.
 
+`--checkpoint-upload MINUTES` (1 to 60; the job form's "Upload checkpoints every") sets how often the runner uploads
+the changed files in `$KRATER_CHECKPOINT_DIR`; 10 when not given. A job that moves to another machine resumes from
+the last upload, so a shorter interval loses less work, and costs more data out: each upload sends every changed file
+whole. Jobs only (a box saves `/workspace` every 10 minutes). `show` prints the interval; against a Krater that doesn't
+take it yet, `submit` says the job uploads every 10 minutes.
+
 ### Downloading
 
 `krater download <job> results/` fetches every file again each time: the file list has no modified time or checksum, and
