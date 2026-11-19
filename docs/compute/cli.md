@@ -183,6 +183,20 @@ Krater's proxy, and any request that couldn't connect at all, is tried again aft
 another change that gets a 502 is never sent again, because Krater may already have done it: check with
 `krater jobs` before submitting again.
 
+`krater submit ... --follow` is `submit`, then `logs -f`, then `download --only outputs` into the current folder
+if the job succeeded, with `wait`'s exit code. It's for one job: not a box, a sweep, `--estimate` or `--json`.
+Ctrl-C stops following and leaves the job running. `krater logs` (without `--attempt`) reads `latest_attempt` from
+the logs API and says when that attempt has no output yet and an earlier one's is shown.
+
+`krater compare <job>...` reads each job's `outputs/metrics.json` (a JSON object; nested objects become dotted keys
+such as `eval.acc`) and prints one column per job. `--json` prints them as read. Exit code 1 when none had metrics.
+
+`--max-spend DOLLARS` (job files: `max-spend = 25`) sends `max_spend_cents`: the scheduler fails the job (or stops
+the box) once its spend reaches it (`docs/compute/scheduler.md`).
+
+`krater run` reads the project's secret names when it can. Signed out or offline, it says why in one line and runs
+without them.
+
 Output is printed with terminal control characters and escape sequences removed (a job's output can come from
 any teammate who can launch on the project); `krater logs --raw` prints it as it is.
 

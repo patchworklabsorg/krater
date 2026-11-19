@@ -63,6 +63,8 @@ AUDIT_BOX_DESTROYED = "compute_box_destroyed"
 AUDIT_TRANSFER_WARNING = "compute_transfer_warning"
 #: A batch job ended (succeeded, failed, or was stopped by Krater or an admin): a notice in its project's channel.
 AUDIT_JOB_ENDED = "compute_job_ended"
+#: The highest spend cap a job can set: far above any real job, low enough to catch a typo's extra zeros.
+MAX_SPEND_CAP_CENTS = 100_000_00
 #: A batch job's GPU sat nearly unused for the policy's idle warning time.
 AUDIT_JOB_IDLE = "compute_job_idle"
 #: How a member's own cancel reads (`cancel_job`): no channel notice for it, they know.
@@ -181,6 +183,8 @@ class JobSpec:
     # Upload changed checkpoint files every this many minutes; None for the default. More often loses less work when
     # the job has to move to another machine, and costs more data out (Vast bills it per GB).
     checkpoint_upload_minutes: int | None = None
+    # Stop once the job has cost this many cents (a box: stop it); None for no cap of its own.
+    max_spend_cents: int | None = None
     # A box's /workspace (`krater.services.workspaces`): continue this workspace of the project, or (None) start a new
     # one, named `workspace_name` (the box's name if blank). `end_holder`: end the stopped box that still holds the
     # workspace, so this one can continue it.
@@ -327,6 +331,10 @@ def _validate(spec: JobSpec, *, cap_microusd: int) -> None:
                 f"Choose a checkpoint upload every 1 to {MAX_CHECKPOINT_UPLOAD_MINUTES} minutes, or leave it blank for "
                 f"every {DEFAULT_CHECKPOINT_UPLOAD_MINUTES}."
             )
+    if spec.max_spend_cents is not None and not 1 <= spec.max_spend_cents <= MAX_SPEND_CAP_CENTS:
+        errors["max_spend"] = (
+            f"Choose a spend cap of $0.01 to ${MAX_SPEND_CAP_CENTS // 100:,}, or leave it blank for none."
+        )
     _check_provider(spec, errors)
     if errors:
         raise ValidationFailed(errors)
@@ -407,6 +415,7 @@ def submit_job(
         inputs_bytes=inputs_bytes,
         smoke_minutes=spec.smoke_minutes,
         checkpoint_upload_minutes=spec.checkpoint_upload_minutes,
+        max_spend_cents=spec.max_spend_cents,
         state=ComputeJobState.QUEUED,
         # While compute is stopped, say so from the start, as the scheduler's next pass would.
         state_reason=f"Waiting: {halted}."

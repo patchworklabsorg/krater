@@ -174,6 +174,12 @@ class S3ObjectStore:
             raise StorageUnavailableError(f"could not read {key!r}: {exc}") from exc
         return response["Body"].read()
 
+    def put_bytes(self, key: str, content: bytes, *, content_type: str = "application/octet-stream") -> None:
+        try:
+            self._internal.put_object(Bucket=self._bucket, Key=key, Body=content, ContentType=content_type)
+        except ClientError as exc:
+            raise StorageUnavailableError(f"could not write {key!r}: {exc}") from exc
+
     def delete(self, key: str) -> None:
         try:
             self._internal.delete_object(Bucket=self._bucket, Key=key)
@@ -191,7 +197,7 @@ class S3ObjectStore:
         try:
             pages = self._internal.get_paginator("list_objects_v2").paginate(Bucket=self._bucket, Prefix=prefix)
             return [
-                ListedObject(key=item["Key"], size_bytes=int(item["Size"]))
+                ListedObject(key=item["Key"], size_bytes=int(item["Size"]), last_modified=item.get("LastModified"))
                 for page in pages
                 for item in page.get("Contents", [])
             ]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime
 from typing import Annotated
 
@@ -67,8 +68,11 @@ def home(
 
 @router.get("/healthz")
 def healthz(session: Annotated[Session, Depends(get_session)]) -> dict[str, str]:
+    """200 once the database answers, with the commit this image was built from (`KRATER_REVISION`, set by CI's
+    image build), so `curl <site>/healthz` says which commit is live. Open: a commit id is public in the repo."""
     session.execute(text("SELECT 1"))
-    return {"status": "ok"}
+    revision = os.environ.get("KRATER_REVISION", "").strip()
+    return {"status": "ok", **({"revision": revision} if revision else {})}
 
 
 @router.get("/healthz/edge")

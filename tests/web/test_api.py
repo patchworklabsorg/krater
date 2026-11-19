@@ -323,7 +323,7 @@ def test_a_member_reads_a_jobs_output_and_lists_its_files(client: TestClient, pr
     files = client.get(f"/api/v1/jobs/{job['id']}/files", headers=_as(MEMBER_SUB)).json()["files"]
     refused = client.get(f"/api/v1/jobs/{job['id']}/files", headers=_as(REVIEWER_SUB))
 
-    assert logs == {"attempt": 1, "text": "hello\n", "size_bytes": 6, "truncated": False}
+    assert logs == {"attempt": 1, "text": "hello\n", "size_bytes": 6, "truncated": False, "latest_attempt": None}
     assert [(f["area"], f["name"], f["size_bytes"]) for f in files] == [
         ("outputs", "score.txt", 5),
         ("logs", "attempt-1.log", 6),

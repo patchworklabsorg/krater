@@ -14,6 +14,11 @@ def test_healthz_runs_a_query_and_reports_ok(client: TestClient) -> None:
     assert response.json() == {"status": "ok"}
 
 
+def test_healthz_says_which_commit_is_live(client: TestClient, monkeypatch) -> None:
+    monkeypatch.setenv("KRATER_REVISION", "e5caa36" + "0" * 33)
+    assert client.get("/healthz").json() == {"status": "ok", "revision": "e5caa36" + "0" * 33}
+
+
 def test_home_page_renders_signed_out(client: TestClient) -> None:
     response = client.get("/")
 

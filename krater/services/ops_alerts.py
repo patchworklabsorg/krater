@@ -30,6 +30,7 @@ from datetime import datetime, timedelta
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
+from krater import net_errors
 from krater.config import Settings
 from krater.models import (
     AuditEvent,
@@ -474,23 +475,53 @@ def deliver(session: Session, slack_client: SlackClient | None, channel_id: str 
         .with_for_update()
     ).all()
     posted = []
+    # Several alerts that all say this server's own network is down are one problem: post them as one.
+    outage = [
+        row
+        for row in rows
+        if row.opened_at is not None and any(hint in row.message for hint in net_errors.OWN_NETWORK_DOWN)
+    ]
+    if len(outage) >= 2:
+        if _post(slack_client, channel_id, _outage_text(outage), cleared=False, key="network_outage"):
+            for row in outage:
+                row.notified_at = now
+                posted.append(row.key)
+        rows = [row for row in rows if row not in outage]
     for row in rows:
         cleared = row.opened_at is None
         text = _cleared_text(row) if cleared else _open_text(row, again=row.notified_at is not None)
-        if slack_client is None or not channel_id:
-            (logger.info if cleared else logger.error)("krater ops alert: %s", text)
-        else:
-            try:
-                slack_client.post_message(
-                    channel_id, blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": text}}], text=text
-                )
-            except SlackError:
-                logger.exception("krater: could not post the ops alert %s; trying again next run", row.key)
-                continue
+        if not _post(slack_client, channel_id, text, cleared=cleared, key=row.key):
+            continue
         row.notified_at = None if cleared else now
         posted.append(row.key)
     session.flush()
     return posted
+
+
+def _post(slack_client: SlackClient | None, channel_id: str | None, text: str, *, cleared: bool, key: str) -> bool:
+    """Post one alert's text (to the log without a channel). False when Slack refused it: try again next run."""
+    if slack_client is None or not channel_id:
+        (logger.info if cleared else logger.error)("krater ops alert: %s", text)
+        return True
+    try:
+        slack_client.post_message(
+            channel_id, blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": text}}], text=text
+        )
+    except SlackError:
+        logger.exception("krater: could not post the ops alert %s; trying again next run", key)
+        return False
+    return True
+
+
+def _outage_text(rows: list[OpsAlert]) -> str:
+    again = all(row.notified_at is not None for row in rows)
+    lines = [
+        ":rotating_light: *Krater: this server's network or DNS looks down*" + (" (still)" if again else ""),
+        f"{len(rows)} alerts failed the same way, so the services are probably fine:",
+    ]
+    lines += [f"• {_title(row.key)}" for row in rows]
+    lines.append(f"> {rows[0].message}")
+    return "\n".join(lines)
 
 
 def beat(session: Session, *, now: datetime) -> None:

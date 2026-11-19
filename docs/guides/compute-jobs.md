@@ -100,8 +100,9 @@ krater submit vision --name train --code . --command "python train.py" --gpu "RT
   try runs the same command. `krater init` writes a starter job set up this way.
 - It's for jobs; a box keeps its own `/workspace`. On the web form, use an image.
 
-Old versions stay in the project's inputs and count toward its storage quota: `krater inputs rm <project> code/`
-clears them all once no queued job needs them.
+Old versions stay in the project's inputs for a while and count toward its storage quota. Krater deletes a
+`code/<hash>/` folder once it's a week old and no unfinished job uses it; `krater inputs rm <project> code/` clears
+them all sooner.
 
 Build your own image when installing your packages takes long enough to matter on every start, or needs more than
 `pip`.
@@ -273,6 +274,10 @@ Two ways to find that out cheaply:
 
 On your project's page, open **Compute**, then **New job or box**. The page shows current prices beside the form.
 
+**Try the starter job** (a link at the top of the form) fills the form in with the [starter job](first-job.md): a
+small PyTorch training run of about 20 minutes on a cheap GPU, as a smoke test first. Krater puts its script in the
+project's inputs as `starter/train.py`. Queue it as it is to see the whole flow, or change it.
+
 ### What to run
 
 | Field | What to enter |
@@ -306,6 +311,7 @@ See [Choosing a price](#choosing-a-price). In short, choose an order type and fi
 | **Wait at most (minutes)** | How long to wait for a machine at your price. 720 (12 hours) by default, up to 7 days |
 | **Then** | What happens after that wait: keep waiting, accept offers up to your max price, rent on demand up to your max price, or cancel the job |
 | **Stop after (minutes of running)** | The max runtime. The job fails and its machine is destroyed when it has run this long. 480 (8 hours) by default, up to 7 days |
+| **Stop once it has cost ($)** | Optional. A spend cap for this job: once its machine and data together have cost this much, the job fails with "Stopped at its spend cap" and its machine is destroyed (a box is stopped instead, keeping its disk). Krater checks it every minute or so, so it can go a few cents over. `--max-spend 25` from a terminal |
 
 Prices are the **full hourly cost**: the GPU plus your disk. No price can be above your project's hourly cap, shown
 at the top of the form ($5 an hour unless an admin set another).
@@ -462,6 +468,9 @@ Open the job from your project's **Compute** page. It shows:
   from before 12 November 2026 show only the total;
 - **Output**: the end of what the command printed, updated every minute, with a link to the whole log;
 - **Files**: checkpoints, outputs and logs, to download;
+- **Last checkpoint stored** (a running job): when a checkpoint last reached Krater's storage, which is how much
+  work a move to another machine would lose. It's marked **overdue** when nothing has arrived for twice the upload
+  interval: check that your code writes to `$KRATER_CHECKPOINT_DIR`;
 - **What happened**: every step, with times: queued, rented, started, outbid, bid raised, moved, finished;
 - **Machine**: the GPU and price it was rented at, and for a box, how to connect, when `/workspace` was last saved,
   and, once it's stopped, what it costs while stopped and when it will be destroyed;
@@ -504,7 +513,10 @@ want its last outputs. For a box, see [Ending a box](#ending-a-box).
   inputs, workspaces and every job's files, with how much of the storage quota they use.
 - **From a terminal:** `krater download <job> results/` puts them under `results/outputs/`, `results/checkpoints/` and
   `results/logs/`. `--only outputs` fetches just one kind, and `--skip-existing` leaves alone files you already have
-  (handy for logs, which only grow).
+  (handy for logs, which only grow). `krater submit ... --follow` queues the job, prints its output as it runs, and
+  downloads its outputs into the current folder if it succeeds.
+- **Comparing runs:** if your job writes a JSON object to `$KRATER_OUTPUT_DIR/metrics.json` (such as
+  `{"loss": 0.41, "eval": {"acc": 0.88}}`), `krater compare <job> <job> ...` shows each job's metrics side by side.
 
 Who can see them: everyone on the team, and admins. Reviewers see the job but not its files or output.
 
@@ -747,7 +759,8 @@ queues nothing.
 | `krater rerun <job>` | Queues it again with the same settings (`--name` for a new name) |
 | `krater init [FOLDER]` | Writes the [starter job](first-job.md) into a folder (`--project` fills in `job.toml`) |
 | `krater inputs list\|upload\|rm <project>` | The project's [inputs](#inputs) |
-| `krater logs <job>` | The end of the output. `-f` follows it; `--attempt 1` shows an earlier attempt |
+| `krater logs <job>` | The end of the output. `-f` follows it; `--attempt 1` shows an earlier attempt. When the newest attempt hasn't printed anything yet, it says so and shows the one before |
+| `krater compare <job> <job> ...` | Each job's `outputs/metrics.json`, side by side |
 | `krater wait <job>` | Blocks until the job is finished. Exits 0 if it succeeded, the command's own code if it failed with one, 124 on `--timeout` |
 | `krater cancel <job>` | Cancels it; the machine is destroyed (a box: at once, without a last save) |
 | `krater end <box>` | Saves a running box's `/workspace`, then destroys its machine; the workspace stays |

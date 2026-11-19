@@ -40,11 +40,40 @@ env:
   URL: https://krater-staging.patchworklabs.org
 
 jobs:
-  deploy:
+  # Its own job, so a run for a commit that is no longer the tip of main shows its deploy job as *skipped*,
+  # not as a green "success" that deployed nothing.
+  pick:
     # A CI run on a push to main that passed, or a manual run from main.
     if: >-
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
       (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      deploy: ${{ steps.sha.outputs.deploy }}
+      sha: ${{ steps.sha.outputs.sha }}
+    steps:
+      - name: Pick the commit
+        id: sha
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          # CI runs can finish out of order. Deploy only the tip of main, so an older commit never
+          # replaces a newer one.
+          tip=$(gh api "repos/${{ github.repository }}/commits/main" --jq .sha)
+          if [ "$SHA" != "$tip" ]; then
+            echo "::notice::$SHA is no longer the tip of main ($tip). Skipping; the tip's own run deploys it."
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    needs: pick
+    if: needs.pick.outputs.deploy == 'true'
     runs-on: ubuntu-latest
     # At job level: a run whose job the `if` skips does not take the group, so it cannot replace a
     # pending deploy.
@@ -59,25 +88,7 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - name: Pick the commit
-        id: sha
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
-        run: |
-          # CI runs can finish out of order. Deploy only the tip of main, so an older commit never
-          # replaces a newer one.
-          tip=$(gh api "repos/${{ github.repository }}/commits/main" --jq .sha)
-          if [ "$SHA" != "$tip" ]; then
-            echo "::notice::$SHA is no longer the tip of main ($tip). Skipping."
-            echo "deploy=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "deploy=true" >> "$GITHUB_OUTPUT"
-          fi
-          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
-
       - name: Join the tailnet
-        if: steps.sha.outputs.deploy == 'true'
         uses: tailscale/github-action@064b10558093f38325e838ddea35486bdc6b1d5c # v4.4.0
         with:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
@@ -85,11 +96,10 @@ jobs:
           tags: tag:ci-krater
           version: latest
 
-      - name: Deploy ${{ steps.sha.outputs.sha }}
-        if: steps.sha.outputs.deploy == 'true'
+      - name: Deploy ${{ needs.pick.outputs.sha }}
         env:
           KEY: ${{ secrets.KRATER_DEPLOY_SSH_KEY }}
-          SHA: ${{ steps.sha.outputs.sha }}
+          SHA: ${{ needs.pick.outputs.sha }}
         # The first build of the Python dependencies takes several minutes on weft. The build may take
         # 45 minutes and the start 10.
         timeout-minutes: 60
@@ -114,7 +124,6 @@ jobs:
           ssh_weft "$SHA"
 
       - name: Check the site
-        if: steps.sha.outputs.deploy == 'true'
         run: |
           for _ in $(seq 1 12); do
             if curl -fsS --max-time 10 "$URL/healthz" && curl -fsS --max-time 10 "$URL/healthz/worker"; then

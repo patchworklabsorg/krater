@@ -58,6 +58,7 @@ class Fake:
         self.knows_smoke = True
         # An older Krater ignores `checkpoint_upload_minutes` and doesn't send it back.
         self.knows_checkpoint_upload = True
+        self.knows_max_spend = True
         self.jobs_422 = False
         # Krater asks before queuing a job whose data transfer could cost a lot (409 with `confirm`).
         self.transfer_confirm = False
@@ -227,6 +228,8 @@ class Fake:
                 job["smoke_minutes"] = body.get("smoke_minutes")
             if self.knows_checkpoint_upload:
                 job["checkpoint_upload_minutes"] = body.get("checkpoint_upload_minutes")
+            if self.knows_max_spend:
+                job["max_spend_cents"] = body.get("max_spend_cents")
             self.jobs.append(job)
             return httpx.Response(201, json=job)
         acted = re.fullmatch(r"/jobs/([0-9a-f-]{36})/(cancel|end|stop|resume|move)", path)
@@ -303,12 +306,6 @@ class Fake:
         return httpx.Response(
             200, json={"attempt": attempt, "text": text, "size_bytes": len(raw), "truncated": truncated}
         )
-
-
-@pytest.fixture(autouse=True)
-def config_dir(tmp_path, monkeypatch):
-    monkeypatch.setenv("KRATER_CONFIG_DIR", str(tmp_path / "krater"))
-    return tmp_path / "krater"
 
 
 @pytest.fixture

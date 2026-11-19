@@ -50,6 +50,10 @@ class ObjectStore(Protocol):
         end of a job's log without fetching all of it."""
         ...
 
+    def put_bytes(self, key: str, content: bytes, *, content_type: str = "application/octet-stream") -> None:
+        """Write a small object from Krater itself (the starter job's script). Raises `StorageError`."""
+        ...
+
     def delete(self, key: str) -> None:
         """Delete `key`. Safe to call on a key that's already gone (S3's own `DeleteObject` semantics)."""
         ...

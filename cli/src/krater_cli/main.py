@@ -98,6 +98,18 @@ def _price(text: str) -> str:
     return cleaned
 
 
+def _spend(text: str) -> int:
+    """A spend cap in dollars, `$25` included, as whole cents."""
+    cleaned = text.strip().lstrip("$").strip()
+    try:
+        value = Decimal(cleaned)
+    except InvalidOperation:
+        value = Decimal("nan")
+    if not value.is_finite() or value <= 0:
+        raise argparse.ArgumentTypeError(f"{text!r} isn't an amount in dollars, such as 25")
+    return max(1, int((value * 100).to_integral_value()))
+
+
 def _positive(text: str) -> float:
     try:
         value = float(text)
@@ -153,6 +165,12 @@ def _add_job_options(parser: argparse.ArgumentParser) -> None:
         help="when outbid for a while: move to another machine, or hold this one (default: hold with --limit)",
     )
     parser.add_argument("--max-runtime", type=int, help="minutes (default 480)")
+    parser.add_argument(
+        "--max-spend",
+        type=_spend,
+        metavar="DOLLARS",
+        help="stop it once it has cost this much, machine and data together (default: no cap but the budget)",
+    )
     parser.add_argument(
         "--data-in", type=int, help="GB the job moves into its machine (image, datasets); Vast bills it per GB"
     )
@@ -234,6 +252,12 @@ def _parser() -> argparse.ArgumentParser:
         metavar="N",
         help=f"how long the smoke test runs the command (default {DEFAULT_SMOKE_MINUTES}, at most 30)",
     )
+    submit.add_argument(
+        "--follow",
+        action="store_true",
+        help="then print its output until it's finished, and download its outputs here if it succeeded "
+        "(exit code like krater wait)",
+    )
     submit_workspace = submit.add_mutually_exclusive_group()
     submit_workspace.add_argument(
         "--workspace",
@@ -310,6 +334,8 @@ def _parser() -> argparse.ArgumentParser:
     wait.add_argument("job", help=job_help)
     wait.add_argument("--timeout", type=_positive, help="give up after this many minutes (exit code 124)")
     wait.add_argument("--interval", type=_positive, default=5, help="seconds between checks (default 5)")
+    compare = commands.add_parser("compare", help="jobs' outputs/metrics.json side by side")
+    compare.add_argument("jobs", nargs="+", metavar="job", help=job_help)
     download = commands.add_parser("download", help="download a job's outputs, checkpoints and logs")
     download.add_argument("job", help=job_help)
     download.add_argument("folder", nargs="?", help="the folder to put them in (default: here)")
@@ -684,10 +710,19 @@ def _queue(
                 "started. Try `krater run` to test it on this computer.",
                 status=1,
             )
+        if body.get("max_spend_cents") and "max_spend_cents" not in job:
+            # A Krater from before spend caps ignores the field: the job would run uncapped, so take it back at once.
+            krater.post(f"/jobs/{job['id']}/cancel")
+            raise KraterError(
+                "This Krater doesn't take --max-spend yet, so it queued the job without a spend cap; it was cancelled "
+                "before it started. Leave out --max-spend, or set a shorter --max-runtime to limit what it can cost.",
+                status=1,
+            )
         if body.get("checkpoint_upload_minutes") and "checkpoint_upload_minutes" not in job:
             # A Krater from before per-job intervals ignores the field: the job runs, uploading on the default timer.
             say("This Krater doesn't take --checkpoint-upload yet: the job uploads its checkpoints every 10 minutes.")
         queued.append((job, variables))
+    args.queued_jobs = [job for job, _ in queued]
 
     if len(queued) == 1:
         job = queued[0][0]
@@ -777,6 +812,8 @@ def _job_body(args: argparse.Namespace, prices: dict) -> dict:
         body["data_out_gb"] = args.data_out
     if getattr(args, "checkpoint_upload", None) is not None:
         body["checkpoint_upload_minutes"] = args.checkpoint_upload
+    if getattr(args, "max_spend", None) is not None:
+        body["max_spend_cents"] = args.max_spend
     if args.input:
         body["inputs"] = args.input
     return body
@@ -840,9 +877,17 @@ def _project_env_names(http: httpx.Client, project: str, say: Callable[[str], No
     try:
         krater = Krater(http)
         data = krater.get(f"/projects/{resolve.resolve_project(krater, project)}/secrets")
-    except (auth.AuthError, ResolveError, KraterError, httpx.HTTPError) as exc:
-        say(f"Couldn't read the project's secret names ({exc}); running without them.")
-        return []
+    except auth.AuthError:
+        why = "you're not signed in (krater login)"
+    except httpx.HTTPError as exc:
+        why = _unreachable(exc)
+    except (ResolveError, KraterError) as exc:
+        why = str(exc)
+    else:
+        return [s["name"] for s in data["secrets"]]
+    say(f"Running without the project's secrets: couldn't read their names, as {why.rstrip('.')}.")
+    say("A job that needs one reads it from your environment here: set it before krater run.")
+    return []
     return [s["name"] for s in data["secrets"]]
 
 
@@ -1122,6 +1167,9 @@ def run(
         except jobfile.JobFileError as exc:
             say(str(exc))
             return 2
+        if args.follow and (args.box or args.estimate or args.json or len(runs) > 1):
+            say("--follow is for one job: not a box, a sweep, --estimate or --json.")
+            return 2
         if smoke is not None and len(runs) > 1:
             # A smoke test checks that the job starts and runs; one of the sweep's jobs shows that for all of them.
             say(f"A smoke test runs only the first of the sweep's {len(runs)} jobs ({runs[0][0]['name']}).")
@@ -1131,7 +1179,10 @@ def run(
         if found is not None:
             _upload_code(krater, http, project_id, found, say)
         path = f"/projects/{project_id}/jobs"
-        return _queue(krater, path, runs, args, say=say, prompt=prompt, out=out, sleep=sleep)
+        queued = _queue(krater, path, runs, args, say=say, prompt=prompt, out=out, sleep=sleep)
+        if queued != 0 or not args.follow:
+            return queued
+        return _follow_then_download(krater, http, args.queued_jobs[0]["id"], args, say, sleep)
     elif args.command == "rerun":
         source = krater.get(f"/jobs/{resolve.resolve_job(krater, args.job)}")
         if not source.get("spec"):
@@ -1232,6 +1283,9 @@ def run(
         data = krater.get(f"/jobs/{job_id}/logs{query}")
 
         def render_logs() -> None:
+            latest = data.get("latest_attempt")
+            if args.attempt is None and latest and data["attempt"] is not None and latest > data["attempt"]:
+                say(f"[attempt {latest} has no output yet; showing attempt {data['attempt']}]")
             if not data["text"]:
                 say("No output yet.")
                 return
@@ -1263,6 +1317,8 @@ def run(
         return follow.exit_code_for(job)
     elif args.command == "download":
         return _download(krater, http, resolve.resolve_job(krater, args.job), args, say)
+    elif args.command == "compare":
+        return _compare(krater, http, args.jobs, say, out)
     elif args.command in ("cancel", "end", "stop", "resume", "move"):
         job_id = resolve.resolve_job(krater, args.job)
         try:
@@ -1782,6 +1838,81 @@ def _download(krater: Krater, http: httpx.Client, job_id: str, args: argparse.Na
     extra = (f", {already} already here" if already else "") + (f", {failed} failed" if failed else "")
     say(f"Saved {saved}{extra}: {_size(total)} in all, under {root}.")
     return 1 if failed else 0
+
+
+def _follow_then_download(
+    krater: Krater, http: httpx.Client, job_id: str, args: argparse.Namespace, say, sleep: Callable[[float], None]
+) -> int:
+    """`krater submit --follow`: the job's output until it's finished, then its outputs here if it succeeded."""
+    say(f"Following {short(job_id)}; Ctrl+C stops following (the job keeps running).")
+    try:
+        job = follow.follow_logs(krater, job_id, tail_bytes=65536, interval=5, say=say, sleep=sleep)
+    except KeyboardInterrupt:
+        say(f"Stopped following. krater logs -f {short(job_id)} picks it up again.")
+        return INTERRUPTED
+    if job["state"] == "succeeded":
+        _download(
+            krater, http, job_id, argparse.Namespace(only="outputs", folder=None, to=None, skip_existing=False), say
+        )
+    return follow.exit_code_for(job)
+
+
+def _compare(krater: Krater, http: httpx.Client, refs: list[str], say, out) -> int:
+    """`krater compare`: each job's outputs/metrics.json (a JSON object), one column per job."""
+    columns: list[tuple[str, dict]] = []
+    for ref in refs:
+        job_id = resolve.resolve_job(krater, ref)
+        job = krater.get(f"/jobs/{job_id}")
+        label = f"{job['name']} ({short(job_id)})"
+        found = next((f for f in _file_list(krater, job_id, "outputs") if f["name"] == "metrics.json"), None)
+        metrics: dict = {}
+        if found is None:
+            say(f"{label}: no outputs/metrics.json.")
+        else:
+            try:
+                response = http.get(found["url"])
+                response.raise_for_status()
+                data = response.json()
+            except (httpx.HTTPError, ValueError) as exc:
+                say(f"{label}: couldn't read its metrics.json ({exc}).")
+            else:
+                if isinstance(data, dict):
+                    metrics = _flat(data)
+                else:
+                    say(f"{label}: its metrics.json isn't a JSON object.")
+        columns.append((label, metrics))
+    keys = sorted({key for _, metrics in columns for key in metrics})
+
+    def render() -> None:
+        if not keys:
+            say("No metrics to compare. A job writes them to $KRATER_OUTPUT_DIR/metrics.json, as a JSON object.")
+            return
+        rows = [["", *(label for label, _ in columns)]]
+        rows += [[key, *(_cell(metrics.get(key)) for _, metrics in columns)] for key in keys]
+        _table(rows, say)
+
+    out({"jobs": [{"job": label, "metrics": metrics} for label, metrics in columns]}, render)
+    return 0 if keys else 1
+
+
+def _flat(data: dict, prefix: str = "") -> dict:
+    """Nested objects as dotted keys (`eval.loss`); lists are shown as they are."""
+    flat: dict = {}
+    for key, value in data.items():
+        if isinstance(value, dict):
+            flat.update(_flat(value, f"{prefix}{key}."))
+        else:
+            flat[f"{prefix}{key}"] = value
+    return flat
+
+
+def _cell(value: object) -> str:
+    if value is None:
+        return "-"
+    if isinstance(value, float):
+        return f"{value:.6g}"
+    text = value if isinstance(value, str) else json.dumps(value)
+    return follow.clean(text)[:40]
 
 
 def _unreachable(exc: httpx.HTTPError) -> str:

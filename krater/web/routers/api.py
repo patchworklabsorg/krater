@@ -177,6 +177,7 @@ def _job_json(job: ComputeJob, *, detail: bool = False, session: Session | None 
         # Null: the default (`checkpoint_upload_minutes_effective` says what that is).
         "checkpoint_upload_minutes": job.checkpoint_upload_minutes,
         "checkpoint_upload_minutes_effective": runner_api.checkpoint_sync_seconds(job) // 60,
+        "max_spend_cents": job.max_spend_cents,
         "workspace": _workspace_ref(job.workspace) if job.workspace is not None else None,
         "end_requested": job.end_requested_at is not None,
         "queued_at": _iso(job.queued_at),
@@ -269,6 +270,8 @@ def submit_body(job: ComputeJob) -> dict[str, Any]:
         body["smoke_minutes"] = job.smoke_minutes
     if job.checkpoint_upload_minutes:
         body["checkpoint_upload_minutes"] = job.checkpoint_upload_minutes
+    if job.max_spend_cents:
+        body["max_spend_cents"] = job.max_spend_cents
     if job.workspace_id is not None:
         # Queued again (`krater rerun`), a box continues its workspace.
         body["workspace"] = str(job.workspace_id)
@@ -335,6 +338,7 @@ def _spec(body: dict, *, session: Session | None = None, project: Project | None
         inputs=tuple(compute_inputs.check_names(inputs)),
         smoke_minutes=_int(body, "smoke_minutes", None),
         checkpoint_upload_minutes=_int(body, "checkpoint_upload_minutes", None),
+        max_spend_cents=_int(body, "max_spend_cents", None),
         **_workspace_spec(body, session, project),
     )
 
@@ -635,9 +639,17 @@ def job_logs(job_id: uuid.UUID, actor: Me, db_session: Db, attempt: int | None =
         return _error(403, exc.message)
     except StorageError:
         return _error(503, "Krater's storage didn't answer; try again in a minute.")
+    # The newest attempt, so a client can say when it has no output yet and an earlier one's is shown.
+    latest = job.attempts or None
     if tail is None:
-        return {"attempt": attempt, "text": "", "size_bytes": 0, "truncated": False}
-    return {"attempt": tail.attempt, "text": tail.text, "size_bytes": tail.size_bytes, "truncated": tail.truncated}
+        return {"attempt": attempt, "text": "", "size_bytes": 0, "truncated": False, "latest_attempt": latest}
+    return {
+        "attempt": tail.attempt,
+        "text": tail.text,
+        "size_bytes": tail.size_bytes,
+        "truncated": tail.truncated,
+        "latest_attempt": latest,
+    }
 
 
 @router.get("/jobs/{job_id}/files")

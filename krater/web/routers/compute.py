@@ -107,6 +107,49 @@ def _job(session: Session, project: Project, job_id: uuid.UUID) -> ComputeJob:
     return job
 
 
+def _starter_posted(folder: str) -> dict:
+    """The new-job form, filled in for the starter job (`examples/starter`, the same as `krater init`'s job.toml)."""
+    return {
+        "kind": "job",
+        "name": "starter",
+        "image": compute_jobs.DEFAULT_IMAGE,
+        "command": f'cd "$KRATER_INPUT_DIR/{folder.rstrip("/")}" && python train.py --minutes 20',
+        "gpu": ["RTX 3060", "RTX 4060 Ti", "RTX 3090"],
+        "order": "limit",
+        "limit": "0.15",
+        "max_runtime_minutes": "45",
+        "checkpoint_upload_minutes": "5",
+        "inputs": folder,
+        "smoke": "on",
+    }
+
+
+def _checkpoint_freshness(files: list[compute_files.JobFile], job: ComputeJob, *, now: datetime) -> dict | None:
+    """For a running job's page: when a checkpoint last reached storage, and whether that's overdue (what a move
+    would lose). Overdue: running longer than twice the upload interval (and 5 minutes for the first upload) with
+    nothing stored, or the newest stored more than twice the interval ago. None for a box or a job not running."""
+    if job.kind is not ComputeJobKind.JOB or job.state is not ComputeJobState.RUNNING:
+        return None
+    every = (job.checkpoint_upload_minutes or compute_jobs.DEFAULT_CHECKPOINT_UPLOAD_MINUTES) * 60
+    times = [f.modified for f in files if f.area == "checkpoints" and f.modified is not None]
+    newest = max(times) if times else None
+    since = newest or job.started_at
+    overdue = since is not None and (now - since).total_seconds() > 2 * every + (0 if newest else 300)
+    minutes = int((now - newest).total_seconds() // 60) if newest else None
+    return {"newest": newest, "minutes_ago": minutes, "overdue": overdue}
+
+
+def _spend_cap(raw: str) -> int:
+    """The form's "Stop once it has cost ($)": dollars, to cents (rounded down, so the cap never grows)."""
+    try:
+        value = Decimal(raw.strip().lstrip("$").replace(",", ""))
+    except InvalidOperation:
+        raise ValidationFailed({"max_spend": "Give the spend cap in dollars, such as 5 or 12.50."}) from None
+    if not value.is_finite():
+        raise ValidationFailed({"max_spend": "Give the spend cap in dollars, such as 5 or 12.50."})
+    return int(value * 100)
+
+
 def _rate(raw: str, field: str) -> int:
     try:
         value = Decimal(raw.strip().lstrip("$"))
@@ -245,6 +288,7 @@ def _form_page(
     source: ComputeJob | None = None,
     quote: dict | None = None,
     live_table: dict | None = None,
+    starter: bool = False,
 ):
     settings = get_settings()
     policy = compute_settings.effective_policy(db_session, project)
@@ -283,6 +327,7 @@ def _form_page(
             "quote": quote,
             "live_table": live_table,
             "source": source,
+            "starter": starter,
             "escalations": ESCALATION_LABELS,
             "errors": errors or {},
             "posted": posted or {},
@@ -309,11 +354,25 @@ def new_job(
     weave_client: Annotated[WeaveClient, Depends(get_weave_client)],
     from_job: Annotated[uuid.UUID | None, Query(alias="from")] = None,
     workspace: uuid.UUID | None = None,
+    starter: bool = False,
 ):
     _require_compute()
     project = _project(db_session, actor, project_id)
     if not _is_team(actor, project):
         raise NotAllowed("Only the project's team can run jobs on its budget.")
+    if starter:
+        # "Try the starter job": its script goes in the project's inputs, and the form is filled in to run it.
+        folder = compute_inputs.ensure_starter(get_compute_store(), actor, project=project)
+        live_table = live_quote.start_table(db_session)
+        return _form_page(
+            request,
+            db_session,
+            project,
+            weave_client,
+            posted=_starter_posted(folder),
+            live_table=live_table,
+            starter=True,
+        )
     source = None if from_job is None else _job(db_session, project, from_job)
     # Opening the form searches Vast again for the "Cheapest now" column, if it's stale (`live_prices.TABLE_FRESH`).
     live_table = live_quote.start_table(db_session)
@@ -361,6 +420,8 @@ def _posted_from(job: ComputeJob) -> dict:
         posted["smoke"] = "on"
     if job.checkpoint_upload_minutes:
         posted["checkpoint_upload_minutes"] = str(job.checkpoint_upload_minutes)
+    if job.max_spend_cents:
+        posted["max_spend"] = f"{job.max_spend_cents / 100:.2f}"
     if job.workspace_id is not None:
         # "Run again" on a box continues its workspace.
         posted["workspace"] = str(job.workspace_id)
@@ -392,6 +453,7 @@ async def submit_job(
         min_vram = posted.get("min_vram", "").strip()
         data_in, data_out = posted.get("data_in_gb", "").strip(), posted.get("data_out_gb", "").strip()
         upload_every = posted.get("checkpoint_upload_minutes", "").strip()
+        spend_cap = posted.get("max_spend", "").strip()
         inputs = [line.strip() for line in posted.get("inputs", "").splitlines() if line.strip()]
         if posted.get("order") == "limit":
             target = high = _rate(posted.get("limit", ""), "limit")
@@ -423,6 +485,7 @@ async def submit_job(
             checkpoint_upload_minutes=_int(upload_every, "checkpoint_upload_minutes", "checkpoint upload interval")
             if upload_every and kind is ComputeJobKind.JOB
             else None,
+            max_spend_cents=_spend_cap(spend_cap) if spend_cap else None,
             **_workspace_fields(posted, kind),
         )
         store = get_compute_store() if spec.inputs else None
@@ -588,6 +651,7 @@ def job_page(
             "estimate": estimate,
             "costs": job_costs.breakdown(job),
             "checkpoint_upload_default": compute_jobs.DEFAULT_CHECKPOINT_UPLOAD_MINUTES,
+            "checkpoints": _checkpoint_freshness(files, job, now=datetime.now(UTC)),
             "can_cancel": (is_team or actor.is_admin) and (job.is_active or job.state is ComputeJobState.QUEUED),
             # A running box can end after a save ("End box"); "End now" (cancel) skips it.
             "can_end": (is_team or actor.is_admin)

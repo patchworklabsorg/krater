@@ -1333,7 +1333,7 @@ def test_an_outbid_machine_is_still_a_pause(db_session, member, project, client,
 
     _pass(db_session, client, NOW + timedelta(minutes=7))
 
-    assert job.state is ComputeJobState.PAUSED and "Outbid" in job.state_reason
+    assert job.state is ComputeJobState.PAUSED and "almost always because it was outbid" in job.state_reason
     assert fake.instances[row.provider_instance_id]["intended_status"] == "stopped"
 
 
@@ -1462,7 +1462,7 @@ def test_an_outbid_interruptible_machine_is_still_outbid_with_credit(db_session,
 
     _pass(db_session, client, NOW + timedelta(minutes=7))
 
-    assert "Outbid" in job.state_reason and row.outbid_count == 1 and row.start_requested_at is None
+    assert "outbid" in job.state_reason and row.outbid_count == 1 and row.start_requested_at is None
 
 
 def test_after_a_pause_the_runner_must_start_again(db_session, member, project, client, fake) -> None:  # noqa: F811
@@ -1628,3 +1628,16 @@ def test_a_job_whose_machine_only_looked_stopped_carries_on(db_session, member, 
 
     assert job.state is ComputeJobState.RUNNING and vast_id in fake.instances
     assert "runner_kept_running" in _events(db_session, job)
+
+
+def test_a_job_that_reaches_its_spend_cap_is_stopped(db_session, member, project, client, fake) -> None:  # noqa: F811
+    job, row = _running_job(db_session, member, project, client, fake, max_spend_cents=3)
+    assert job.state is ComputeJobState.RUNNING
+
+    _pass(db_session, client, NOW + timedelta(hours=1))  # the machine's accrued spend passes 3 cents
+
+    assert job.state is ComputeJobState.FAILED
+    assert job.spend_cents >= 3
+    assert "spend cap" in job.state_reason and "of its $0.03" in job.state_reason
+    assert row.state is ComputeInstanceState.DESTROYED
+    assert fake.instances == {}

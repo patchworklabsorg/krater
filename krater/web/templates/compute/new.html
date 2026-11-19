@@ -16,6 +16,19 @@
   </div>
 </div>
 
+{% if starter %}
+  <div class="notice" role="status">
+    <p><strong>The starter job</strong>: a small training run that saves checkpoints, resumes after an outbid pause,
+      and writes a model, its metrics and a sample of what it learned to write. Its script is now in this project's
+      inputs (<code>starter/train.py</code>). <strong>Smoke test first</strong> is ticked, so it runs for a few
+      minutes for about a cent; once that passes, choose <strong>Run again</strong> on its page and untick it for the
+      full 20 minutes. <a href="/help/first-job">Your first job</a> does the same from a terminal.</p>
+  </div>
+{% elif not source and not posted %}
+  <p class="muted">New to Krater compute? <a href="/projects/{{ project.id }}/compute/new?starter=1">Try the starter
+    job</a>: everything filled in, a few cents.</p>
+{% endif %}
+
 {% if source %}
   <div class="notice" role="status">
     <p>Filled in from <a href="/projects/{{ project.id }}/compute/{{ source.id }}">{{ source.name }}</a>. Change anything you like, then queue it.</p>
@@ -216,6 +229,12 @@
           <label for="job-runtime">Stop after (minutes of running)</label>
           <input type="text" inputmode="numeric" id="job-runtime" name="max_runtime_minutes" value="{{ posted.max_runtime_minutes or '480' }}">
           {% if errors.max_runtime_minutes %}<p class="field-error">{{ errors.max_runtime_minutes }}</p>{% endif %}
+        </div>
+        <div class="field">
+          <label for="job-max-spend">Stop once it has cost ($, optional)</label>
+          <input type="text" inputmode="decimal" id="job-max-spend" name="max_spend" placeholder="no cap" value="{{ posted.max_spend or '' }}">
+          <p class="field-hint">Everything it costs counts: GPU, disk and data. A job stops as failed; a box stops and keeps its disk.</p>
+          {% if errors.max_spend %}<p class="field-error">{{ errors.max_spend }}</p>{% endif %}
         </div>
       </div>
       <div class="field">

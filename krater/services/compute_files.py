@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import datetime
 
 from krater.models import ComputeJob, Project
 from krater.services import teams
@@ -34,6 +35,7 @@ class JobFile:
     area: str
     name: str
     size_bytes: int
+    modified: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -64,7 +66,10 @@ def list_files(store: ObjectStore, actor: Actor, *, job: ComputeJob) -> list[Job
     files = []
     for area in AREAS:
         prefix = _prefix(job, area)
-        files += [JobFile(area, item.key[len(prefix) :], item.size_bytes) for item in store.list_prefix(prefix)]
+        files += [
+            JobFile(area, item.key[len(prefix) :], item.size_bytes, item.last_modified)
+            for item in store.list_prefix(prefix)
+        ]
     return sorted(files, key=lambda f: (AREAS.index(f.area), f.name))
 
 

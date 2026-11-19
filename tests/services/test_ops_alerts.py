@@ -363,3 +363,20 @@ def test_alastors_ping_alerts_only_where_it_is_expected(db_session: Session) -> 
     db_session.execute(sa.delete(EdgePing))
     assert _watch(db_session, slack, NOW + timedelta(hours=2), Settings(edge_ping_expected=True)) == ["edge_ping_stale"]
     assert "None has arrived yet" in _texts(slack)[-1]
+
+
+def test_alerts_that_all_say_the_network_is_down_are_posted_as_one(db_session: Session) -> None:
+    from krater import net_errors
+
+    _fresh_prices(db_session)
+    slack = FakeSlackClient()
+    message = f"ConnectError: [Errno -3] Temporary failure in name resolution. {net_errors.DNS_FAILED}"
+    for key in ("quilt", "stash"):
+        for n in range(ops_alerts.FAILURE_RULES[key].threshold):
+            ops_alerts.record_failure(db_session, key, message, now=NOW + timedelta(minutes=n))
+
+    assert sorted(_watch(db_session, slack, NOW + timedelta(minutes=6))) == ["quilt", "stash"]
+    (text,) = _texts(slack)
+    assert "network or DNS looks down" in text
+    assert "Sending events to Quilt" in text and "Archiving submission links" in text
+    assert _watch(db_session, slack, NOW + timedelta(minutes=11)) == []

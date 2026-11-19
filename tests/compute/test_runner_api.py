@@ -501,3 +501,26 @@ def test_a_job_without_inputs_gets_none(http, machine, store) -> None:
     store.put(f"projects/{job.project_id}/inputs/a.csv", content_type="", size_bytes=4)
     assert http.post("/runner/v1/start", headers=_auth(token)).json()["inputs"] is False
     assert http.post("/runner/v1/files/inputs/list", headers=_auth(token)).json() == {"files": []}
+
+
+def test_old_code_folders_no_unfinished_job_uses_are_deleted(machine, store, db_session) -> None:
+    from krater.compute import storage_cleanup
+
+    job, _, _ = machine
+    job.input_names = ["code/aaaa/"]
+    db_session.flush()
+    base = f"projects/{job.project_id}/inputs/"
+    old, recent = NOW - timedelta(days=10), NOW - timedelta(days=1)
+    for name, when in (
+        ("code/aaaa/train.py", old),  # the running job's
+        ("code/bbbb/train.py", old),  # unused and old: goes
+        ("code/bbbb/lib/util.py", old),
+        ("code/cccc/train.py", recent),  # unused, but recent
+        ("code/dddd/train.py", None),  # no time: kept
+        ("data/old.csv", old),  # not code
+    ):
+        store.put(base + name, content_type="", size_bytes=1, modified=when)
+
+    assert storage_cleanup.prune_code_inputs(db_session, store, now=NOW) == 1
+    left = sorted(item.key[len(base) :] for item in store.list_prefix(base))
+    assert left == ["code/aaaa/train.py", "code/cccc/train.py", "code/dddd/train.py", "data/old.csv"]

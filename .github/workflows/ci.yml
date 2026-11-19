@@ -101,6 +101,9 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: ghcr.io/${{ github.repository }}:${{ github.sha }}
+          # /healthz reports it, so `curl <site>/healthz` says which commit is live.
+          build-args: |
+            KRATER_REVISION=${{ github.sha }}
           # krater-build on weft checks this label against the commit it asked for.
           labels: |
             org.patchworklabs.krater.rev=${{ github.sha }}

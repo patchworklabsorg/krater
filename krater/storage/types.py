@@ -34,6 +34,8 @@ class ListedObject:
 
     key: str
     size_bytes: int
+    # When it was last written (S3's LastModified), if the store says.
+    last_modified: datetime | None = None
 
 
 @dataclass(frozen=True)

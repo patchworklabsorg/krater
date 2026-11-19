@@ -234,6 +234,10 @@ def _stopped(row: ComputeInstance) -> dict:
     return {"disk_microusd": row.disk_microusd, "stopped_at": row.stopped_at.isoformat() if row.stopped_at else None}
 
 
+def _cents(cents: int) -> str:
+    return f"${cents / 100:,.2f}"
+
+
 def _dollars(microusd: int) -> str:
     return f"${microusd_to_usd(microusd).quantize(Decimal('0.0001'))}/h"
 
@@ -756,6 +760,22 @@ class Scheduler:
                     self.request_stop(row, job, f"max runtime of {job.max_runtime_minutes} minutes reached")
                 self._finish_stopping(row, job, policy)
                 return
+            over_spend = job.max_spend_cents is not None and (job.spend_cents or 0) >= job.max_spend_cents
+            if over_spend and job.kind is ComputeJobKind.BOX:
+                if row.stop_requested_at is None:
+                    self.request_stop(row, job, f"spend cap of {_cents(job.max_spend_cents)} reached")
+                self._finish_stopping(row, job, policy)
+                return
+            if over_spend:
+                _finish(
+                    job,
+                    ComputeJobState.FAILED,
+                    f"Stopped at its spend cap: it had cost {_cents(job.spend_cents or 0)} of its "
+                    f"{_cents(job.max_spend_cents)}.",
+                    now=self.now,
+                )
+                self._destroy(row, "spend cap reached")
+                return
             if over_runtime:
                 _finish(
                     job,
@@ -798,7 +818,7 @@ class Scheduler:
                 self._hold_for_credit(row, job)
                 why, cause = "the account ran out of credit", "credit_out"
             elif row.interruptible:
-                job.state_reason = "Outbid: the machine is paused." + (
+                job.state_reason = "Paused: Vast stopped the machine, almost always because it was outbid." + (
                     f" Krater raises the bid up to {_dollars(job.max_microusd)} and keeps the machine, with the job's "
                     "state on its disk, until it runs again."
                     if job.on_outbid is ComputeOutbid.HOLD
@@ -1594,7 +1614,8 @@ class Scheduler:
         paused_minutes = int((self.now - row.paused_since).total_seconds() // 60)
         if choice is None:
             job.state_reason = (
-                f"Outbid: paused for {paused_minutes} minutes. Keeping this machine, with the job's state on its disk, "
+                f"Paused for {paused_minutes} minutes (almost always outbid). Keeping this machine, with the job's "
+                f"state on its disk, "
                 f"until its bid of up to {_dollars(job.max_microusd)} wins again or another machine is free at or "
                 f"under {_dollars(limit)}."
             )

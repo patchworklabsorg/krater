@@ -228,7 +228,8 @@ long it lasted. Each failure names its root cause (`krater/net_errors.py`) and i
 It can't report its own death, so set up one check outside Krater (an uptime service, or the lab's monitoring) on
 `https://<KRATER_DOMAIN>/healthz/worker`, every 5 minutes, alerting on anything but `200`. It answers `503` once the
 worker's heartbeat is 5 minutes old. Point a second check at `/healthz`, which fails when the portal or its database
-is down.
+is down. `/healthz` also says which commit is live (`"revision"`, the image's `KRATER_REVISION` build
+argument, set by CI), so `curl -s https://<KRATER_DOMAIN>/healthz` confirms a deploy.
 
 ## 4. Backups
 
