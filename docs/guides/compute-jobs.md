@@ -7,32 +7,32 @@ getting your results back, and working interactively in a box. Everything here w
 > **Is compute open?** If your project page says *Launching machines from Krater isn't open yet*, an admin hasn't
 > switched Krater Compute on for this site. Everything below applies once it is.
 
-- [The short version](#the-short-version)
-- [How it works](#how-it-works)
-- [Before your first job](#before-your-first-job)
-- [Preparing your image](#preparing-your-image)
-- [What your command sees](#what-your-command-sees)
-- [Submitting a job on the web](#submitting-a-job-on-the-web)
-- [Choosing a price](#choosing-a-price)
-- [Data transfer](#data-transfer)
-- [Inputs](#inputs)
-- [After you queue it](#after-you-queue-it)
-- [Getting your results](#getting-your-results)
-- [Boxes: working interactively](#boxes-working-interactively)
-- [Secrets](#secrets)
-- [From a terminal: the `krater` command](#from-a-terminal-the-krater-command)
-- [Recipes](#recipes)
-- [Your budget and compute](#your-budget-and-compute)
-- [Troubleshooting](#troubleshooting)
-- [Limits and defaults](#limits-and-defaults)
+**New to Krater compute?** Do [Your first job](first-job.md) first: it runs a ready-made job end to end in about
+half an hour, for a few cents. This guide is the reference for everything after that.
+
+**Basics:** [The short version](#the-short-version) · [How it works](#how-it-works) ·
+[Before your first job](#before-your-first-job) · [Preparing your image](#preparing-your-image) ·
+[What your command sees](#what-your-command-sees)
+
+**Running a job:** [On the web](#submitting-a-job-on-the-web) · [Choosing a price](#choosing-a-price) ·
+[Inputs](#inputs) · [Data transfer](#data-transfer) · [After you queue it](#after-you-queue-it) ·
+[Getting your results](#getting-your-results)
+
+**Working interactively:** [Boxes](#boxes-working-interactively) · [Secrets](#secrets)
+
+**From a terminal:** [The `krater` command](#from-a-terminal-the-krater-command) · [Recipes](#recipes)
+
+**When you need it:** [Your budget and compute](#your-budget-and-compute) · [Troubleshooting](#troubleshooting) ·
+[Limits and defaults](#limits-and-defaults)
 
 ## The short version
 
 1. Get your project approved, with a budget, and every team member verified in Weave.
-2. Build a container image with your code, push it to a registry the internet can reach (Docker Hub, GitHub
-   Container Registry), and make sure it has `sh` and one of curl, wget or Python.
+2. Send your code: either a folder of it with `krater submit --code .` (it runs on a stock PyTorch image, nothing
+   to build), or your own container image on a public registry (Docker Hub, GitHub Container Registry). See
+   [Preparing your image](#preparing-your-image).
 3. Make your program save checkpoints to `$KRATER_CHECKPOINT_DIR`, resume from them when `$KRATER_RESUMED` is `1`, and
-   write its results to `$KRATER_OUTPUT_DIR`.
+   write its results to `$KRATER_OUTPUT_DIR`. The [starter](first-job.md) does all three: copy it.
 4. On your project's page, open **Compute**, then **New job or box**. Fill in the image, the command, the GPU, and a
    price, and choose **Queue it**.
 5. Watch the job's page. When it finishes, download your results from **Files**, or run `krater download <job>`.
@@ -80,6 +80,34 @@ Check these, in order. Each one stops a job from starting.
 
 ## Preparing your image
 
+### No image: send a folder of code
+
+From a terminal, `--code FOLDER` sends a folder of code with the job instead, so there's nothing to build or publish:
+
+```bash
+krater submit vision --name train --code . --command "python train.py" --gpu "RTX 3090" --limit 0.25
+```
+
+- The folder is uploaded as a project [input](#inputs) named `code/<hash>/`. The hash is of its contents, so an
+  unchanged folder isn't sent again, and each job page shows exactly which version ran.
+- The command runs inside it (`cd "$KRATER_INPUT_DIR/code/<hash>" && ...`), on
+  `pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime` unless you give `--image`.
+- A `requirements.txt` at the top of the folder is installed first (`pip install -r requirements.txt`), on every
+  start of the job.
+- It leaves out `.git`, virtual environments, caches, `checkpoints/`, `outputs/` and `krater-local/`. A folder over
+  100 MB is refused: that's data, which you upload once as an input instead.
+- In a job file, `code = "."` is relative to the file. `krater run` mounts the folder in the same place, so a local
+  try runs the same command. `krater init` writes a starter job set up this way.
+- It's for jobs; a box keeps its own `/workspace`. On the web form, use an image.
+
+Old versions stay in the project's inputs and count toward its storage quota: `krater inputs rm <project> code/`
+clears them all once no queued job needs them.
+
+Build your own image when installing your packages takes long enough to matter on every start, or needs more than
+`pip`.
+
+### Your own image
+
 Krater runs your code inside a container image you build. Any image works if it has:
 
 - **a POSIX shell** (`sh`), and
@@ -101,13 +129,15 @@ Things to know:
   (see [Data transfer](#data-transfer)). A 15 GB image pulled on every move adds up.
 - **Non-root images work.** If your image's user can't create `/krater/...`, Krater uses `/tmp/krater/...` instead,
   and the environment variables point there.
-- **Use a CUDA build that matches your framework.** Hosts provide recent NVIDIA drivers. A
-  `pytorch/pytorch:*-cuda12.*-runtime` image is a safe start.
+- **Use a CUDA build that matches your framework.** Hosts provide recent NVIDIA drivers. Newer GPUs (the RTX 50
+  series) need CUDA 12.8 or later, so `pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime` is a safe start: it runs on
+  every GPU Krater rents (Krater's own tests ran it on an RTX 5060 Ti). Older CUDA builds fail on those cards with
+  *no kernel image is available*.
 
-A minimal training image:
+A minimal training image (the [starter](first-job.md) is a complete one to copy):
 
 ```dockerfile
-FROM pytorch/pytorch:2.4.1-cuda12.1-cudnn9-runtime
+FROM pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
@@ -249,7 +279,7 @@ On your project's page, open **Compute**, then **New job or box**. The page show
 | --- | --- |
 | **Name** | Something you'll recognise later, such as `train-v3-lr3e-4`. Up to 200 characters. Names can repeat |
 | **Kind** | **Job** runs a command and ends. **Box** is an SSH workspace (see [Boxes](#boxes-working-interactively)) |
-| **Container image** | The image's name as `docker pull` takes it, not a web link. The form starts with `pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime` (PyTorch with CUDA); `ubuntu:24.04` is a much smaller bare box; or your own, such as `ghcr.io/owner/image:tag`. The machine provides the GPU driver. Krater asks the registry before queueing, so a name or tag that doesn't exist, or a private image, is refused on the form |
+| **Container image** | The image's name as `docker pull` takes it, not a web link. The form starts with `pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime` (PyTorch with CUDA 12.8, which every GPU Krater rents can run); `ubuntu:24.04` is a much smaller bare box; or your own, such as `ghcr.io/owner/image:tag`. The machine provides the GPU driver. Krater asks the registry before queueing, so a name or tag that doesn't exist, or a private image, is refused on the form |
 | **Command** | What the job runs, through `sh -c`, such as `cd /app && python train.py --epochs 3`. Up to 2,000 characters: put longer scripts in the image. A box has no command |
 
 ### Machine
@@ -684,7 +714,8 @@ job is its name or the start of its id. If that matches more than one, the CLI l
 
 | Option | Meaning |
 | --- | --- |
-| `--name`, `--image` | Required |
+| `--name`, `--image` | Required (`--image` not with `--code`) |
+| `--code FOLDER` | Send this folder of code and run the command inside it, on Krater's PyTorch image ([how](#no-image-send-a-folder-of-code)) |
 | `--command` | What a job runs (not for a box) |
 | `--box` | A box instead of a job |
 | `--gpu MODEL` | A GPU model you accept; repeat it for several |
@@ -714,6 +745,7 @@ queues nothing.
 | --- | --- |
 | `krater show <job>` | State, machine and recent events |
 | `krater rerun <job>` | Queues it again with the same settings (`--name` for a new name) |
+| `krater init [FOLDER]` | Writes the [starter job](first-job.md) into a folder (`--project` fills in `job.toml`) |
 | `krater inputs list\|upload\|rm <project>` | The project's [inputs](#inputs) |
 | `krater logs <job>` | The end of the output. `-f` follows it; `--attempt 1` shows an earlier attempt |
 | `krater wait <job>` | Blocks until the job is finished. Exits 0 if it succeeded, the command's own code if it failed with one, 124 on `--timeout` |

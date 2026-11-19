@@ -2401,3 +2401,184 @@ def test_execute_reports_the_commands_own_exit_and_stops_on_ctrl_c(tmp_path) -> 
         spec, popen=lambda args: FakeProcess(143, interrupt=True), call=lambda args: calls.append(args) or 0
     )
     assert outcome.interrupted and outcome.code == 130 and calls[0][1] == "stop"
+
+
+# -- Code folders (`--code`) and the starter (`krater init`) ------------------------------------------------------
+
+
+def _code_folder(tmp_path, files: dict[str, str]) -> str:
+    folder = tmp_path / "code"
+    for name, text in files.items():
+        path = folder / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    return str(folder)
+
+
+SUBMIT_CODE = ["submit", PROJECT, "--name", "train", "--command", "python train.py", "--gpu", "RTX 4090"]
+
+
+def test_submit_with_code_uploads_the_folder_and_runs_the_command_inside_it(http, fake, tmp_path) -> None:
+    _login(http, [])
+    folder = _code_folder(
+        tmp_path,
+        {
+            "train.py": "print(1)\n",
+            "lib/util.py": "x = 1\n",
+            ".git/HEAD": "ref\n",
+            "__pycache__/train.cpython-312.pyc": "junk",
+            "checkpoints/latest.pt": "big",
+            "krater-local/train/outputs/a": "old",
+        },
+    )
+    said: list[str] = []
+
+    assert run([*SUBMIT_CODE, "--code", folder, "--limit", "0.4"], http=http, say=said.append) == 0
+
+    found = main.code_mod.collect(folder)
+    prefix = f"code/{found.digest}/"
+    assert sorted(fake.inputs) == [prefix + "lib/util.py", prefix + "train.py"]
+    body = fake.jobs[0]["body"]
+    assert body["image"] == main.code_mod.DEFAULT_IMAGE
+    assert body["inputs"] == [prefix]
+    assert body["command"] == f'cd "$KRATER_INPUT_DIR/code/{found.digest}" && python train.py'
+    assert f"Code: uploaded {folder} (2 files, 0 KB) as the input {prefix}" in said
+
+
+def test_an_unchanged_code_folder_is_not_sent_again(http, fake, tmp_path) -> None:
+    _login(http, [])
+    folder = _code_folder(tmp_path, {"train.py": "print(1)\n"})
+    run([*SUBMIT_CODE, "--code", folder, "--limit", "0.4"], http=http, say=lambda _: None)
+    uploads = len([r for r in fake.requests if r.url.path.endswith("/inputs/upload")])
+    said: list[str] = []
+
+    run([*SUBMIT_CODE, "--code", folder, "--limit", "0.4", "--name", "again"], http=http, say=said.append)
+
+    assert len([r for r in fake.requests if r.url.path.endswith("/inputs/upload")]) == uploads
+    assert any(s.startswith(f"Code: {folder} (1 file, 0 KB) is already on Krater as code/") for s in said)
+
+
+def test_a_changed_file_is_a_new_code_folder(tmp_path) -> None:
+    folder = _code_folder(tmp_path, {"train.py": "a = 1\n"})
+    before = main.code_mod.collect(folder).digest
+    (tmp_path / "code" / "train.py").write_text("a = 2\n", encoding="utf-8")  # same size, other content
+    assert main.code_mod.collect(folder).digest != before
+
+
+def test_code_with_requirements_installs_them_first_and_keeps_a_given_image(http, fake, tmp_path) -> None:
+    _login(http, [])
+    folder = _code_folder(tmp_path, {"train.py": "", "requirements.txt": "numpy\n"})
+
+    run([*SUBMIT_CODE, "--code", folder, "--limit", "0.4", "--image", "python:3.12"], http=http, say=lambda _: None)
+
+    body = fake.jobs[0]["body"]
+    assert body["image"] == "python:3.12"
+    assert " && pip install --quiet --no-cache-dir -r requirements.txt && python train.py" in body["command"]
+
+
+def test_code_in_a_job_file_is_relative_to_the_file(http, fake, tmp_path) -> None:
+    _login(http, [])
+    _code_folder(tmp_path, {"train.py": ""})
+    path = _job_file(
+        tmp_path, 'project = "Vision Lab"\nname = "t"\ncode = "code"\ncommand = "python train.py"\nlimit = 0.4\n'
+    )
+    said: list[str] = []
+
+    assert run(["submit", "-f", path], http=http, say=said.append) == 0, said
+    assert fake.jobs[0]["body"]["inputs"][0].startswith("code/")
+
+
+@pytest.mark.parametrize(
+    ("extra", "message"),
+    [
+        (["--box"], "--code is for jobs; a box keeps its own /workspace."),
+        ([], "Give --command too: what to run inside the folder, such as python train.py."),
+    ],
+)
+def test_code_needs_a_job_with_a_command(http, fake, tmp_path, extra, message) -> None:
+    _login(http, [])
+    folder = _code_folder(tmp_path, {"train.py": ""})
+    argv = ["submit", PROJECT, "--name", "t", "--code", folder, "--limit", "0.4", *extra]
+    said: list[str] = []
+
+    assert run(argv, http=http, say=said.append) == 2
+    assert said == [message]
+    assert fake.jobs == [] and fake.inputs == {}
+
+
+def test_a_folder_of_data_is_refused_with_advice(tmp_path, monkeypatch) -> None:
+    folder = _code_folder(tmp_path, {"a.bin": "x" * 10, "b.bin": "y" * 10})
+    monkeypatch.setattr(main.code_mod, "MAX_BYTES", 15)
+    with pytest.raises(main.code_mod.CodeError, match="that's data, not code"):
+        main.code_mod.collect(folder)
+
+
+def test_run_with_code_mounts_the_folder_where_krater_puts_it(http, fake, tmp_path) -> None:
+    docker = Docker()
+    folder = _code_folder(tmp_path, {"train.py": ""})
+    said: list[str] = []
+
+    code = _run_local(
+        ["--code", folder, "--command", "python train.py", "--name", "t", "--dir", str(tmp_path / "out")],
+        http,
+        docker,
+        said,
+    )
+
+    assert code == 0 and fake.requests == []  # nothing uploaded for a local run
+    spec = docker.runs[0]
+    digest = main.code_mod.collect(folder).digest
+    assert spec.image == main.code_mod.DEFAULT_IMAGE
+    assert spec.mounts == [(folder, f"/krater/inputs/code/{digest}")]
+    assert spec.command == f'cd "$KRATER_INPUT_DIR/code/{digest}" && python train.py'
+    assert f"{os.path.abspath(folder)}:/krater/inputs/code/{digest}:ro" in spec.docker_args("c")
+
+
+def test_init_writes_the_starter_with_the_project(http, fake, tmp_path) -> None:
+    target = tmp_path / "my-job"
+    said: list[str] = []
+
+    assert run(["init", str(target), "--project", "Vision Lab"], http=http, say=said.append) == 0
+
+    assert fake.requests == []  # works without signing in
+    for _, name in main.init_mod.FILES:
+        assert (target / name).is_file(), name
+    job = (target / "job.toml").read_text(encoding="utf-8")
+    assert 'project = "Vision Lab"' in job and 'code = "."' in job
+    assert said[0].startswith(f"Wrote 7 files to {target}: train.py, job.toml")
+
+
+def test_init_does_not_overwrite_without_force(http, tmp_path) -> None:
+    target = tmp_path / "my-job"
+    target.mkdir()
+    (target / "train.py").write_text("mine", encoding="utf-8")
+    said: list[str] = []
+
+    assert run(["init", str(target)], http=http, say=said.append) == 2
+    assert (target / "train.py").read_text(encoding="utf-8") == "mine"
+    assert run(["init", str(target), "--force"], http=http, say=said.append) == 0
+    assert "KRATER" in (target / "train.py").read_text(encoding="utf-8")
+
+
+def test_the_initialised_job_file_runs_its_own_folder(http, fake, tmp_path) -> None:
+    """The starter's job.toml, as `krater init` writes it, uploads its folder and runs train.py in it."""
+    _login(http, [])
+    target = tmp_path / "my-job"
+    run(["init", str(target), "--project", PROJECT], http=http, say=lambda _: None)
+    said: list[str] = []
+
+    assert run(["submit", "-f", str(target / "job.toml")], http=http, say=said.append) == 0, said
+    body = fake.jobs[0]["body"]
+    assert body["command"].endswith(" && python train.py --minutes 20")
+    assert body["checkpoint_upload_minutes"] == 5 and body["limit_usd_per_hour"] == "0.15"
+    assert {name.rsplit("/", 1)[-1] for name in fake.inputs} >= {"train.py", "job.toml", "README.md"}
+
+
+def test_the_packaged_starter_matches_examples_starter() -> None:
+    """`krater init` ships its own copy of the repo's examples/starter: they must not drift apart."""
+    root = os.path.join(os.path.dirname(__file__), "..", "..", "examples", "starter")
+    if not os.path.isdir(root):
+        pytest.skip("not in the Krater repo")
+    for packaged, target in main.init_mod.FILES:
+        with open(os.path.join(root, *target.split("/")), encoding="utf-8") as handle:
+            assert main.init_mod.read(packaged) == handle.read(), target

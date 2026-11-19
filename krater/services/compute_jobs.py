@@ -76,8 +76,10 @@ LIMITED_STATES = (
 )
 _IMAGE_RE = re.compile(r"^[a-z0-9][a-z0-9._\-/:@]*$")
 #: What the job form starts with: public, with a shell and Python, and PyTorch with CUDA for a GPU. A box that needs
-#: none of that can use `ubuntu:24.04`, a much smaller pull.
-DEFAULT_IMAGE = "pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime"
+#: none of that can use `ubuntu:24.04`, a much smaller pull. CUDA 12.8 or later, because the RTX 50 series (often the
+#: cheapest offers) has no kernels in older PyTorch builds ("no kernel image is available"); this one ran on an RTX
+#: 5060 Ti in the 2026-11-19 staging test.
+DEFAULT_IMAGE = "pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime"
 _EXAMPLE_IMAGES = f"such as {DEFAULT_IMAGE} or ubuntu:24.04"
 #: A web address someone pasted for an image: Docker Hub's and GitHub's pages, or any URL.
 _LINK_RE = re.compile(r"^(?:[a-z]+://|(?:www\.)?(?:hub\.docker\.com|github\.com)/)", re.IGNORECASE)

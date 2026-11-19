@@ -5,29 +5,27 @@ private Slack channel with your team and the reviewers, and once you're approved
 machines that Krater rents for you. When you're done, you write up what you built, and it goes in the public
 gallery.
 
-This guide covers everything except running compute, which has its own guide:
+This guide covers everything except running compute. For that, start with [Your first job](first-job.md), then
 [Running jobs and boxes](compute-jobs.md).
 
-- [The life of a project](#the-life-of-a-project)
-- [Before you apply](#before-you-apply)
-- [Writing your application](#writing-your-application)
-- [Your team](#your-team)
-- [Submitting](#submitting)
-- [Review](#review)
-- [Approved: your budget](#approved-your-budget)
-- [Asking for more budget: amendments](#asking-for-more-budget-amendments)
-- [Finishing: completion and the gallery](#finishing-completion-and-the-gallery)
-- [Withdrawing](#withdrawing)
-- [Slack](#slack)
-- [Questions](#questions)
+**Start:** [The life of a project](#the-life-of-a-project) · [Before you apply](#before-you-apply) ·
+[Writing your application](#writing-your-application) · [Your team](#your-team) · [Submitting](#submitting) ·
+[Review](#review)
+
+**Once approved:** [Your budget](#approved-your-budget) ·
+[Progress updates and top-ups](#progress-updates-and-top-ups) ·
+[Amendments](#asking-for-more-budget-amendments) · [Finishing and the gallery](#finishing-completion-and-the-gallery)
+
+**Also:** [Withdrawing](#withdrawing) · [Slack](#slack) · [Questions](#questions)
 
 ## The life of a project
 
 1. **Draft**: you write the proposal and choose **Submit for review**.
 2. **Pending review**: reviewers decide. A rejection, with a reason, sends it to **Changes requested**; you edit it
    and submit again.
-3. **Approved**: you have a budget and run your work. Need more? An **amendment** is reviewed the same way, and the
-   project stays approved meanwhile.
+3. **Approved**: you have a budget and run your work, and share progress updates as you go. Need more? Ask for a
+   **top-up** (or change the plan with an **amendment**); it's reviewed the same way, and the project stays approved
+   meanwhile.
 4. **Pending completion review**: you submit your final write-up. Reviewers approve it, or ask for changes
    (**Completion changes requested**) and you resubmit.
 5. **Completed**: the project is in the public gallery.

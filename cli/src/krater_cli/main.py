@@ -40,6 +40,8 @@ from urllib.parse import quote
 import httpx
 
 from krater_cli import __version__, auth, follow, jobfile, local, resolve, store
+from krater_cli import code as code_mod
+from krater_cli import init as init_mod
 from krater_cli.api import Krater, KraterError
 from krater_cli.resolve import ResolveError, short
 
@@ -115,7 +117,13 @@ def _add_job_options(parser: argparse.ArgumentParser) -> None:
         "-f", "--file", metavar="JOB.TOML", help="read the options from a TOML file; options given here win"
     )
     parser.add_argument("--name", help="required, here or in the file")
-    parser.add_argument("--image", help="your container image; it needs a POSIX sh (required)")
+    parser.add_argument("--image", help="your container image; it needs a POSIX sh (required, unless --code)")
+    parser.add_argument(
+        "--code",
+        metavar="FOLDER",
+        help="run the command inside this folder of code, uploaded as a project input: no image to build. The image "
+        f"defaults to {code_mod.DEFAULT_IMAGE}; a requirements.txt is installed first",
+    )
     parser.add_argument("--command", dest="job_command", help="what the job runs (not for a box)")
     parser.add_argument("--box", action="store_true", help="an interactive SSH box instead of a job")
     parser.add_argument("--gpu", action="append", default=[], help="a GPU model you accept (repeatable)")
@@ -187,6 +195,12 @@ def _parser() -> argparse.ArgumentParser:
     )
     login.add_argument("--no-browser", action="store_true", help="don't open a browser; paste the code instead")
     commands.add_parser("logout", help="forget the stored sign-in")
+    init = commands.add_parser(
+        "init", help="write a starter job into a folder: a small training job that checkpoints, resumes and saves"
+    )
+    init.add_argument("folder", nargs="?", default="krater-starter", help="where (default krater-starter)")
+    init.add_argument("--project", help="your project, written into its job.toml")
+    init.add_argument("--force", action="store_true", help="replace the starter's files if the folder has them")
     commands.add_parser("whoami", help="who you're signed in as")
     projects = commands.add_parser("projects", help="your projects")
     projects.add_argument("--all", action="store_true", help="include withdrawn and completed projects")
@@ -768,6 +782,59 @@ def _job_body(args: argparse.Namespace, prices: dict) -> dict:
     return body
 
 
+def _apply_code(args: argparse.Namespace, from_command_line: str | None) -> code_mod.Code | None:
+    """`--code`: read the folder, and make the job run in it (on the default image unless one is given). A folder
+    named in a job file is relative to the file. Raises `code_mod.CodeError`."""
+    if not args.code:
+        return None
+    if args.box:
+        raise code_mod.CodeError("--code is for jobs; a box keeps its own /workspace.")
+    if not args.job_command:
+        raise code_mod.CodeError("Give --command too: what to run inside the folder, such as python train.py.")
+    folder = args.code
+    if from_command_line is None and args.file and not os.path.isabs(folder):
+        folder = os.path.join(os.path.dirname(os.path.abspath(args.file)), folder)
+    found = code_mod.collect(folder)
+    args.image = args.image or code_mod.DEFAULT_IMAGE
+    args.job_command = found.command(args.job_command)
+    args.input = [*args.input, found.input_name]
+    return found
+
+
+def _upload_code(krater: Krater, http: httpx.Client, project_id: str, found: code_mod.Code, say) -> None:
+    """Send the folder as the project input `code/<hash>/`, skipping what's already there (an unchanged folder)."""
+    base = f"/projects/{project_id}/inputs"
+    stored = {f["name"]: f["size_bytes"] for f in krater.get(base)["inputs"]}
+    prefix = found.input_name
+    files = [(path, prefix + rel) for path, rel in found.files]
+    if all(stored.get(name) == os.path.getsize(path) for path, name in files):
+        say(f"Code: {found.folder} ({code_mod.describe(found)}) is already on Krater as {prefix}")
+        return
+    for path, name in files:
+        size = os.path.getsize(path)
+        if stored.get(name) != size:
+            _send_input(krater, http, base, path, name, size)
+    say(f"Code: uploaded {found.folder} ({code_mod.describe(found)}) as the input {prefix}")
+
+
+def _init(args: argparse.Namespace, say: Callable[[str], None]) -> int:
+    try:
+        written = init_mod.write(args.folder, project=args.project, force=args.force)
+    except init_mod.InitError as exc:
+        say(str(exc))
+        return 2
+    say(f"Wrote {len(written)} files to {args.folder}: {', '.join(written)}.")
+    if not args.project:
+        say("Set `project` in job.toml to your project's name (or give --project next time).")
+    say("Next:")
+    say(f"  cd {args.folder}")
+    say("  krater run -f job.toml --smoke       # try it here in Docker, free")
+    say("  krater submit -f job.toml --estimate # what it may cost on a GPU")
+    say("  krater submit -f job.toml            # run it")
+    say("README.md says how to make it your own.")
+    return 0
+
+
 def _project_env_names(http: httpx.Client, project: str, say: Callable[[str], None]) -> list[str]:
     """The project's secret names, for `krater run`; empty, with a line saying why, when Krater can't be asked."""
     try:
@@ -787,12 +854,18 @@ def _run_here(
     which: Callable[[str], str | None],
 ) -> int:
     """`krater run`: the job in Docker on this computer (`krater_cli.local`)."""
+    code_given = args.code
     try:
         sweep_table = jobfile.apply(jobfile.load(args.file), args, args.submit_parser) if args.file else {}
     except jobfile.JobFileError as exc:
         say(str(exc))
         return 2
     _fill_defaults(args)
+    try:
+        found = _apply_code(args, code_given)
+    except code_mod.CodeError as exc:
+        say(str(exc))
+        return 2
     if args.box:
         say(
             "A box is an SSH machine with no command to run. To try its image here: "
@@ -828,9 +901,10 @@ def _run_here(
             "or give --docker podman."
         )
         return 1
-    if args.input and not args.input_dir:
+    project_inputs = [name for name in args.input if not (found and name == found.input_name)]
+    if project_inputs and not args.input_dir:
         say(
-            "The job takes project inputs (" + ", ".join(args.input) + "). Here, give a folder holding them with "
+            "The job takes project inputs (" + ", ".join(project_inputs) + "). Here, give a folder holding them with "
             "--input-dir FOLDER: the job sees it as $KRATER_INPUT_DIR."
         )
         return 2
@@ -838,7 +912,7 @@ def _run_here(
         if not os.path.isdir(args.input_dir):
             say(f"No folder {args.input_dir}.")
             return 2
-        absent = [name for name in args.input if not os.path.exists(os.path.join(args.input_dir, name.rstrip("/")))]
+        absent = [name for name in project_inputs if not os.path.exists(os.path.join(args.input_dir, name.rstrip("/")))]
         if absent:
             say(
                 f"Not in {args.input_dir}, so the job won't find them: {', '.join(absent)}. The folder stands for "
@@ -875,6 +949,7 @@ def _run_here(
         resumed=args.resumed,
         smoke_minutes=smoke,
         env_names=passed,
+        mounts=[(found.folder, local.INPUT_DIR + "/" + found.input_name.rstrip("/"))] if found else [],
     )
     say(
         f"Running {body['image']} here, as a Krater machine would"
@@ -940,6 +1015,8 @@ def run(
 
     if args.command == "run":
         return _run_here(args, http, say, run_local, which)  # works without signing in
+    if args.command == "init":
+        return _init(args, say)  # so does this
 
     krater = Krater(http, sleep=sleep)
 
@@ -986,12 +1063,18 @@ def run(
         ]
         out(data, lambda: _table(rows, say) if data["jobs"] else say("No jobs yet."))
     elif args.command == "submit":
+        code_given = args.code
         try:
             sweep_table = jobfile.apply(jobfile.load(args.file), args, args.submit_parser) if args.file else {}
         except jobfile.JobFileError as exc:
             say(str(exc))
             return 2
         _fill_defaults(args)
+        try:
+            found = _apply_code(args, code_given)
+        except code_mod.CodeError as exc:
+            say(str(exc))
+            return 2
         smoke = _smoke_minutes(args)
         if smoke is not None and args.box:
             say("A smoke test is for jobs: a box already runs until you stop it.")
@@ -1044,7 +1127,10 @@ def run(
             say(f"A smoke test runs only the first of the sweep's {len(runs)} jobs ({runs[0][0]['name']}).")
             runs = runs[:1]
             args.smoke_of_sweep = True
-        path = f"/projects/{resolve.resolve_project(krater, args.project)}/jobs"
+        project_id = resolve.resolve_project(krater, args.project)
+        if found is not None:
+            _upload_code(krater, http, project_id, found, say)
+        path = f"/projects/{project_id}/jobs"
         return _queue(krater, path, runs, args, say=say, prompt=prompt, out=out, sleep=sleep)
     elif args.command == "rerun":
         source = krater.get(f"/jobs/{resolve.resolve_job(krater, args.job)}")
@@ -1591,17 +1677,7 @@ def _upload_inputs(
         if stored.get(name) == size:
             skipped += 1
             continue
-        upload = krater.post(f"{base}/upload", {"name": name, "size": size})
-        with open(path, "rb") as handle:
-            if "url" in upload:
-                _put(http, upload["url"], handle, 0, size)
-            else:
-                part = upload["part_bytes"]
-                etags = [
-                    _put(http, url, handle, n * part, min(part, size - n * part))
-                    for n, url in enumerate(upload["parts"])
-                ]
-                krater.post(f"{base}/complete", {"name": name, "upload_id": upload["upload_id"], "etags": etags})
+        _send_input(krater, http, base, path, name, size)
         sent += 1
         say(f"Uploaded {name} ({_size(size)})")
     if skipped:
@@ -1609,6 +1685,19 @@ def _upload_inputs(
     if not sent and not skipped:
         say("No files to upload.")
     return 0
+
+
+def _send_input(krater: Krater, http: httpx.Client, base: str, path: str, name: str, size: int) -> None:
+    upload = krater.post(f"{base}/upload", {"name": name, "size": size})
+    with open(path, "rb") as handle:
+        if "url" in upload:
+            _put(http, upload["url"], handle, 0, size)
+        else:
+            part = upload["part_bytes"]
+            etags = [
+                _put(http, url, handle, n * part, min(part, size - n * part)) for n, url in enumerate(upload["parts"])
+            ]
+            krater.post(f"{base}/complete", {"name": name, "upload_id": upload["upload_id"], "etags": etags})
 
 
 def _put(http: httpx.Client, url: str, handle, offset: int, length: int) -> str:

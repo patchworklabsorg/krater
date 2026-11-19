@@ -40,6 +40,11 @@ GUIDES: tuple[Guide, ...] = (
         "members",
     ),
     Guide(
+        "first-job",
+        "Start here for compute: krater init, try it free, run it on a GPU for a few cents, get the results.",
+        "members",
+    ),
+    Guide(
         "compute-jobs",
         "Preparing an image, submitting a job, choosing a price, results, boxes, secrets and the krater command.",
         "members",

@@ -54,6 +54,8 @@ class LocalRun:
     smoke_minutes: int | None = None
     # Secret names to pass through from this shell's environment (`-e NAME`, so the value never reaches argv).
     env_names: list[str] = field(default_factory=list)
+    # More read-only folders: (folder here, path in the container). `--code` puts its folder where Krater would.
+    mounts: list[tuple[str, str]] = field(default_factory=list)
 
     def container_name(self) -> str:
         safe = re.sub(r"[^a-zA-Z0-9_.-]+", "-", self.name).strip("-.")[:40] or "job"
@@ -92,6 +94,8 @@ class LocalRun:
         ]
         if self.input_dir:
             args += ["-v", f"{os.path.abspath(self.input_dir)}:{INPUT_DIR}:ro"]
+        for here, there in self.mounts:
+            args += ["-v", f"{os.path.abspath(here)}:{there}:ro"]
         if self.smoke_minutes:
             args += ["-e", "KRATER_SMOKE=1"]
         for name in self.env_names:
