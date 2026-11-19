@@ -153,6 +153,12 @@
         </div>
       </div>
       <div class="field">
+        <label for="job-checkpoint-upload">Upload checkpoints every (minutes, jobs only, optional)</label>
+        <input type="text" inputmode="numeric" id="job-checkpoint-upload" name="checkpoint_upload_minutes" placeholder="{{ checkpoint_upload_default }}" value="{{ posted.checkpoint_upload_minutes or '' }}">
+        <p class="field-hint">How often the files in <code>$KRATER_CHECKPOINT_DIR</code> that changed go up to the project's storage: 1 to {{ checkpoint_upload_max }}, every {{ checkpoint_upload_default }} if blank. Saving into the folder is free and survives an outbid pause on the same machine; the upload is what a job resumes from when it moves to another machine, so it loses at most this long of work. Each upload sends every changed file whole, billed as data out: a 1 GB checkpoint every 2 minutes is 30 GB an hour.</p>
+        {% if errors.checkpoint_upload_minutes %}<p class="field-error">{{ errors.checkpoint_upload_minutes }}</p>{% endif %}
+      </div>
+      <div class="field">
         <label for="job-inputs">Inputs from this project (optional)</label>
         <textarea id="job-inputs" name="inputs" rows="2" placeholder="data/train.tar">{{ posted.inputs or '' }}</textarea>
         <p class="field-hint">One per line: a file from the project's <a href="/projects/{{ project.id }}/compute#inputs">inputs</a>, or a folder ending in /. Copied into <code>$KRATER_INPUT_DIR</code> before the command starts, and counted as data in.</p>
