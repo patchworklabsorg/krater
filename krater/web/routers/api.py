@@ -113,7 +113,7 @@ def api_actor(
     try:
         return user_service.authorize(db_session, weave_client, user, fresh=request.method not in ("GET", "HEAD"))
     except NotAMember as exc:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=exc.message) from exc
     except WeaveUnavailableError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Weave is unavailable") from exc
 
@@ -476,7 +476,7 @@ async def submit(
     except ConfirmationRequired as exc:
         db_session.rollback()
         # Sent again with `"confirm_transfer_cost": true`, the job is queued.
-        return _error(409, str(exc), confirm="confirm_transfer_cost")
+        return _error(409, exc.message, confirm="confirm_transfer_cost")
     except StorageError:
         db_session.rollback()
         return _error(503, "Krater's storage didn't answer; try again in a minute.")
@@ -485,10 +485,10 @@ async def submit(
         return _error(422, "Check the job's fields.", fields=exc.errors)
     except NotAllowed as exc:
         db_session.rollback()
-        return _error(403, str(exc))
+        return _error(403, exc.message)
     except (InvalidState, DomainError) as exc:
         db_session.rollback()
-        return _error(409, str(exc))
+        return _error(409, exc.message)
     db_session.commit()
     return {**_job_json(job), "estimate": _estimate_json(db_session, project, job)}
 
@@ -570,7 +570,7 @@ async def begin_input_upload(project_id: uuid.UUID, request: Request, actor: Me,
         )
     except NotAllowed as exc:
         db_session.rollback()
-        return _error(403, str(exc))
+        return _error(403, exc.message)
     except ValidationFailed as exc:
         db_session.rollback()
         return _error(422, "Check the upload.", fields=exc.errors)
@@ -596,7 +596,7 @@ async def complete_input_upload(project_id: uuid.UUID, request: Request, actor: 
             etags=etags,
         )
     except NotAllowed as exc:
-        return _error(403, str(exc))
+        return _error(403, exc.message)
     except ValidationFailed as exc:
         return _error(422, "Check the upload.", fields=exc.errors)
     except StorageError:
@@ -610,7 +610,7 @@ def delete_input(project_id: uuid.UUID, name: str, actor: Me, db_session: Db):
     try:
         deleted = compute_inputs.delete_input(get_compute_store(), actor, project=project, name=name)
     except NotAllowed as exc:
-        return _error(403, str(exc))
+        return _error(403, exc.message)
     except ValidationFailed as exc:
         return _error(404, exc.errors.get("name", "No such input."))
     except StorageError:
@@ -632,7 +632,7 @@ def job_logs(job_id: uuid.UUID, actor: Me, db_session: Db, attempt: int | None =
             get_compute_store(), actor, job=job, attempt=attempt, max_bytes=max(1, min(bytes, 1024 * 1024))
         )
     except NotAllowed as exc:
-        return _error(403, str(exc))
+        return _error(403, exc.message)
     except StorageError:
         return _error(503, "Krater's storage didn't answer; try again in a minute.")
     if tail is None:
@@ -651,7 +651,7 @@ def job_files(job_id: uuid.UUID, actor: Me, db_session: Db):
             "files": [{"area": f.area, "name": f.name, "size_bytes": f.size_bytes, "url": url} for f, url in downloads]
         }
     except NotAllowed as exc:
-        return _error(403, str(exc))
+        return _error(403, exc.message)
     except StorageError:
         return _error(503, "Krater's storage didn't answer; try again in a minute.")
 
@@ -670,7 +670,7 @@ def project_files_summary(project_id: uuid.UUID, actor: Me, db_session: Db):
     try:
         shown = project_files.summary(db_session, get_compute_store(), actor, project)
     except NotAllowed as exc:
-        return _error(403, str(exc))
+        return _error(403, exc.message)
     except StorageError:
         return _error(503, "Krater's storage didn't answer; try again in a minute.")
     return {
@@ -734,9 +734,9 @@ def workspace_files(project_id: uuid.UUID, workspace_id: uuid.UUID, actor: Me, d
         _, workspace = _workspace(db_session, actor, project_id, workspace_id)
         shown, urls = workspaces.downloads(get_compute_store(), workspace)
     except NotAllowed as exc:
-        return _error(403, str(exc))
+        return _error(403, exc.message)
     except NotFound as exc:
-        return _error(404, str(exc))
+        return _error(404, exc.message)
     except StorageError:
         return _error(503, "Krater's storage didn't answer; try again in a minute.")
     return {
@@ -765,13 +765,13 @@ def delete_workspace(project_id: uuid.UUID, workspace_id: uuid.UUID, actor: Me, 
         count = workspaces.delete(db_session, get_compute_store(), actor, workspace=workspace, now=datetime.now(UTC))
     except NotAllowed as exc:
         db_session.rollback()
-        return _error(403, str(exc))
+        return _error(403, exc.message)
     except NotFound as exc:
         db_session.rollback()
-        return _error(404, str(exc))
+        return _error(404, exc.message)
     except InvalidState as exc:
         db_session.rollback()
-        return _error(409, str(exc))
+        return _error(409, exc.message)
     except StorageError:
         db_session.rollback()
         return _error(503, "Krater's storage didn't answer; try again in a minute.")
@@ -828,10 +828,10 @@ async def post_update(project_id: uuid.UUID, request: Request, actor: Me, db_ses
         update = project_updates.post(db_session, actor, project=project, body=body["body"])
     except NotAllowed as exc:
         db_session.rollback()
-        return _error(403, str(exc))
+        return _error(403, exc.message)
     except InvalidState as exc:
         db_session.rollback()
-        return _error(409, str(exc))
+        return _error(409, exc.message)
     except ValidationFailed as exc:
         db_session.rollback()
         return _error(422, "Check the update.", fields=exc.errors)
@@ -866,10 +866,10 @@ def job_action(
         _ACTIONS[action](db_session, actor, job=job, now=datetime.now(UTC), **extra)
     except NotAllowed as exc:
         db_session.rollback()
-        return _error(403, str(exc))
+        return _error(403, exc.message)
     except (InvalidState, DomainError) as exc:
         db_session.rollback()
-        return _error(409, str(exc))
+        return _error(409, exc.message)
     db_session.commit()
     return _job_json(job)
 
@@ -905,10 +905,10 @@ async def set_secret(project_id: uuid.UUID, name: str, request: Request, actor: 
         return _error(422, "Check the secret.", fields=exc.errors)
     except NotAllowed as exc:
         db_session.rollback()
-        return _error(403, str(exc))
+        return _error(403, exc.message)
     except InvalidState as exc:
         db_session.rollback()
-        return _error(409, str(exc))
+        return _error(409, exc.message)
     db_session.commit()
     return {"name": secret.name, "updated_at": _iso(secret.updated_at)}
 
@@ -920,10 +920,10 @@ def delete_secret(project_id: uuid.UUID, name: str, actor: Me, db_session: Db):
         project_secrets.delete_secret(db_session, actor, project=project, name=name)
     except NotAllowed as exc:
         db_session.rollback()
-        return _error(403, str(exc))
+        return _error(403, exc.message)
     except NotFound as exc:
         db_session.rollback()
-        return _error(404, str(exc))
+        return _error(404, exc.message)
     db_session.commit()
     return {"deleted": name}
 

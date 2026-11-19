@@ -141,7 +141,7 @@ def _quilt_action(db_session: Session, request: Request, action, actor: Actor, e
         action(db_session, actor, row_id=event_id, reason=reason)
     except (InvalidState, ValidationFailed) as exc:
         db_session.rollback()
-        flash(request, str(exc), "error")
+        flash(request, exc.message, "error")
         return RedirectResponse("/admin#quilt", status_code=303)
     db_session.commit()
     kick_quilt_delivery()

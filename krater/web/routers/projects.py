@@ -185,7 +185,7 @@ def _invalid_state_redirect(
     db_session: Session, request: Request, project_id: uuid.UUID, exc: InvalidState
 ) -> RedirectResponse:
     db_session.rollback()
-    flash(request, str(exc), "error")
+    flash(request, exc.message, "error")
     return _redirect_to_project(project_id)
 
 
@@ -420,7 +420,7 @@ def edit_draft_form(
 ):
     project, draft = _editable(request, db_session, actor, project_id)
     if draft is None:
-        return _redirect_to_project(project_id)
+        return _redirect_to_project(project.id)
     context = _edit_context(db_session, weave_client, store, actor, project, draft)
     return templates.TemplateResponse(request, "projects/edit.html", context)
 
@@ -436,7 +436,7 @@ async def update_draft(
 ):
     project, draft = _editable(request, db_session, actor, project_id)
     if draft is None:
-        return _redirect_to_project(project_id)
+        return _redirect_to_project(project.id)
     form = await request.form()
 
     if draft.kind is RevisionKind.COMPLETION:
@@ -459,7 +459,7 @@ async def update_draft(
         )
         db_session.commit()
         flash(request, "Draft saved.", "success")
-        return RedirectResponse(f"/projects/{project_id}/edit", status_code=303)
+        return RedirectResponse(f"/projects/{project.id}/edit", status_code=303)
 
     fill = _fill_from_action(str(form.get("form_action", "save")))
     posted = application_form.parse(
@@ -497,7 +497,7 @@ async def update_draft(
         return _again(422)
     db_session.commit()
     flash(request, "Draft saved.", "success")
-    return RedirectResponse(f"/projects/{project_id}/edit", status_code=303)
+    return RedirectResponse(f"/projects/{project.id}/edit", status_code=303)
 
 
 # --------------------------------------------------------------------------------------------------
@@ -763,7 +763,7 @@ def submit_project(
     if membership_error is not None:
         db_session.rollback()
         flash(request, membership_error, "error")
-        return _redirect_to_project(project_id)
+        return _redirect_to_project(project.id)
 
     # Ask Weave about the demographics answers now, before `submit` locks the project row, so a slow Weave never holds
     # the lock. The answer is used after the other checks (below), so a member fixes missing answers first.
@@ -787,7 +787,7 @@ def submit_project(
         )
         return templates.TemplateResponse(request, "projects/edit.html", context, status_code=422)
     except InvalidState as exc:
-        return _invalid_state_redirect(db_session, request, project_id, exc)
+        return _invalid_state_redirect(db_session, request, project.id, exc)
 
     # The demographics gate runs last, so a member fixes missing answers first. The rollback undoes the submit and
     # leaves the saved draft as it was. The page links to Weave's form, which sends the member back here.
@@ -798,14 +798,14 @@ def submit_project(
         )
         return templates.TemplateResponse(request, "projects/detail.html", context, status_code=409)
     if isinstance(demographics_error, DemographicsCheckUnavailable):
-        return _invalid_state_redirect(db_session, request, project_id, demographics_error)
+        return _invalid_state_redirect(db_session, request, project.id, demographics_error)
 
     revision_id = project.current_revision_id
 
     def _notify() -> None:
         slack_notify_revision_submitted.defer(revision_id=str(revision_id))
 
-    return _success_redirect(db_session, request, project_id, "Project submitted for review.", after_commit=_notify)
+    return _success_redirect(db_session, request, project.id, "Project submitted for review.", after_commit=_notify)
 
 
 @router.post("/projects/{project_id}/submit-completion", dependencies=[Depends(verify_csrf_token)])
@@ -823,7 +823,7 @@ def submit_completion(
     if membership_error is not None:
         db_session.rollback()
         flash(request, membership_error, "error")
-        return _redirect_to_project(project_id)
+        return _redirect_to_project(project.id)
 
     try:
         project_service.submit_completion(db_session, actor, project=project)
@@ -835,14 +835,14 @@ def submit_completion(
         )
         return templates.TemplateResponse(request, "projects/edit.html", context, status_code=422)
     except InvalidState as exc:
-        return _invalid_state_redirect(db_session, request, project_id, exc)
+        return _invalid_state_redirect(db_session, request, project.id, exc)
 
     revision_id = project.current_revision_id
 
     def _notify() -> None:
         slack_notify_revision_submitted.defer(revision_id=str(revision_id))
 
-    return _success_redirect(db_session, request, project_id, "Completion submitted for review.", after_commit=_notify)
+    return _success_redirect(db_session, request, project.id, "Completion submitted for review.", after_commit=_notify)
 
 
 @router.post("/projects/{project_id}/amend", dependencies=[Depends(verify_csrf_token)])
@@ -856,9 +856,9 @@ def start_amendment(
     try:
         project_service.start_amendment(db_session, actor, project=project)
     except InvalidState as exc:
-        return _invalid_state_redirect(db_session, request, project_id, exc)
+        return _invalid_state_redirect(db_session, request, project.id, exc)
     db_session.commit()
-    return RedirectResponse(f"/projects/{project_id}/edit", status_code=303)
+    return RedirectResponse(f"/projects/{project.id}/edit", status_code=303)
 
 
 @router.post("/projects/{project_id}/complete", dependencies=[Depends(verify_csrf_token)])
@@ -872,9 +872,9 @@ def start_completion(
     try:
         project_service.start_completion(db_session, actor, project=project)
     except InvalidState as exc:
-        return _invalid_state_redirect(db_session, request, project_id, exc)
+        return _invalid_state_redirect(db_session, request, project.id, exc)
     db_session.commit()
-    return RedirectResponse(f"/projects/{project_id}/edit", status_code=303)
+    return RedirectResponse(f"/projects/{project.id}/edit", status_code=303)
 
 
 @router.post("/projects/{project_id}/withdraw", dependencies=[Depends(verify_csrf_token)])
@@ -897,7 +897,7 @@ def withdraw_project(
         )
         return templates.TemplateResponse(request, "projects/detail.html", context, status_code=422)
     except InvalidState as exc:
-        return _invalid_state_redirect(db_session, request, project_id, exc)
+        return _invalid_state_redirect(db_session, request, project.id, exc)
 
     def _notify() -> None:
         slack_archive_channel.defer(project_id=str(project.id))
@@ -906,7 +906,7 @@ def withdraw_project(
                 project_id=str(project.id), action="admin_withdraw", actor_sub=actor.user.weave_sub, reason=reason
             )
 
-    return _success_redirect(db_session, request, project_id, "Project withdrawn.", after_commit=_notify)
+    return _success_redirect(db_session, request, project.id, "Project withdrawn.", after_commit=_notify)
 
 
 # --------------------------------------------------------------------------------------------------
@@ -935,11 +935,11 @@ def invite_team_member(
     except WeaveUnavailableError:
         db_session.rollback()
         flash(request, "Weave isn't answering, so Krater can't look that person up. Try again shortly.", "error")
-        return _redirect_to_project(project_id)
+        return _redirect_to_project(project.id)
     except InvalidState as exc:
-        return _invalid_state_redirect(db_session, request, project_id, exc)
+        return _invalid_state_redirect(db_session, request, project.id, exc)
     return _success_redirect(
-        db_session, request, project_id, "Invited. They join the team once they accept on their Krater home page."
+        db_session, request, project.id, "Invited. They join the team once they accept on their Krater home page."
     )
 
 
@@ -953,15 +953,16 @@ def accept_team_invitation(
     weave_client: Weave,
 ):
     try:
-        teams.accept(db_session, actor, weave_client, member_id=member_id)
+        member = teams.accept(db_session, actor, weave_client, member_id=member_id)
     except InvalidState as exc:
-        return _invalid_state_redirect(db_session, request, project_id, exc)
+        project = project_service.get_project(db_session, project_id=project_id)
+        return _invalid_state_redirect(db_session, request, project.id, exc)
     return _success_redirect(
         db_session,
         request,
-        project_id,
+        member.project_id,
         "You're on the team.",
-        after_commit=lambda: slack_invite_team.defer(project_id=str(project_id)),
+        after_commit=lambda: slack_invite_team.defer(project_id=str(member.project_id)),
     )
 
 
@@ -976,7 +977,8 @@ def decline_team_invitation(
     try:
         teams.decline(db_session, actor, member_id=member_id)
     except InvalidState as exc:
-        return _invalid_state_redirect(db_session, request, project_id, exc)
+        project = project_service.get_project(db_session, project_id=project_id)
+        return _invalid_state_redirect(db_session, request, project.id, exc)
     db_session.commit()
     flash(request, "Invitation declined.", "success")
     return RedirectResponse("/", status_code=303)
@@ -995,7 +997,7 @@ def remove_team_member(
     try:
         left = teams.remove(db_session, actor, project=project, member_id=member_id)
     except InvalidState as exc:
-        return _invalid_state_redirect(db_session, request, project_id, exc)
+        return _invalid_state_redirect(db_session, request, project.id, exc)
 
     def remove_from_channel() -> None:
         if left is not None:
@@ -1007,7 +1009,7 @@ def remove_team_member(
         flash(request, "You left the team.", "success")
         return RedirectResponse("/", status_code=303)
     return _success_redirect(
-        db_session, request, project_id, "Removed from the team.", after_commit=remove_from_channel
+        db_session, request, project.id, "Removed from the team.", after_commit=remove_from_channel
     )
 
 
@@ -1078,7 +1080,7 @@ def record_review(
         )
         return templates.TemplateResponse(request, "projects/detail.html", context, status_code=422)
     except InvalidState as exc:
-        return _invalid_state_redirect(db_session, request, project_id, exc)
+        return _invalid_state_redirect(db_session, request, project.id, exc)
 
     revision_id = revision.id
 
@@ -1089,7 +1091,7 @@ def record_review(
         slack_archive_channel.defer(project_id=str(project.id))
 
     message = _decision_message(db_session, project, revision, "Review recorded.")
-    return _success_redirect(db_session, request, project_id, message, after_commit=_notify)
+    return _success_redirect(db_session, request, project.id, message, after_commit=_notify)
 
 
 # --------------------------------------------------------------------------------------------------
@@ -1153,7 +1155,7 @@ def admin_decide(
         )
         return templates.TemplateResponse(request, "projects/detail.html", context, status_code=422)
     except InvalidState as exc:
-        return _invalid_state_redirect(db_session, request, project_id, exc)
+        return _invalid_state_redirect(db_session, request, project.id, exc)
 
     revision_id = revision.id
     action = "admin_approve" if decision_enum is ReviewDecision.APPROVE else "admin_reject"
@@ -1172,7 +1174,7 @@ def admin_decide(
         )
 
     message = _decision_message(db_session, project, revision, "Decision recorded.")
-    return _success_redirect(db_session, request, project_id, message, after_commit=_notify)
+    return _success_redirect(db_session, request, project.id, message, after_commit=_notify)
 
 
 @router.post("/projects/{project_id}/admin-funding-hold", dependencies=[Depends(verify_csrf_token)])
@@ -1214,10 +1216,10 @@ def admin_funding_hold(
         if not actor.is_admin:
             raise
         db_session.rollback()  # the own-project rule: say so on the page
-        flash(request, str(exc), "error")
-        return _redirect_to_project(project_id)
+        flash(request, exc.message, "error")
+        return _redirect_to_project(project.id)
     except InvalidState as exc:
-        return _invalid_state_redirect(db_session, request, project_id, exc)
+        return _invalid_state_redirect(db_session, request, project.id, exc)
 
     action = funding_holds.AUDIT_CLEAR if hold is None else funding_holds.AUDIT_SET
     extra = funding_holds.describe_change(previous, hold)
@@ -1235,7 +1237,7 @@ def admin_funding_hold(
         message = "Hold cleared. The held budget is added once every team member is verified in Weave."
     else:
         message = "Hold cleared."
-    return _success_redirect(db_session, request, project_id, message, after_commit=_notify)
+    return _success_redirect(db_session, request, project.id, message, after_commit=_notify)
 
 
 def _parse_ospool_rate(raw: str, errors: dict[str, str]) -> int | None:
@@ -1318,10 +1320,10 @@ def admin_record_ospool_grant(
         )
     except NotAllowed as exc:
         db_session.rollback()  # the own-project rule: say so on the page
-        flash(request, str(exc), "error")
-        return _redirect_to_project(project_id)
+        flash(request, exc.message, "error")
+        return _redirect_to_project(project.id)
     except InvalidState as exc:
-        return _invalid_state_redirect(db_session, request, project_id, exc)
+        return _invalid_state_redirect(db_session, request, project.id, exc)
 
     name, since, rate_line = grant.ospool_project_name, grant.counted_from.isoformat(), ospool_grants.rate_text(grant)
 
@@ -1335,7 +1337,7 @@ def admin_record_ospool_grant(
         )
 
     message = f"OSPool grant recorded. Usage under {name} shows here after the next daily import."
-    return _success_redirect(db_session, request, project_id, message, after_commit=_notify)
+    return _success_redirect(db_session, request, project.id, message, after_commit=_notify)
 
 
 @router.post("/projects/{project_id}/admin-ospool-valuation", dependencies=[Depends(verify_csrf_token)])
@@ -1377,10 +1379,10 @@ def admin_ospool_valuation(
         )
     except NotAllowed as exc:
         db_session.rollback()  # the own-project rule: say so on the page
-        flash(request, str(exc), "error")
-        return _redirect_to_project(project_id)
+        flash(request, exc.message, "error")
+        return _redirect_to_project(project.id)
     except InvalidState as exc:
-        return _invalid_state_redirect(db_session, request, project_id, exc)
+        return _invalid_state_redirect(db_session, request, project.id, exc)
 
     rate_line = ospool_grants.rate_text(grant)
 
@@ -1394,7 +1396,7 @@ def admin_ospool_valuation(
         )
 
     message = "Valuation saved. Days already valued keep their price."
-    return _success_redirect(db_session, request, project_id, message, after_commit=_notify)
+    return _success_redirect(db_session, request, project.id, message, after_commit=_notify)
 
 
 @router.post("/projects/{project_id}/admin-budget", dependencies=[Depends(verify_csrf_token)])
@@ -1442,13 +1444,13 @@ def admin_adjust_budget(
             weave_client,
             project,
             actor,
-            errors=exc.errors if isinstance(exc, ValidationFailed) else {"amount_cents": str(exc)},
+            errors=exc.errors if isinstance(exc, ValidationFailed) else {"amount_cents": exc.message},
             error_form="admin_budget",
             posted={"amount": amount, "reason": reason},
         )
         return templates.TemplateResponse(request, "projects/detail.html", context, status_code=422)
     except InvalidState as exc:
-        return _invalid_state_redirect(db_session, request, project_id, exc)
+        return _invalid_state_redirect(db_session, request, project.id, exc)
 
     def _notify() -> None:
         slack_post_admin_override.defer(
@@ -1468,7 +1470,7 @@ def admin_adjust_budget(
         )
     else:
         message = "Budget increase held until every team member is verified in Weave."
-    return _success_redirect(db_session, request, project_id, message, after_commit=_notify)
+    return _success_redirect(db_session, request, project.id, message, after_commit=_notify)
 
 
 @router.post("/projects/{project_id}/admin-reclaim", dependencies=[Depends(verify_csrf_token)])
@@ -1516,7 +1518,7 @@ def admin_reclaim_budget(
         )
         return templates.TemplateResponse(request, "projects/detail.html", context, status_code=422)
     except InvalidState as exc:
-        return _invalid_state_redirect(db_session, request, project_id, exc)
+        return _invalid_state_redirect(db_session, request, project.id, exc)
 
     def _notify() -> None:
         slack_post_admin_override.defer(
@@ -1527,7 +1529,7 @@ def admin_reclaim_budget(
             extra=f"Reclaimed: {amount_cents / 100:.2f}",
         )
 
-    return _success_redirect(db_session, request, project_id, "Budget reclaimed.", after_commit=_notify)
+    return _success_redirect(db_session, request, project.id, "Budget reclaimed.", after_commit=_notify)
 
 
 @router.post("/projects/{project_id}/admin-hourly-cap", dependencies=[Depends(verify_csrf_token)])
@@ -1569,13 +1571,13 @@ def admin_set_hourly_cap(
         if isinstance(exc, NotAllowed) and not actor.is_admin:
             raise
         db_session.rollback()
-        errors = exc.errors if isinstance(exc, ValidationFailed) else {"cap_cents": str(exc)}
+        errors = exc.errors if isinstance(exc, ValidationFailed) else {"cap_cents": exc.message}
         context = _build_detail_context(
             db_session, weave_client, project, actor, errors=errors, error_form="admin_hourly_cap", posted=posted
         )
         return templates.TemplateResponse(request, "projects/detail.html", context, status_code=422)
     except InvalidState as exc:
-        return _invalid_state_redirect(db_session, request, project_id, exc)
+        return _invalid_state_redirect(db_session, request, project.id, exc)
 
     new_cap = format_cents(cap_cents if cap_cents is not None else default_cap_cents)
     described = f"{new_cap}/hour" + (" (the default)" if cap_cents is None else "")
@@ -1589,7 +1591,7 @@ def admin_set_hourly_cap(
             extra=f"Hourly cap per launch: {described}",
         )
 
-    return _success_redirect(db_session, request, project_id, f"Hourly cap set to {described}.", after_commit=_notify)
+    return _success_redirect(db_session, request, project.id, f"Hourly cap set to {described}.", after_commit=_notify)
 
 
 _COMPLETION_FIELDS = ("title", "repo_url", "write_up", "demo_url", "tags")
@@ -1611,7 +1613,7 @@ def _gallery_preview(
     if draft is None or draft.kind is not RevisionKind.COMPLETION:
         if draft is not None:
             flash(request, "Only a completion has a gallery page to preview.", "error")
-        return _redirect_to_project(project_id)
+        return _redirect_to_project(project.id)
     unsaved = values is not None
     values = values if unsaved else _completion_values(project, draft)
     # The gallery only ever links to checked links, so the preview doesn't show one it would refuse to save.
@@ -1726,7 +1728,7 @@ def presign_screenshot(
     except ValidationFailed as exc:
         return JSONResponse({"errors": exc.errors}, status_code=422)
     except InvalidState as exc:
-        return JSONResponse({"errors": {"screenshot": str(exc)}}, status_code=409)
+        return JSONResponse({"errors": {"screenshot": exc.message}}, status_code=409)
     return JSONResponse({"key": upload.key, "url": upload.post.url, "fields": upload.post.fields})
 
 
@@ -1747,7 +1749,7 @@ def confirm_screenshot(
         return JSONResponse({"errors": exc.errors}, status_code=422)
     except InvalidState as exc:
         db_session.rollback()
-        return JSONResponse({"errors": {"screenshot": str(exc)}}, status_code=409)
+        return JSONResponse({"errors": {"screenshot": exc.message}}, status_code=409)
     db_session.commit()
     return JSONResponse(_image_entry(store, project, key))
 
@@ -1768,13 +1770,13 @@ def delete_screenshot(
     except InvalidState as exc:
         if wants_json:
             db_session.rollback()
-            return JSONResponse({"errors": {"screenshot": str(exc)}}, status_code=409)
-        return _invalid_state_redirect(db_session, request, project_id, exc)
+            return JSONResponse({"errors": {"screenshot": exc.message}}, status_code=409)
+        return _invalid_state_redirect(db_session, request, project.id, exc)
     db_session.commit()
     if wants_json:
         return JSONResponse({"removed": key})
     flash(request, "Image removed.", "success")
-    return RedirectResponse(f"/projects/{project_id}/edit", status_code=303)
+    return RedirectResponse(f"/projects/{project.id}/edit", status_code=303)
 
 
 __all__ = ["router"]

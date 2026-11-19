@@ -145,13 +145,13 @@ def create_app() -> FastAPI:
     @app.exception_handler(NotAllowed)
     def _handle_not_allowed(request: Request, exc: NotAllowed):
         if _is_api(request):
-            return JSONResponse({"error": str(exc)}, status_code=403)
+            return JSONResponse({"error": exc.message}, status_code=403)
         return templates.TemplateResponse(request, "errors/403.html", status_code=403)
 
     @app.exception_handler(NotFound)
     def _handle_not_found(request: Request, exc: NotFound):
         if _is_api(request):
-            return JSONResponse({"error": str(exc)}, status_code=404)
+            return JSONResponse({"error": exc.message}, status_code=404)
         return templates.TemplateResponse(request, "errors/404.html", status_code=404)
 
     # Unknown URLs and the auth dependencies' 403s are plain `HTTPException`s, which FastAPI renders as

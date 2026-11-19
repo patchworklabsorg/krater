@@ -4,6 +4,10 @@ on:
   push:
   pull_request:
 
+# Least privilege: jobs read the code; one that needs more (the image push) asks for it itself.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest

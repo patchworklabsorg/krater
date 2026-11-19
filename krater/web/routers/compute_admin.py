@@ -234,7 +234,7 @@ async def stop_all_compute(
         return _global_page(request, db_session, switch_errors=exc.errors, switch_reason=reason, status_code=422)
     except InvalidState as exc:
         db_session.rollback()
-        flash(request, str(exc), "error")
+        flash(request, exc.message, "error")
         return RedirectResponse("/admin/compute", status_code=303)
     db_session.commit()
     if mode == compute_halt.STOP_EMERGENCY:
@@ -263,7 +263,7 @@ async def start_all_compute(
         return _global_page(request, db_session, switch_errors=exc.errors, switch_reason=reason, status_code=422)
     except InvalidState as exc:
         db_session.rollback()
-        flash(request, str(exc), "error")
+        flash(request, exc.message, "error")
         return RedirectResponse("/admin/compute", status_code=303)
     db_session.commit()
     flash(request, "Compute is back on. Queued jobs start on the next pass, within a minute.", "success")

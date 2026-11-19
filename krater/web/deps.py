@@ -86,7 +86,7 @@ def fresh_actor(
         fresh = request.method not in _CACHEABLE_METHODS
         return user_service.authorize(db_session, weave_client, user, fresh=fresh)
     except NotAMember as exc:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=exc.message) from exc
     except WeaveUnavailableError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Weave is unavailable") from exc
 

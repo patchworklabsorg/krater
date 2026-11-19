@@ -36,8 +36,8 @@ def _token(request: Request) -> str:
     return token.strip() if scheme.lower() == "bearer" else ""
 
 
-def _deny(exc: Exception) -> JSONResponse:
-    return JSONResponse({"error": str(exc)}, status_code=403)
+def _deny(exc: NotAllowed) -> JSONResponse:
+    return JSONResponse({"error": exc.message}, status_code=403)
 
 
 async def _body(request: Request) -> dict[str, Any]:
@@ -229,7 +229,7 @@ def _files(request: Request, db_session: Session, action):
         return _deny(exc)
     except ValidationFailed as exc:
         db_session.rollback()  # lets go of the project's row lock an upload took
-        return JSONResponse({"error": str(exc), "fields": exc.errors}, status_code=422)
+        return JSONResponse({"error": exc.message, "fields": exc.errors}, status_code=422)
     except StorageError:
         db_session.rollback()
         return JSONResponse({"error": "Storage is unavailable; try again."}, status_code=503)
