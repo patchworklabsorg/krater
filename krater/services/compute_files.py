@@ -71,9 +71,11 @@ def list_files(store: ObjectStore, actor: Actor, *, job: ComputeJob) -> list[Job
 def download_url(store: ObjectStore, actor: Actor, *, job: ComputeJob, area: str, name: str) -> str:
     """A short-lived URL for one of the job's files. Only for a file that exists, so a name can't reach elsewhere."""
     _require(actor, job.project)
-    if area not in AREAS or not any(f.area == area and f.name == name for f in list_files(store, actor, job=job)):
+    found = next((f for f in list_files(store, actor, job=job) if f.area == area and f.name == name), None)
+    if area not in AREAS or found is None:
         raise NotFound("No such file.")
-    return store.presign_download(_prefix(job, area) + name, expires=DOWNLOAD_EXPIRES_SECONDS)
+    # The key comes from the listing, not the request: the URL can only point at a file the job really has.
+    return store.presign_download(_prefix(job, found.area) + found.name, expires=DOWNLOAD_EXPIRES_SECONDS)
 
 
 def list_downloads(store: ObjectStore, actor: Actor, *, job: ComputeJob) -> list[tuple[JobFile, str]]:

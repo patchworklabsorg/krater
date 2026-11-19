@@ -208,7 +208,7 @@ def set_secret(
         return _index_page(request, db_session, actor, project, errors=exc.errors, posted={"name": name})
     except InvalidState as exc:
         db_session.rollback()
-        flash(request, str(exc), "error")
+        flash(request, exc.message, "error")
         return RedirectResponse(f"/projects/{project.id}/compute", status_code=303)
     db_session.commit()
     flash(request, f"Saved {secret.name}. Jobs get it when they next start.", "success")
@@ -463,7 +463,7 @@ async def submit_job(
         )
     except ConfirmationRequired as exc:
         db_session.rollback()
-        return _form_page(request, db_session, project, weave_client, posted=posted, transfer_warning=str(exc))
+        return _form_page(request, db_session, project, weave_client, posted=posted, transfer_warning=exc.message)
     except (ValidationFailed, ValueError) as exc:
         db_session.rollback()
         errors = (
@@ -481,7 +481,7 @@ async def submit_job(
         return _form_page(request, db_session, project, weave_client, errors=errors, posted=posted, status_code=503)
     except InvalidState as exc:
         db_session.rollback()
-        flash(request, str(exc), "error")
+        flash(request, exc.message, "error")
         return RedirectResponse(f"/projects/{project.id}/compute", status_code=303)
     db_session.commit()
     flash(request, "Queued. It starts when an offer at or under your price appears.", "success")
@@ -775,7 +775,7 @@ def delete_workspace(
         count = workspaces.delete(db_session, get_compute_store(), actor, workspace=workspace, now=datetime.now(UTC))
     except InvalidState as exc:
         db_session.rollback()
-        flash(request, str(exc), "error")
+        flash(request, exc.message, "error")
         return RedirectResponse(back, status_code=303)
     db_session.commit()
     flash(request, f"Deleted the workspace {workspace.name} ({count:,} stored files).", "success")
@@ -816,7 +816,7 @@ def job_action(
         service(db_session, actor, job=job, now=datetime.now(UTC), **extra)
     except InvalidState as exc:
         db_session.rollback()
-        flash(request, str(exc), "error")
+        flash(request, exc.message, "error")
     else:
         db_session.commit()
         flash(request, message, "success")

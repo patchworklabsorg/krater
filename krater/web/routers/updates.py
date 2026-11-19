@@ -151,7 +151,7 @@ def post_update(
         demographics.require_answered(weave_client, actor.user)
     except DemographicsRequired as exc:
         back = f"{get_settings().base_url.rstrip('/')}/projects/{project.id}/updates/new?topup=1"
-        return _refuse({"form": str(exc), "demographics": "1"}, demographics_url=demographics_form_url(back))
+        return _refuse({"form": exc.message, "demographics": "1"}, demographics_url=demographics_form_url(back))
     except DemographicsCheckUnavailable as exc:
         return _invalid_state_redirect(db_session, request, project_id, exc)
     try:

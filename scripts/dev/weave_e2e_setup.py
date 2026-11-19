@@ -78,6 +78,9 @@ def write_fixtures(data: dict, *, krater_base_url: str) -> None:
         "",
     ]
     ENV_PATH.write_text("\n".join(env_lines))
+    # Both hold the dev OAuth client secret: readable by this user only.
+    FIXTURE_PATH.chmod(0o600)
+    ENV_PATH.chmod(0o600)
 
 
 def main() -> None:

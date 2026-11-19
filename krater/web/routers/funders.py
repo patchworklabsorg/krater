@@ -62,7 +62,7 @@ def ospool_export(
         funder_packet.record_export(db_session, actor, packet)
     except FunderPacketUnavailable as exc:
         db_session.rollback()
-        flash(request, str(exc), "error")
+        flash(request, exc.message, "error")
         return RedirectResponse(PAGE, status_code=303)
     except ValidationFailed as exc:
         db_session.rollback()

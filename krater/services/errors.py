@@ -9,7 +9,14 @@ from __future__ import annotations
 
 
 class DomainError(Exception):
-    """Base class for every error raised by a Krater service."""
+    """Base class for every error raised by a Krater service.
+
+    `message` is the text written for the person who hit the error, safe to send back to them. Routers show it rather
+    than `str(exc)`, so a response carries only what a service chose to say."""
+
+    def __init__(self, message: str = "") -> None:
+        super().__init__(message)
+        self.message = message
 
 
 class NotAllowed(DomainError):
