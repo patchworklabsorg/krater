@@ -19,7 +19,7 @@ The form, the API's submit and its estimate (so the CLI too) check the image bef
   so an expired anonymous token is replaced, not taken for a refusal. The shell submitter (`krater.compute.submit`)
   doesn't ask.
 
-The form starts with `compute_jobs.DEFAULT_IMAGE` (`pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime`), a public image
+The form starts with `compute_jobs.DEFAULT_IMAGE` (`pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime`), a public image
 with a shell and Python, so the example on the form works as it is.
 
 ## The digest each machine got

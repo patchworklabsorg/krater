@@ -250,7 +250,7 @@ On your project's page, open **Compute**, then **New job or box**. The page show
 | --- | --- |
 | **Name** | Something you'll recognise later, such as `train-v3-lr3e-4`. Up to 200 characters. Names can repeat |
 | **Kind** | **Job** runs a command and ends. **Box** is an SSH workspace (see [Boxes](#boxes-working-interactively)) |
-| **Container image** | The image's name as `docker pull` takes it, not a web link. The form starts with `pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime` (PyTorch with CUDA); `ubuntu:24.04` is a much smaller bare box; or your own, such as `ghcr.io/owner/image:tag`. The machine provides the GPU driver. Krater asks the registry before queueing, so a name or tag that doesn't exist, or a private image, is refused on the form |
+| **Container image** | The image's name as `docker pull` takes it, not a web link. The form starts with `pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime` (PyTorch with CUDA 12.8, which every GPU Krater rents can run); `ubuntu:24.04` is a much smaller bare box; or your own, such as `ghcr.io/owner/image:tag`. The machine provides the GPU driver. Krater asks the registry before queueing, so a name or tag that doesn't exist, or a private image, is refused on the form |
 | **Command** | What the job runs, through `sh -c`, such as `cd /app && python train.py --epochs 3`. Up to 2,000 characters: put longer scripts in the image. A box has no command |
 
 ### Machine
