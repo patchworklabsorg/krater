@@ -26,8 +26,8 @@ import sysconfig
 import time
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
+from torch import nn
 
 # KRATER 1: the folders. The defaults let the script run outside Krater too.
 CHECKPOINT_DIR = os.environ.get("KRATER_CHECKPOINT_DIR", "./checkpoints")

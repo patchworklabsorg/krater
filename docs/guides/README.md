@@ -7,8 +7,8 @@ For members:
 
 - [Using Krater](using-krater.md): applying, your team, review, budgets, progress updates and top-ups, amendments,
   the final write-up and the gallery.
-- [Your first job](first-job.md): start here for compute. Copy the [starter](../../examples/starter/), try it
-  free, run it on a GPU for a few cents, get the results.
+- [Your first job](first-job.md): start here for compute. Get the [starter](../../examples/starter/) with
+  `krater init`, try it free, run it on a GPU for a few cents, get the results.
 - [Running jobs and boxes](compute-jobs.md): preparing an image, submitting a job, choosing a price, results, boxes,
   secrets and the `krater` command.
 - [Run only when compute is cheap](run-when-cheap.md): make a job wait for a GPU price you choose.

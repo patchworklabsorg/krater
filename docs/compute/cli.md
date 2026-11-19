@@ -18,7 +18,9 @@ Sign in, then work:
 krater login --url https://krater.patchworklabs.org
 krater projects                        # your projects (--all adds withdrawn and completed ones)
 krater prices --gpu 4090               # what an hour costs now (--all adds models nobody offers)
+krater init my-job --project <project>  # a starter job to copy: train.py and job.toml
 krater submit <project> --name train --image ghcr.io/me/train:v3 --command "python train.py" --gpu "RTX 4090" --limit 0.35 --max-runtime 240
+krater submit <project> --name train --code . --command "python train.py" --gpu "RTX 4090" --limit 0.35   # no image to build
 krater jobs <project>
 krater show <job>
 krater logs <job>                      # what the command printed (the end of it)
@@ -99,6 +101,16 @@ submit.
   PUT up to 64 MB, else 64 MB parts finished with `/inputs/complete`), the same quota check a machine's uploads get,
   and skips files already stored at the same size. `list` and `rm` (a folder ends in /) complete it; `submit --input`
   names them.
+- `--code FOLDER` (`krater_cli.code`) uploads the folder as the input `code/<hash>/` (the first 16 hex of a SHA-256
+  over each file's path and bytes, so a same-size edit is a new folder) through the same upload calls, skipping it
+  when every file is already stored, and then submits an ordinary job: `inputs` gets the folder, `command` becomes
+  `cd "$KRATER_INPUT_DIR/code/<hash>" && [pip install -r requirements.txt && ]<command>`, and `image` defaults to
+  `code.DEFAULT_IMAGE` (keep it equal to `compute_jobs.DEFAULT_IMAGE`). Krater needs no change for it. It skips VCS,
+  cache, virtualenv and Krater folders and refuses more than 100 MB or 5,000 files. In a job file the folder is
+  relative to the file. `krater run --code` mounts it read-only at the same path instead of uploading.
+- `krater init [FOLDER]` (`krater_cli.init`) writes the starter job from the package's `starter/` folder, a copy of
+  `examples/starter` (dot files stored without the dot); `tests/test_cli.py` fails if the two differ. It works
+  without signing in, refuses to overwrite files unless `--force`, and puts `--project` into `job.toml`.
 - `krater rerun <job>` posts the job's `spec` from `GET /api/v1/jobs/{id}` (the submit body it was queued with) to
   the submit endpoint, so the budget, verification and transfer checks run again. `--no-smoke` drops a smoke test
   (the full run), `--smoke` makes it one.

@@ -41,7 +41,7 @@ GUIDES: tuple[Guide, ...] = (
     ),
     Guide(
         "first-job",
-        "Start here for compute: copy the starter, try it free, run it on a GPU for a few cents, get the results.",
+        "Start here for compute: krater init, try it free, run it on a GPU for a few cents, get the results.",
         "members",
     ),
     Guide(
