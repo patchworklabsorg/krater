@@ -1031,7 +1031,13 @@ def _update_message(session: Session, slack_client: SlackClient, update: Project
     if update.ceiling_cents > 0:
         used += f" ({round(update.spent_cents * 100 / update.ceiling_cents)}%)"
     jobs = "1 job or box" if update.jobs_since == 1 else f"{update.jobs_since} jobs and boxes"
-    context = f"{used} · {jobs} since the last update · <{link}|On the project page>"
+    earlier = session.scalar(
+        sa.select(sa.func.count())
+        .select_from(ProjectUpdate)
+        .where(ProjectUpdate.project_id == update.project_id, ProjectUpdate.created_at < update.created_at)
+    )
+    since = "since the last update" if earlier else "so far"
+    context = f"{used} · {jobs} {since} · <{link}|On the project page>"
     blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": context}]})
     return blocks, text
 
