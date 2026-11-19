@@ -152,6 +152,9 @@ UNAVAILABLE = "the provider couldn't start it"
 UNAVAILABLE_WINDOW = timedelta(hours=1)
 #: Vast's error code for an offer it can't rent out now.
 NO_SUCH_ASK = "no_such_ask"
+#: Vast's 400 for an offer whose GPU someone else already rents ("error 400/3763: GPU conflict: requesting already
+#: rented gpus {205411}", seen live 2026-11-19): the offer was still listed, so the next pass asked for it again.
+GPU_CONFLICT = "gpu conflict"
 MICROUSD_PER_CENT = 10_000
 #: A box is idle while its GPU use stays under this (percent), and its CPU use, when reported, under that.
 IDLE_GPU_PERCENT = 5
@@ -2069,9 +2072,11 @@ class Scheduler:
 
 def _unavailable(exc: ProviderRequestFailedError) -> bool:
     """Whether a refused create means the offer can't be rented now. Vast's create reference gives this as 410
-    `no_such_ask`, and as 404 `invalid_args` with "no_such_ask" in the message; it hasn't been seen live yet, so any of
-    the three counts. Left unmarked, the machine stays in the search, and the job would ask for it every pass."""
-    return exc.status_code == 410 or exc.error == NO_SUCH_ASK or NO_SUCH_ASK in str(exc)
+    `no_such_ask`, and as 404 `invalid_args` with "no_such_ask" in the message; live, it also answers a 400 "GPU
+    conflict" when the offer's GPU is already rented. Any of them counts. Left unmarked, the machine stays in the
+    search, and the job would ask for it every pass."""
+    said = str(exc)
+    return exc.status_code == 410 or exc.error == NO_SUCH_ASK or NO_SUCH_ASK in said or GPU_CONFLICT in said.lower()
 
 
 def run_pass(
