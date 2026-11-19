@@ -710,6 +710,14 @@ def _queue(
                 "started. Try `krater run` to test it on this computer.",
                 status=1,
             )
+        if body.get("max_spend_cents") and "max_spend_cents" not in job:
+            # A Krater from before spend caps ignores the field: the job would run uncapped, so take it back at once.
+            krater.post(f"/jobs/{job['id']}/cancel")
+            raise KraterError(
+                "This Krater doesn't take --max-spend yet, so it queued the job without a spend cap; it was cancelled "
+                "before it started. Leave out --max-spend, or set a shorter --max-runtime to limit what it can cost.",
+                status=1,
+            )
         if body.get("checkpoint_upload_minutes") and "checkpoint_upload_minutes" not in job:
             # A Krater from before per-job intervals ignores the field: the job runs, uploading on the default timer.
             say("This Krater doesn't take --checkpoint-upload yet: the job uploads its checkpoints every 10 minutes.")

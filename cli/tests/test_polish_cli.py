@@ -8,6 +8,7 @@ import httpx
 import pytest
 from test_cli import JOB, JOB_C, PROJECT, SUBMIT, Docker, Fake, _login, _run_local
 
+from krater_cli.api import KraterError
 from krater_cli.main import run
 
 
@@ -48,6 +49,15 @@ def test_max_spend_is_sent_in_cents(http, fake) -> None:
     _login(http, [])
     assert run([*SUBMIT, "--limit", "0.1", "--max-spend", "$12.5"], http=http, say=lambda _: None) == 0
     assert fake.jobs[-1]["body"]["max_spend_cents"] == 1250
+
+
+def test_max_spend_on_a_krater_without_spend_caps_cancels_the_job(http, fake) -> None:
+    _login(http, [])
+    fake.knows_max_spend = False
+    with pytest.raises(KraterError, match="doesn't take --max-spend yet"):
+        run([*SUBMIT, "--limit", "0.1", "--max-spend", "5"], http=http, say=lambda _: None)
+
+    assert any(r.url.path == f"/api/v1/jobs/{JOB}/cancel" for r in fake.requests)
 
 
 def test_max_spend_must_be_an_amount(http, fake, capsys) -> None:
