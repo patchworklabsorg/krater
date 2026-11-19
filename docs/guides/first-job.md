@@ -49,7 +49,7 @@ private image never starts.
 krater run -f job.toml --smoke
 ```
 
-This runs the job in Docker as a Krater machine would, for a minute on your CPU. Look for `step 100 loss ...`,
+This runs the job in Docker as a Krater machine would, for a minute on your CPU. Look for `step ... loss ...` lines,
 `saved checkpoint` and `done`. If it fails here, it would have failed on the GPU too, so fix it now.
 
 ## 4. Run it on a GPU

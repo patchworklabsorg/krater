@@ -150,7 +150,7 @@ def main() -> int:
     budget = args.minutes * 60
     if SMOKE:
         budget = min(budget, train_seconds + 60)  # one minute of real steps proves the setup; the result can wait
-    last_save = time.monotonic()
+    last_save = last_log = time.monotonic()
     start_seconds = train_seconds
     started = time.monotonic()
 
@@ -167,7 +167,8 @@ def main() -> int:
         loss_value = loss.item()
         train_seconds = start_seconds + (time.monotonic() - started)
 
-        if step % 100 == 0:
+        if step % 100 == 0 or time.monotonic() - last_log >= 30:  # every 100 steps, and at least every 30 s
+            last_log = time.monotonic()
             log(f"step {step} loss {loss_value:.3f} trained {train_seconds / 60:.1f}/{args.minutes:g} min")
         if time.monotonic() - last_save >= args.save_every * 60:
             save_checkpoint(model, optimizer, step, train_seconds, loss_value)

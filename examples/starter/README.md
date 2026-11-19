@@ -41,7 +41,7 @@ visibility** to public. Vast hosts pull it without signing in.
 krater run -f job.toml --smoke
 ```
 
-You should see `step 100 loss ...` lines, a saved checkpoint and `done`. The results are in
+You should see `step ... loss ...` lines, a saved checkpoint and `done`. The results are in
 `krater-local/starter/outputs/`.
 
 **4. Run it on a GPU.** See the price first, then queue it:
