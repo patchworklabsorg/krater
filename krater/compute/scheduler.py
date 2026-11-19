@@ -205,6 +205,30 @@ def _event(session: Session, job: ComputeJob, kind: str, message: str, *, now: d
     )
 
 
+def _pause_detail(seen: Instance, row: ComputeInstance) -> dict:
+    """What Vast said about a machine that stopped without Krater stopping it, kept on the "paused" event.
+
+    Vast reports an outbid machine, one its host stopped and one stopped by hand on Vast's site the same way
+    (`intended_status` and `cur_state` "stopped", `actual_status` "exited"), so Krater calls every interruptible pause
+    "outbid" (`docs/compute/vast-api.md`). These fields are the evidence for telling them apart later: if the
+    machine's lowest winning bid (`min_bid`) is still at or under Krater's own, nobody outbid it, and `status_msg`
+    may say what did happen. Recorded only; nothing decides on them yet.
+    """
+    min_bid = usd_to_microusd(seen.min_bid) if seen.min_bid is not None else None
+    our_bid = row.gpu_microusd if row.interruptible else None
+    return {
+        "actual_status": seen.actual_status,
+        "intended_status": seen.intended_status,
+        "cur_state": seen.cur_state,
+        "next_state": seen.next_state,
+        "status_msg": seen.status_msg,
+        "min_bid_microusd": min_bid,
+        "our_bid_microusd": our_bid,
+        # True: the going price is above what Krater bid (outbid); False: it isn't (something else stopped it).
+        "min_bid_above_ours": (min_bid > our_bid) if min_bid is not None and our_bid is not None else None,
+    }
+
+
 def _stopped(row: ComputeInstance) -> dict:
     """What the "Box stopped" notice tells its owner: what the box costs while stopped (its disk) and from when."""
     return {"disk_microusd": row.disk_microusd, "stopped_at": row.stopped_at.isoformat() if row.stopped_at else None}
@@ -787,6 +811,14 @@ class Scheduler:
                     "have gone down. Krater moves it elsewhere if it doesn't come back."
                 )
                 why, cause = "stopped by the provider, not outbid", "provider_stopped"
+            detail = _pause_detail(seen, row)
+            logger.info(
+                "krater.compute: instance %s (job %s) paused, cause %s; Vast says %s",
+                row.provider_instance_id,
+                job.id,
+                cause,
+                json.dumps(detail, sort_keys=True),
+            )
             _event(
                 self.session,
                 job,
@@ -796,6 +828,7 @@ class Scheduler:
                 instance=row,
                 vast_status=seen.status,
                 cause=cause,
+                provider=detail,
             )
             return
         if row.state is ComputeInstanceState.PAUSED and self._credit_out():

@@ -1337,6 +1337,40 @@ def test_an_outbid_machine_is_still_a_pause(db_session, member, project, client,
     assert fake.instances[row.provider_instance_id]["intended_status"] == "stopped"
 
 
+@pytest.mark.parametrize(("min_bid", "above"), [(9.99, True), (0.01, False), (None, None)])
+def test_a_pause_records_what_vast_said(db_session, member, project, client, fake, min_bid, above) -> None:  # noqa: F811
+    """Vast reports an outbid machine and one stopped by hand or by its host the same way (staging, 2026-11-19), so
+    the paused event keeps the fields that could tell them apart later: the going bid against Krater's, and why."""
+    job, row = _running_job(db_session, member, project, client, fake)
+    _beat(db_session, row, NOW + timedelta(minutes=6))
+    fake.set_status(
+        row.provider_instance_id,
+        "exited",
+        intended_status="stopped",
+        cur_state="stopped",
+        next_state="stopped",
+        status_msg="Stopped by host",
+        min_bid=min_bid,
+    )
+
+    _pass(db_session, client, NOW + timedelta(minutes=7))
+
+    paused = db_session.scalars(
+        sa.select(ComputeEvent).where(ComputeEvent.job_id == job.id, ComputeEvent.kind == "paused")
+    ).one()
+    assert paused.payload["cause"] == "outbid"  # nothing decides on the fields yet
+    assert paused.payload["provider"] == {
+        "actual_status": "exited",
+        "intended_status": "stopped",
+        "cur_state": "stopped",
+        "next_state": "stopped",
+        "status_msg": "Stopped by host",
+        "min_bid_microusd": None if min_bid is None else round(min_bid * 1_000_000),
+        "our_bid_microusd": row.gpu_microusd,
+        "min_bid_above_ours": above,
+    }
+
+
 def test_a_stopped_on_demand_machine_is_not_called_outbid(db_session, member, project, client, fake) -> None:  # noqa: F811
     """Production, 2026-11-13: an on-demand box the provider stopped said "Outbid", which an on-demand machine can't
     be."""

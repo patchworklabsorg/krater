@@ -159,6 +159,12 @@ Not used for any decision yet; kept so wait-time forecasts and outbid-adjusted p
   against what Krater paid, and how often it was outbid (`outbid_count`).
 - `gpu_offer_observations`: at each hourly price sample, the 24 cheapest hosts per model and rental type with their
   machine id and price, kept 60 days. A machine's minimum bid from hour to hour shows how often bids on it rise.
+- On each `paused` event, `payload.provider`: what Vast said about the stopped machine (`actual_status`,
+  `intended_status`, `cur_state`, `next_state`, `status_msg`), its `min_bid` then against Krater's own bid
+  (`min_bid_microusd`, `our_bid_microusd`, `min_bid_above_ours`), also logged by the worker. Vast reports an outbid
+  machine and one stopped by its host or by hand the same way (staging, 2026-11-19), so every interruptible pause is
+  called outbid. These are the evidence for telling them apart: a pause whose `min_bid` isn't above Krater's bid
+  wasn't a higher bid. Check a few real ones before relying on it; Vast may not update an instance's `min_bid`.
 
 ## States
 
