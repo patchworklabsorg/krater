@@ -375,8 +375,15 @@ def test_alerts_that_all_say_the_network_is_down_are_posted_as_one(db_session: S
         for n in range(ops_alerts.FAILURE_RULES[key].threshold):
             ops_alerts.record_failure(db_session, key, message, now=NOW + timedelta(minutes=n))
 
-    assert sorted(_watch(db_session, slack, NOW + timedelta(minutes=6))) == ["quilt", "stash"]
+    assert _watch(db_session, slack, NOW + timedelta(minutes=6)) == ["network_outage"]
     (text,) = _texts(slack)
     assert "network or DNS looks down" in text
     assert "Sending events to Quilt" in text and "Archiving submission links" in text
     assert _watch(db_session, slack, NOW + timedelta(minutes=11)) == []
+
+    # Both windows pass without a failure: one cleared post, not one per alert.
+    later = NOW + timedelta(minutes=40)
+    assert _watch(db_session, slack, later) == ["network_outage"]
+    assert len(_texts(slack)) == 2 and "cleared" in _texts(slack)[-1] and "network or DNS" in _texts(slack)[-1]
+    assert _watch(db_session, slack, later + timedelta(minutes=5)) == []
+    assert len(_texts(slack)) == 2

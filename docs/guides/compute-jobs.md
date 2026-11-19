@@ -133,7 +133,17 @@ Things to know:
 - **Use a CUDA build that matches your framework.** Hosts provide recent NVIDIA drivers. Newer GPUs (the RTX 50
   series) need CUDA 12.8 or later, so `pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime` is a safe start: it runs on
   every GPU Krater rents (Krater's own tests ran it on an RTX 5060 Ti). Older CUDA builds fail on those cards with
-  *no kernel image is available*.
+  *no kernel image is available*. Krater reads your image's CUDA version and only rents hosts whose driver supports
+  it.
+- **Build it for `linux/amd64`.** Rented machines are x86. An image built on an Apple Silicon Mac is `linux/arm64`
+  unless you say otherwise, and Krater refuses it: `docker buildx build --platform linux/amd64 ...`.
+
+When you queue a job (or estimate it), Krater looks at the image and warns you, on the form and in `krater submit`,
+about things that usually make a job fail: an RTX 50-series GPU with a CUDA build older than 12.8, an image too big
+for the disk you asked for (refused if it can't fit at all), a very big image (every new machine downloads it, so
+starts are slow), `pip install` into a system Python that refuses it (add `PIP_BREAK_SYSTEM_PACKAGES=1` or use a
+venv), building CUDA code (flash-attn, `load_inline`) on a `-runtime` image with no compiler (use a `-devel` image),
+no Python in the image, and `apt-get` in an image that doesn't run as root. Warnings don't stop the job.
 
 A minimal training image (the [starter](first-job.md) is a complete one to copy):
 
@@ -240,11 +250,18 @@ torch.save(model.state_dict(), os.path.join(out_dir, "model.pt"))
 With Hugging Face `Trainer`, point `output_dir` at `$KRATER_CHECKPOINT_DIR`, set `save_total_limit=1` or `2`, and
 pass `resume_from_checkpoint=True` when `KRATER_RESUMED` is `1`. Save the final model to `$KRATER_OUTPUT_DIR`.
 
+If a running job on an interruptible machine hasn't stored a checkpoint for two upload intervals (plus five minutes
+before the first one), Krater posts once per attempt in the project's Slack channel, mentioning whoever submitted
+it: a move would start it over.
+
 ### Output and logs
 
 Everything your command prints (stdout and stderr) goes to the job's log, which Krater uploads every minute and
 shows on the job page. It keeps up to 16 MB per attempt. Print progress lines (`step 1200/50000, loss 0.84`) so you can
 see the job is alive. The command's exit code decides the outcome: `0` is *succeeded*, anything else *failed*.
+
+Python's output reaches the log as it's printed: Krater sets `PYTHONUNBUFFERED=1` unless your image or a secret
+sets it.
 
 When an outbid machine comes back and your command starts again on it, the log carries on in the same attempt: a
 line `[krater: the runner started again on this machine at …]` marks where, and the lines above it are from before
@@ -312,6 +329,11 @@ See [Choosing a price](#choosing-a-price). In short, choose an order type and fi
 | **Then** | What happens after that wait: keep waiting, accept offers up to your max price, rent on demand up to your max price, or cancel the job |
 | **Stop after (minutes of running)** | The max runtime. The job fails and its machine is destroyed when it has run this long. 480 (8 hours) by default, up to 7 days |
 | **Stop once it has cost ($)** | Optional. A spend cap for this job: once its machine and data together have cost this much, the job fails with "Stopped at its spend cap" and its machine is destroyed (a box is stopped instead, keeping its disk). Krater checks it every minute or so, so it can go a few cents over. `--max-spend 25` from a terminal |
+
+Both limits can be changed while the job is queued or running: **Change limits** on the job page, or `krater limits
+<job> --max-runtime 720 --max-spend 40` (`--max-spend none` removes the cap). A higher cap holds more of the
+project's budget, so it can't be raised past what the project has free. A box stopped at its spend cap can't be
+resumed or moved until you raise its cap.
 
 Prices are the **full hourly cost**: the GPU plus your disk. No price can be above your project's hourly cap, shown
 at the top of the form ($5 an hour unless an admin set another).

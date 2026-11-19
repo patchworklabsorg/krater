@@ -17,14 +17,26 @@ class PolishFake(Fake):
         super().__init__()
         self.metrics: dict[str, object] = {}
         self.latest_attempt: int | None = None
+        self.limits: list[dict] = []
+        self.cli_latest: str | None = None
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         url = str(request.url)
         if url.startswith("https://store.test/metrics/"):
             return httpx.Response(200, content=json.dumps(self.metrics[url.rsplit("/", 1)[1]]).encode())
-        return super().handler(request)
+        response = super().handler(request)
+        if self.cli_latest and str(request.url).startswith("https://krater.test/api/v1/"):
+            response.headers["X-Krater-CLI-Latest"] = self.cli_latest
+        return response
 
     def api(self, request: httpx.Request, path: str) -> httpx.Response:
+        if path == f"/jobs/{JOB}/limits" and request.method == "POST":
+            body = json.loads(request.content)
+            self.limits.append(body)
+            changed = (
+                [f"max runtime 480 → {body['max_runtime_minutes']} minutes"] if "max_runtime_minutes" in body else []
+            )
+            return httpx.Response(200, json={**self.details[JOB], "changed": changed})
         for job_id in self.metrics:
             if path == f"/jobs/{job_id}/files":
                 file = {"area": "outputs", "name": "metrics.json", "size_bytes": 9}
@@ -115,8 +127,8 @@ def test_compare_shows_each_jobs_metrics_side_by_side(http, fake) -> None:
 
     header, *rows = said
     assert "nb (22222222)" in header and "sing (9f9f9f9f)" in header
-    assert [row.split()[0] for row in rows] == ["eval.acc", "loss", "steps"]
-    assert rows[1].split()[1:] == ["0.123457", "0.2"] and rows[2].split()[1:] == ["-", "100"]
+    assert [row.split()[0] for row in rows] == ["state", "cost", "runtime", "gpu", "eval.acc", "loss", "steps"]
+    assert rows[5].split()[1:] == ["0.123457", "0.2"] and rows[6].split()[1:] == ["-", "100"]
 
 
 def test_compare_says_when_there_is_nothing_to_compare(http, fake) -> None:
@@ -143,3 +155,91 @@ def test_run_without_signing_in_says_so_plainly(http, fake, tmp_path) -> None:
     assert (
         "Running without the project's secrets: couldn't read their names, as you're not signed in (krater login)."
     ) in said
+
+
+def test_compare_shows_cost_runtime_and_gpu(http, fake) -> None:
+    _login(http, [])
+    fake.details[JOB].update(
+        spend_cents=1234,
+        started_at="2026-11-19T10:00:00+00:00",
+        ended_at="2026-11-19T11:30:00+00:00",
+        state="succeeded",
+        gpu_names=["RTX 3090"],
+        machine=None,
+    )
+    fake.metrics = {JOB: {"loss": 0.5}}
+    said: list[str] = []
+
+    run(["compare", JOB], http=http, say=said.append)
+
+    rows = {row.split()[0]: row.split()[1:] for row in said[1:]}
+    assert rows["state"] == ["succeeded"] and rows["cost"] == ["$12.34"]
+    assert rows["runtime"] == ["1h30m"] and rows["gpu"] == ["RTX", "3090"]
+
+
+def test_compare_takes_a_whole_sweep(http, fake) -> None:
+    _login(http, [])
+    fake.project_jobs[PROJECT] = [
+        {**fake.project_jobs[PROJECT][0], "id": JOB, "name": "lr-1"},
+        {**fake.project_jobs[PROJECT][0], "id": JOB_C, "name": "lr-0"},
+        {**fake.project_jobs[PROJECT][0], "id": "77777777-7777-7777-7777-777777777777", "name": "lr-final"},
+    ]
+    fake.details[JOB_C] = {**fake.details[JOB], "id": JOB_C, "name": "lr-0"}
+    fake.metrics = {JOB: {"loss": 0.1}, JOB_C: {"loss": 0.2}}
+    said: list[str] = []
+
+    assert run(["compare", "--sweep", "lr", "--project", PROJECT], http=http, say=said.append) == 0
+
+    assert said[0].split()[0:2] == ["sing", "(9f9f9f9f)"] or "(9f9f9f9f)" in said[0]
+    assert "lr-final" not in said[0]
+
+
+def test_limits_sends_the_changes(http, fake) -> None:
+    _login(http, [])
+    said: list[str] = []
+
+    assert run(["limits", JOB, "--max-runtime", "600", "--max-spend", "none"], http=http, say=said.append) == 0
+
+    assert fake.limits == [{"max_runtime_minutes": 600, "max_spend_cents": None}]
+    assert said == ["Changed: max runtime 480 → 600 minutes."]
+
+
+def test_limits_needs_something_to_change(http, fake) -> None:
+    _login(http, [])
+    said: list[str] = []
+    assert run(["limits", JOB], http=http, say=said.append) == 2
+
+
+def test_a_newer_cli_is_mentioned_once_a_day(http, fake, capsys, monkeypatch) -> None:
+    from krater_cli import newer
+
+    monkeypatch.setattr(newer, "_said", False)
+    _login(http, [])
+    fake.cli_latest = "99.0.0"
+
+    run(["whoami"], http=http, say=lambda _: None)
+    assert "version 99.0.0 is out" in capsys.readouterr().err
+
+    monkeypatch.setattr(newer, "_said", False)
+    run(["whoami"], http=http, say=lambda _: None)
+    assert capsys.readouterr().err == ""  # not again within the day
+
+    assert not newer.is_newer("0.1.0") and not newer.is_newer("garbage") and newer.is_newer("100.0")
+
+
+def test_code_that_builds_cuda_is_warned_of_on_a_runtime_image(http, fake, tmp_path) -> None:
+    from test_cli import SUBMIT_CODE, _code_folder
+
+    _login(http, [])
+    files = {
+        "train.py": "from torch.utils.cpp_extension import load_inline\n",
+        "requirements.txt": "flash-attn==2.6.3\nnumpy\n",
+    }
+    folder = _code_folder(tmp_path, files)
+    said: list[str] = []
+
+    assert run([*SUBMIT_CODE, "--code", folder, "--limit", "0.4"], http=http, say=said.append) == 0
+
+    (warning,) = [line for line in said if "builds CUDA code" in line]
+    assert "flash-attn in requirements.txt" in warning and "cpp_extension in train.py" in warning
+    assert "-devel" in warning

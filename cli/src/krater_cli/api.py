@@ -11,7 +11,7 @@ from typing import Any
 
 import httpx
 
-from krater_cli import auth
+from krater_cli import auth, newer
 
 
 class KraterError(Exception):
@@ -78,6 +78,7 @@ class Krater:
         if response.status_code == 401:
             self.creds = auth.refresh(self.creds, http=self.http)
             response = self._send_patiently(method, path, json)
+        newer.notice(response.headers.get(newer.HEADER))
         try:
             data = response.json()
         except ValueError:

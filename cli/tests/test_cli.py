@@ -2438,7 +2438,9 @@ def test_submit_with_code_uploads_the_folder_and_runs_the_command_inside_it(http
     body = fake.jobs[0]["body"]
     assert body["image"] == main.code_mod.DEFAULT_IMAGE
     assert body["inputs"] == [prefix]
-    assert body["command"] == f'cd "$KRATER_INPUT_DIR/code/{found.digest}" && python train.py'
+    assert body["command"] == (
+        f'cd "$KRATER_INPUT_DIR/code/{found.digest}" && {main.code_mod.NEEDS_PYTHON} && python train.py'
+    )
     assert f"Code: uploaded {folder} (2 files, 0 KB) as the input {prefix}" in said
 
 
@@ -2470,7 +2472,10 @@ def test_code_with_requirements_installs_them_first_and_keeps_a_given_image(http
 
     body = fake.jobs[0]["body"]
     assert body["image"] == "python:3.12"
-    assert " && pip install --quiet --no-cache-dir -r requirements.txt && python train.py" in body["command"]
+    assert (
+        " && PIP_BREAK_SYSTEM_PACKAGES=1 pip install --quiet --no-cache-dir -r requirements.txt && python train.py"
+        in body["command"]
+    )
 
 
 def test_code_in_a_job_file_is_relative_to_the_file(http, fake, tmp_path) -> None:
@@ -2527,7 +2532,7 @@ def test_run_with_code_mounts_the_folder_where_krater_puts_it(http, fake, tmp_pa
     digest = main.code_mod.collect(folder).digest
     assert spec.image == main.code_mod.DEFAULT_IMAGE
     assert spec.mounts == [(folder, f"/krater/inputs/code/{digest}")]
-    assert spec.command == f'cd "$KRATER_INPUT_DIR/code/{digest}" && python train.py'
+    assert spec.command == f'cd "$KRATER_INPUT_DIR/code/{digest}" && {main.code_mod.NEEDS_PYTHON} && python train.py'
     assert f"{os.path.abspath(folder)}:/krater/inputs/code/{digest}:ro" in spec.docker_args("c")
 
 

@@ -112,7 +112,11 @@ CONDITION_TITLES = {
     "credit_out": "The Vast account is out of credit",
     "store_full": "Krater's storage is nearly full",
     "edge_ping_stale": "alastor's ping stopped reaching Krater",
+    "network_outage": "This server's network or DNS looks down",
 }
+#: The alert that stands for several whose failures all say this server's own network or DNS is down
+#: (`net_errors.OWN_NETWORK_DOWN`): it opens and clears once, and the alerts it covers stay quiet meanwhile.
+OUTAGE = "network_outage"
 
 
 def _row(session: Session, key: str) -> OpsAlert:
@@ -475,19 +479,11 @@ def deliver(session: Session, slack_client: SlackClient | None, channel_id: str 
         .with_for_update()
     ).all()
     posted = []
-    # Several alerts that all say this server's own network is down are one problem: post them as one.
-    outage = [
-        row
-        for row in rows
-        if row.opened_at is not None and any(hint in row.message for hint in net_errors.OWN_NETWORK_DOWN)
-    ]
-    if len(outage) >= 2:
-        if _post(slack_client, channel_id, _outage_text(outage), cleared=False, key="network_outage"):
-            for row in outage:
-                row.notified_at = now
-                posted.append(row.key)
-        rows = [row for row in rows if row not in outage]
+    rows, covering = _deliver_outage(session, slack_client, channel_id, rows, posted, now=now)
     for row in rows:
+        if covering and row.opened_at is None and _says_outage(row):
+            row.notified_at = None  # cleared under the outage alert, which says so once
+            continue
         cleared = row.opened_at is None
         text = _cleared_text(row) if cleared else _open_text(row, again=row.notified_at is not None)
         if not _post(slack_client, channel_id, text, cleared=cleared, key=row.key):
@@ -513,8 +509,58 @@ def _post(slack_client: SlackClient | None, channel_id: str | None, text: str, *
     return True
 
 
-def _outage_text(rows: list[OpsAlert]) -> str:
-    again = all(row.notified_at is not None for row in rows)
+def _says_outage(row: OpsAlert) -> bool:
+    return any(hint in (row.message or "") for hint in net_errors.OWN_NETWORK_DOWN)
+
+
+def _deliver_outage(
+    session: Session,
+    slack_client: SlackClient | None,
+    channel_id: str | None,
+    rows: list[OpsAlert],
+    posted: list[str],
+    *,
+    now: datetime,
+) -> tuple[list[OpsAlert], bool]:
+    """Open, remind or clear the `OUTAGE` alert. Returns the rows still to post one by one, and whether the outage
+    alert covers this run (its alerts' own posts are then left out)."""
+    net = session.get(OpsAlert, OUTAGE, with_for_update=True)
+    members = [
+        row
+        for row in session.scalars(
+            sa.select(OpsAlert).where(OpsAlert.opened_at.is_not(None), OpsAlert.key != OUTAGE).with_for_update()
+        ).all()
+        if _says_outage(row)
+    ]
+    open_before = net is not None and net.opened_at is not None
+    rows = [row for row in rows if row.key != OUTAGE]
+    if len(members) >= 2 or (open_before and members):
+        net = net or _row(session, OUTAGE)
+        if net.opened_at is None:
+            net.opened_at, net.first_failed_at, net.notified_at = now, now, None
+        net.last_failed_at, net.message = now, members[0].message
+        if net.notified_at is None or net.notified_at <= now - RENOTIFY:
+            text = _outage_text(members, again=net.notified_at is not None)
+            if _post(slack_client, channel_id, text, cleared=False, key=OUTAGE):
+                net.notified_at = now
+                posted.append(OUTAGE)
+        for row in members:
+            row.notified_at = now  # quiet while the outage alert covers it
+        covered = {row.key for row in members}
+        return [row for row in rows if row.key not in covered], True
+    if open_before:
+        # Every alert it covered has cleared (or none is left open): one cleared post for all of them.
+        net.opened_at = None
+        if net.notified_at is not None and _post(
+            slack_client, channel_id, _cleared_text(net), cleared=True, key=OUTAGE
+        ):
+            net.notified_at = None
+            posted.append(OUTAGE)
+        return rows, True
+    return rows, False
+
+
+def _outage_text(rows: list[OpsAlert], *, again: bool = False) -> str:
     lines = [
         ":rotating_light: *Krater: this server's network or DNS looks down*" + (" (still)" if again else ""),
         f"{len(rows)} alerts failed the same way, so the services are probably fine:",

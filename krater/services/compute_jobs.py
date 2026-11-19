@@ -13,8 +13,8 @@ from __future__ import annotations
 import math
 import re
 import uuid
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
@@ -32,15 +32,17 @@ from krater.models import (
     ComputeOutbid,
     Project,
 )
-from krater.models.compute_job import FINISHED_JOB_STATES
-from krater.registry import ImageUnavailable, Registry, RegistryError, parse_reference
+from krater.models.compute_job import ACTIVE_JOB_STATES, FINISHED_JOB_STATES
+from krater.registry import ImageUnavailable, Registry, RegistryError, WrongPlatform, parse_reference
 from krater.services import (
+    audit,
     budget,
     clearance,
     compute_halt,
     compute_inputs,
     compute_settings,
     funding_holds,
+    image_checks,
     smoke,
     teams,
     workspaces,
@@ -67,6 +69,8 @@ AUDIT_JOB_ENDED = "compute_job_ended"
 MAX_SPEND_CAP_CENTS = 100_000_00
 #: A batch job's GPU sat nearly unused for the policy's idle warning time.
 AUDIT_JOB_IDLE = "compute_job_idle"
+#: A running job's checkpoints stopped reaching storage (`krater.compute.checkpoint_watch`).
+AUDIT_CHECKPOINT_OVERDUE = "compute_checkpoint_overdue"
 #: How a member's own cancel reads (`cancel_job`): no channel notice for it, they know.
 MEMBER_CANCEL_REASON = "Cancelled by a team member."
 #: Machines that hold a place under a project's "machines at once" limit (`max_machines`): all but a stopped box.
@@ -125,16 +129,25 @@ def image_error(image: str) -> str | None:
     return None
 
 
-def check_image(registry: Registry | None, image: str) -> None:
+def check_image(
+    registry: Registry | None,
+    image: str,
+    *,
+    spec: JobSpec | None = None,
+    session: Session | None = None,
+    now: datetime | None = None,
+) -> image_checks.ImageReport:
     """Raise `ValidationFailed` when `image`'s registry says no one can pull it without signing in (it doesn't exist,
     the tag is wrong, or it's private): a machine would be rented only to be refused the same. In production
     (2026-11-12) a box named the guide's example image with a full stop after it. When the registry can't be asked
     (down, rate-limiting, a host Krater won't reach) the job goes ahead: the scheduler still fails it as soon as a
     machine's pull is refused (`krater.compute.scheduler.pull_refused`)."""
     if registry is None:
-        return
+        return image_checks.ImageReport()
     try:
-        registry.resolve_digest(image)
+        details = image_checks.describe(registry, image, session=session, now=now or datetime.now(UTC))
+    except WrongPlatform as exc:
+        raise ValidationFailed({"image": f"{image} can't run on Krater's machines: {exc}"}) from None
     except ImageUnavailable as exc:
         raise ValidationFailed(
             {
@@ -143,8 +156,34 @@ def check_image(registry: Registry | None, image: str) -> None:
             }
         ) from None
     except RegistryError:
-        return
+        details = None
+    # Certain to fail: refused. Likely to: warnings (`krater.services.image_checks`).
+    if details is not None and (problem := image_checks.platform_problem(details)) is not None:
+        raise ValidationFailed({"image": f"{image} can't run on Krater's machines: {problem}"})
+    if spec is not None and details is not None and details.size_bytes > spec.disk_gb * image_checks.BYTES_PER_GB:
+        raise ValidationFailed(
+            {
+                "disk_gb": f"The image alone is {details.size_bytes / image_checks.BYTES_PER_GB:.1f} GB compressed, "
+                f"more than {spec.disk_gb} GB of disk. Ask for at least "
+                f"{math.ceil(details.size_bytes * image_checks.UNPACKED_FACTOR / image_checks.BYTES_PER_GB) + 10} GB."
+            }
+        )
+    warnings = (
+        image_checks.warnings_for(
+            details, image, command=spec.command, gpu_names=tuple(spec.gpu_names), disk_gb=spec.disk_gb
+        )
+        if spec is not None
+        else []
+    )
+    return image_checks.ImageReport(
+        warnings=warnings,
+        cuda=image_checks.cuda_version(details, image),
+        size_bytes=details.size_bytes if details is not None else None,
+    )
 
+
+#: The event a job's image checks write for each warning (`krater.services.image_checks`).
+IMAGE_WARNING = "image_warning"
 
 #: The most data a job may say it moves each way, in GB (100 TB).
 MAX_DATA_GB = 100_000
@@ -191,6 +230,8 @@ class JobSpec:
     workspace_id: uuid.UUID | None = None
     workspace_name: str | None = None
     end_holder: bool = False
+    # Set from the image's checks, not by the member: the CUDA major version a machine's driver must support.
+    min_cuda_major: int | None = None
 
 
 @dataclass(frozen=True)
@@ -266,11 +307,13 @@ def _can_launch_for(actor: Actor, project: Project) -> bool:
     return teams.on_team(project, actor.user.id)
 
 
-def validate_spec(spec: JobSpec, *, cap_cents: int, registry: Registry | None = None) -> None:
+def validate_spec(
+    spec: JobSpec, *, cap_cents: int, registry: Registry | None = None, session: Session | None = None
+) -> image_checks.ImageReport:
     """Raise `ValidationFailed` for what `submit_job` would refuse in `spec` itself (for estimating before queueing),
-    and, given a `registry`, for an image it refuses (`check_image`)."""
+    and, given a `registry`, for an image it refuses (`check_image`). Returns what the image's checks warn of."""
     _validate(spec, cap_microusd=cap_cents * MICROUSD_PER_CENT)
-    check_image(registry, spec.image)
+    return check_image(registry, spec.image, spec=spec, session=session)
 
 
 def _validate(spec: JobSpec, *, cap_microusd: int) -> None:
@@ -384,7 +427,8 @@ def submit_job(
     if project.status not in LAUNCHABLE_STATUSES:
         raise InvalidState(f"A {project.status.value} project can't run jobs.")
     _validate(spec, cap_microusd=cap_cents * MICROUSD_PER_CENT)
-    check_image(registry, spec.image)
+    report = check_image(registry, spec.image, spec=spec, session=session, now=now)
+    spec = replace(spec, min_cuda_major=report.min_cuda_major)
     funding_holds.require_not_held(project)
     clearance.require_team_cleared(session, weave_client, project)
     inputs_bytes = inputs_size(store, project, spec)
@@ -416,6 +460,8 @@ def submit_job(
         smoke_minutes=spec.smoke_minutes,
         checkpoint_upload_minutes=spec.checkpoint_upload_minutes,
         max_spend_cents=spec.max_spend_cents,
+        min_cuda_major=spec.min_cuda_major,
+        image_bytes=report.size_bytes,
         state=ComputeJobState.QUEUED,
         # While compute is stopped, say so from the start, as the scheduler's next pass would.
         state_reason=f"Waiting: {halted}."
@@ -432,6 +478,10 @@ def submit_job(
     session.add(job)
     session.flush()
     session.add(ComputeEvent(job_id=job.id, kind="queued", message="Queued.", payload={}, at=now))
+    for warning in report.warnings:
+        session.add(ComputeEvent(job_id=job.id, kind=IMAGE_WARNING, message=warning, payload={}, at=now))
+    # Not stored on the job: what the API's submit answers with (the events above keep them).
+    job.image_warnings = report.warnings
     if spec.kind is ComputeJobKind.BOX:
         if spec.workspace_id is not None:
             workspaces.attach(
@@ -515,6 +565,15 @@ def stop_box(session: Session, actor: Actor, *, job: ComputeJob, now: datetime) 
     session.flush()
 
 
+def _require_under_spend_cap(job: ComputeJob) -> None:
+    """A box at its spend cap would be stopped again at once: say so instead, and how to go on."""
+    if job.max_spend_cents is not None and (job.spend_cents or 0) >= job.max_spend_cents:
+        raise InvalidState(
+            f"This box has reached its spend cap of ${job.max_spend_cents / 100:,.2f}. Raise it under Change limits "
+            "(or krater limits) first."
+        )
+
+
 def resume_box(session: Session, actor: Actor, *, job: ComputeJob, now: datetime, weave_client: WeaveClient) -> None:
     """Ask the scheduler to start a stopped box on its machine again (only works while the machine's GPU is free).
     Starting it pays for its GPU again, so the team must be cleared in Weave, as for a new job."""
@@ -522,6 +581,7 @@ def resume_box(session: Session, actor: Actor, *, job: ComputeJob, now: datetime
     row = _live_instance(job)
     if job.state is not ComputeJobState.STOPPED or row is None:
         raise InvalidState("Only a stopped box can be resumed.")
+    _require_under_spend_cap(job)
     if job.project.status not in LAUNCHABLE_STATUSES:
         raise InvalidState(f"A {job.project.status.value} project can't run boxes.")
     funding_holds.require_not_held(job.project)
@@ -585,6 +645,7 @@ def move_box(session: Session, actor: Actor, *, job: ComputeJob, now: datetime) 
     row = _live_instance(job)
     if job.state is not ComputeJobState.STOPPED or row is None:
         raise InvalidState("Only a stopped box can be moved.")
+    _require_under_spend_cap(job)
     row.destroy_requested_at = now
     row.destroy_reason = MOVED_BY_MEMBER
     job.state_reason = "Moving: starting elsewhere from the last saved workspace."
@@ -594,3 +655,100 @@ def move_box(session: Session, actor: Actor, *, job: ComputeJob, now: datetime) 
         )
     )
     session.flush()
+
+
+#: The audit action for an admin changing a job's limits (a team member's change is in the job's history only).
+AUDIT_JOB_LIMITS = "compute_job_limits"
+MAX_RUNTIME_MINUTES = 7 * 24 * 60
+#: `change_limits`'s `max_spend_cents` when the request leaves the cap as it is.
+UNCHANGED = object()
+
+
+def _rate_microusd(job: ComputeJob) -> int | None:
+    """What the job's current machine costs an hour, if it has one."""
+    live = [
+        i for i in job.instances if i.state not in (ComputeInstanceState.DESTROYED, ComputeInstanceState.CREATE_FAILED)
+    ]
+    return live[-1].full_microusd if live else None
+
+
+def _others_held(session: Session, job: ComputeJob) -> int:
+    rows = session.execute(
+        sa.select(ComputeJob.hold_cents, ComputeJob.spend_cents).where(
+            ComputeJob.project_id == job.project_id,
+            ComputeJob.state.in_(ACTIVE_JOB_STATES),
+            ComputeJob.id != job.id,
+        )
+    )
+    return sum(max(0, hold - (spent or 0)) for hold, spent in rows)
+
+
+def change_limits(
+    session: Session,
+    actor: Actor,
+    *,
+    job: ComputeJob,
+    now: datetime,
+    max_runtime_minutes: int | None = None,
+    max_spend_cents=UNCHANGED,
+) -> list[str]:
+    """Change an unfinished job's max runtime and spend cap (None removes the cap), by its team or an admin. Raising
+    the runtime of a job with a machine raises its budget hold as far as the project's free budget allows, as when
+    it was rented. A box stopped at its cap can be resumed once the cap is raised. Returns what changed, in words."""
+    if not (actor.is_admin or _can_launch_for(actor, job.project)):
+        raise NotAllowed("Only the project's team or an admin can change this job.")
+    if job.state in FINISHED_JOB_STATES:
+        raise InvalidState(f"The job is already {job.state.value}.")
+    errors: dict[str, str] = {}
+    changed: list[str] = []
+    if max_runtime_minutes is not None and max_runtime_minutes != job.max_runtime_minutes:
+        if job.smoke_minutes:
+            errors["max_runtime_minutes"] = "A smoke test stops after its own minutes; rerun it without --smoke."
+        elif not 1 <= max_runtime_minutes <= MAX_RUNTIME_MINUTES:
+            errors["max_runtime_minutes"] = "Choose a max runtime of 1 minute to 7 days."
+        else:
+            changed.append(f"max runtime {job.max_runtime_minutes} → {max_runtime_minutes} minutes")
+    if max_spend_cents is not UNCHANGED and max_spend_cents != job.max_spend_cents:
+        spent = job.spend_cents or 0
+        if max_spend_cents is not None and not 1 <= max_spend_cents <= MAX_SPEND_CAP_CENTS:
+            errors["max_spend"] = "Give a spend cap of $0.01 to $100,000, or none."
+        elif max_spend_cents is not None and max_spend_cents <= spent:
+            errors["max_spend"] = f"It has already cost ${spent / 100:,.2f}: give a cap above that, or cancel it."
+        else:
+            before = "none" if job.max_spend_cents is None else f"${job.max_spend_cents / 100:,.2f}"
+            after = "none" if max_spend_cents is None else f"${max_spend_cents / 100:,.2f}"
+            changed.append(f"spend cap {before} → {after}")
+    if errors:
+        raise ValidationFailed(errors)
+    if not changed:
+        return []
+    if max_runtime_minutes is not None:
+        job.max_runtime_minutes = max_runtime_minutes
+    if max_spend_cents is not UNCHANGED:
+        job.max_spend_cents = max_spend_cents
+    note = ""
+    rate = _rate_microusd(job)
+    if rate is not None and max_runtime_minutes is not None:
+        wanted = math.ceil(rate * max_runtime_minutes / 60 / MICROUSD_PER_CENT)
+        free = budget.remaining_cents(session, job.project) - _others_held(session, job)
+        job.hold_cents = max(job.hold_cents, min(wanted, free + (job.spend_cents or 0)))
+        if job.hold_cents < wanted:
+            note = (
+                f" The project's free budget covers about ${job.hold_cents / 100:,.2f} of it; it stops when the "
+                "budget runs out."
+            )
+    who = _who(actor, job)
+    message = f"Limits changed by {who}: {'; '.join(changed)}.{note}"
+    session.add(
+        ComputeEvent(job_id=job.id, kind="limits_changed", message=message, payload={"by": str(actor.user.id)}, at=now)
+    )
+    if who == "an admin":
+        audit.record(
+            session,
+            actor,
+            AUDIT_JOB_LIMITS,
+            project=job.project,
+            payload={"job_id": str(job.id), "changed": changed},
+        )
+    session.flush()
+    return changed

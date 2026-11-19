@@ -87,6 +87,11 @@ class ComputeJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # Stop the job (a box: stop it) once it has cost this much, in cents; None for no cap of its own. Checked
     # while it runs, against `spend_cents`.
     max_spend_cents: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
+    # The CUDA major version the image was built for (`krater.services.image_checks`): only machines whose driver
+    # supports it are rented. None when the image doesn't say.
+    min_cuda_major: Mapped[int | None] = mapped_column(sa.SmallInteger, nullable=True)
+    # The image's compressed size when it was queued, if its registry said: a machine that never starts names it.
+    image_bytes: Mapped[int | None] = mapped_column(sa.BigInteger, nullable=True)
 
     state: Mapped[ComputeJobState] = mapped_column(pg_enum(ComputeJobState, name="compute_job_state"), nullable=False)
     # Why the job is where it is, for the member: "waiting for an RTX 4090 bid at or under $0.20/h", ...

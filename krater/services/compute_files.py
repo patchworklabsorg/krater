@@ -113,3 +113,28 @@ def log_tail(
     if truncated and "\n" in text:
         text = text.split("\n", 1)[1]  # start at a whole line
     return LogTail(attempt=chosen, text=text, size_bytes=item.size_bytes, truncated=truncated)
+
+
+#: A checkpoint is overdue once nothing new has been stored for this many upload intervals...
+OVERDUE_INTERVALS = 2
+#: ...and, before the first one, this much longer: the command has to start and write it first.
+FIRST_CHECKPOINT_GRACE_SECONDS = 300
+
+
+def checkpoint_freshness(
+    files: list[JobFile], *, every_minutes: int, running_since: datetime | None, now: datetime
+) -> dict:
+    """When a checkpoint last reached storage, and whether that's overdue: nothing stored for `OVERDUE_INTERVALS`
+    upload intervals since the newest checkpoint, or since the machine started running (`running_since`) when that's
+    later, as after a move (checkpoints restored from an earlier machine keep their old times)."""
+    times = [f.modified for f in files if f.area == "checkpoints" and f.modified is not None]
+    newest = max(times) if times else None
+    since = max((t for t in (newest, running_since) if t is not None), default=None)
+    grace = (
+        0
+        if newest is not None and (running_since is None or newest >= running_since)
+        else (FIRST_CHECKPOINT_GRACE_SECONDS)
+    )
+    overdue = since is not None and (now - since).total_seconds() > OVERDUE_INTERVALS * every_minutes * 60 + grace
+    minutes = int((now - newest).total_seconds() // 60) if newest else None
+    return {"newest": newest, "minutes_ago": minutes, "overdue": overdue}

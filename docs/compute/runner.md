@@ -292,6 +292,9 @@ page instead.
 | `KRATER_SMOKE` | `1` in a smoke test (`krater submit --smoke`): the command is stopped after its minutes, so take few steps |
 | the project's secrets | Such as `HF_TOKEN`, set on the project's Compute page |
 
+The runner also sets `PYTHONUNBUFFERED=1` unless the image's environment or a project secret sets it, so a
+Python job's prints reach the log as they happen rather than when a buffer fills.
+
 Write a checkpoint under a temporary name ending in `.tmp` or `.partial` and rename it when it's complete: the
 runner skips those names, so it never uploads a half-written file. The image needs a POSIX `sh` and one of curl, wget
 or Python; its own ENTRYPOINT is not run, so put any setup in the command. An image whose `USER` isn't root can't

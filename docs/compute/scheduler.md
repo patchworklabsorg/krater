@@ -136,6 +136,29 @@ spent half a budget on it renting directly. So:
 Every destroy is confirmed with `show_instance(...) is None`. Until it is, the row keeps `destroy_requested_at` and
 the next pass tries again.
 
+### Limits while it runs
+
+`compute_jobs.change_limits` (the job page's **Change limits**, `POST /api/v1/jobs/{id}/limits`, `krater limits`)
+changes a queued or running job's max runtime (1 to 10,080 minutes; not a smoke test's) and spend cap. A cap must be
+above what the job has cost. A higher cap raises the job's budget hold to the smaller of the cap and what the project
+has free plus what the job has spent, so a cap the budget can't cover is still taken and the hold covers what it can.
+It writes a `limits_changed` event, and an audit event when an admin makes the change. `resume_box` and
+`move_box` refuse a box whose spend has reached its cap (it would stop again at once): raise the cap first.
+
+### CUDA
+
+A job whose image says its CUDA version (`docs/compute/images.md`) only takes offers with `cuda_max_good` at least
+its major version (`offers.shape_query(min_cuda_major=...)`), so a CUDA 13 image isn't put on a host whose driver
+only runs 12.
+
+### Checkpoints overdue
+
+Every 15 minutes the worker (`compute_checkpoint_watch`, `krater.compute.checkpoint_watch`) lists the checkpoints of
+each running interruptible job that isn't a smoke test. When none has been stored for two upload intervals since the
+newest one or since the machine started running, whichever is later (plus 5 minutes before the first), it writes a
+`checkpoint_overdue` event once per attempt and an audit event that `slack_notify` posts to the project's channel,
+mentioning the submitter. The job page uses the same rule (`compute_files.checkpoint_freshness`).
+
 ### Credit reserve
 
 Off by default. With the organization limit "Credit reserve" above 0 hours, a job doesn't rent while the provider

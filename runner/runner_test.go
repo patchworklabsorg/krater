@@ -436,6 +436,21 @@ func TestAnOrdinaryJobHasNoSmokeVariable(t *testing.T) {
 	}
 }
 
+func TestPythonOutputIsUnbufferedUnlessTheImageSaysOtherwise(t *testing.T) {
+	f := newFakeKrater(t)
+	f.command = `test "$PYTHONUNBUFFERED" = 1`
+	if code, err := Run(context.Background(), f.cfg(t), http.DefaultClient, http.DefaultClient, noGPU); err != nil || code != 0 {
+		t.Fatalf("Run = %d, %v; want 0: PYTHONUNBUFFERED wasn't 1", code, err)
+	}
+
+	t.Setenv("PYTHONUNBUFFERED", "")
+	g := newFakeKrater(t)
+	g.command = `test -z "$PYTHONUNBUFFERED"`
+	if code, err := Run(context.Background(), g.cfg(t), http.DefaultClient, http.DefaultClient, noGPU); err != nil || code != 0 {
+		t.Fatalf("Run = %d, %v; want 0: the image's own PYTHONUNBUFFERED was replaced", code, err)
+	}
+}
+
 func TestADeniedTokenGivesUpAtOnce(t *testing.T) {
 	f := newFakeKrater(t)
 	cfg := f.cfg(t)

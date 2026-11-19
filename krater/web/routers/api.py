@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import enum
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Annotated, Any
@@ -494,7 +495,10 @@ async def submit(
         db_session.rollback()
         return _error(409, exc.message)
     db_session.commit()
-    return {**_job_json(job), "estimate": _estimate_json(db_session, project, job)}
+    shown = {**_job_json(job), "estimate": _estimate_json(db_session, project, job)}
+    # What the image's checks warn of (`krater.services.image_checks`); the job's history keeps them too.
+    shown["warnings"] = list(getattr(job, "image_warnings", []))
+    return shown
 
 
 @router.post("/projects/{project_id}/jobs/estimate")
@@ -514,13 +518,17 @@ async def estimate(
         return _error(400, "Send a JSON object.")
     try:
         spec = _spec(body, session=db_session, project=project)
-        compute_jobs.validate_spec(spec, cap_cents=hourly_cap_cents(project, get_settings()), registry=registry)
+        report = compute_jobs.validate_spec(
+            spec, cap_cents=hourly_cap_cents(project, get_settings()), registry=registry, session=db_session
+        )
+        spec = replace(spec, min_cuda_major=report.min_cuda_major)
         inputs_bytes = compute_jobs.inputs_size(get_compute_store() if spec.inputs else None, project, spec)
     except ValidationFailed as exc:
         return _error(422, "Check the job's fields.", fields=exc.errors)
     except StorageError:
         return _error(503, "Krater's storage didn't answer; try again in a minute.")
     shown = _estimate_json(db_session, project, spec, inputs_bytes=inputs_bytes)
+    shown["warnings"] = report.warnings
     quote = live_quote.start(db_session, project, spec)
     if quote is not None:
         # `krater submit --estimate` polls `poll` while `status` is "checking" (krater.services.live_prices).
@@ -859,6 +867,33 @@ _ACTIONS = {
     "resume": compute_jobs.resume_box,
     "move": compute_jobs.move_box,
 }
+
+
+@router.post("/jobs/{job_id}/limits")
+async def job_limits(job_id: uuid.UUID, request: Request, actor: Me, db_session: Db):
+    """Change an unfinished job's `max_runtime_minutes` and `max_spend_cents` (null removes the cap); a field left
+    out stays as it is."""
+    job = _job(db_session, actor, job_id)
+    body = await _body(request)
+    if body is None:
+        return _error(400, "Send a JSON object.")
+    try:
+        runtime = _int(body, "max_runtime_minutes", None)
+        spend = _int(body, "max_spend_cents", None) if "max_spend_cents" in body else compute_jobs.UNCHANGED
+        changed = compute_jobs.change_limits(
+            db_session, actor, job=job, now=datetime.now(UTC), max_runtime_minutes=runtime, max_spend_cents=spend
+        )
+    except ValidationFailed as exc:
+        db_session.rollback()
+        return _error(422, "Check the limits.", fields=exc.errors)
+    except NotAllowed as exc:
+        db_session.rollback()
+        return _error(403, exc.message)
+    except (InvalidState, DomainError) as exc:
+        db_session.rollback()
+        return _error(409, exc.message)
+    db_session.commit()
+    return {**_job_json(job), "changed": changed}
 
 
 @router.post("/jobs/{job_id}/{action}")

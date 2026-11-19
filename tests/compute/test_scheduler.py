@@ -1641,3 +1641,77 @@ def test_a_job_that_reaches_its_spend_cap_is_stopped(db_session, member, project
     assert "spend cap" in job.state_reason and "of its $0.03" in job.state_reason
     assert row.state is ComputeInstanceState.DESTROYED
     assert fake.instances == {}
+
+
+def test_raising_a_running_jobs_runtime_raises_its_hold(db_session, member, project, client, fake) -> None:  # noqa: F811
+    job, _ = _running_job(db_session, member, project, client, fake, max_runtime_minutes=60)
+    before = job.hold_cents
+
+    changed = compute_jobs.change_limits(
+        db_session, member, job=job, now=NOW + timedelta(minutes=6), max_runtime_minutes=120, max_spend_cents=500
+    )
+
+    assert changed == ["max runtime 60 → 120 minutes", "spend cap none → $5.00"]
+    assert job.max_runtime_minutes == 120 and job.max_spend_cents == 500
+    assert job.hold_cents > before
+    assert "limits_changed" in _events(db_session, job)
+
+
+def test_limits_refuse_a_cap_under_what_it_cost_and_a_smoke_tests_runtime(
+    db_session,  # noqa: F811
+    member,  # noqa: F811
+    project,  # noqa: F811
+    client,  # noqa: F811
+    fake,  # noqa: F811
+) -> None:
+    job, _ = _running_job(db_session, member, project, client, fake)
+    job.spend_cents = 50
+    with pytest.raises(ValidationFailed) as refused:
+        compute_jobs.change_limits(db_session, member, job=job, now=NOW, max_spend_cents=40)
+    assert "already cost $0.50" in refused.value.errors["max_spend"]
+
+    smoke = _submit(db_session, member, project, smoke_minutes=5)
+    with pytest.raises(ValidationFailed) as refused:
+        compute_jobs.change_limits(db_session, member, job=smoke, now=NOW, max_runtime_minutes=90)
+    assert "smoke test" in refused.value.errors["max_runtime_minutes"]
+
+
+def test_a_box_at_its_spend_cap_is_not_resumed_until_the_cap_is_raised() -> None:
+    from types import SimpleNamespace
+
+    with pytest.raises(InvalidState, match=r"reached its spend cap of \$1.00"):
+        compute_jobs._require_under_spend_cap(SimpleNamespace(max_spend_cents=100, spend_cents=100))
+    compute_jobs._require_under_spend_cap(SimpleNamespace(max_spend_cents=200, spend_cents=100))
+
+
+def test_overdue_checkpoints_are_warned_of_once_per_attempt(db_session, member, project, client, fake) -> None:  # noqa: F811
+    from krater.compute import checkpoint_watch
+    from krater.storage import FakeObjectStore
+
+    job, row = _running_job(db_session, member, project, client, fake)
+    store = FakeObjectStore()
+    started = row.entered_running_at
+
+    assert checkpoint_watch.warn_overdue(db_session, store, now=started + timedelta(minutes=20)) == 0
+    assert checkpoint_watch.warn_overdue(db_session, store, now=started + timedelta(minutes=26)) == 1
+    assert checkpoint_watch.warn_overdue(db_session, store, now=started + timedelta(minutes=41)) == 0
+    assert "checkpoint_overdue" in _events(db_session, job)
+    assert db_session.scalars(
+        sa.select(AuditEvent).where(AuditEvent.action == compute_jobs.AUDIT_CHECKPOINT_OVERDUE)
+    ).one().payload["job_id"] == str(job.id)
+
+
+def test_fresh_checkpoints_are_not_warned_of(db_session, member, project, client, fake) -> None:  # noqa: F811
+    from krater.compute import checkpoint_watch
+    from krater.storage import FakeObjectStore
+
+    job, row = _running_job(db_session, member, project, client, fake)
+    store = FakeObjectStore()
+    started = row.entered_running_at
+    store.put(
+        f"projects/{job.project_id}/jobs/{job.id}/checkpoints/model.pt",
+        content_type="",
+        size_bytes=9,
+        modified=started + timedelta(minutes=30),
+    )
+    assert checkpoint_watch.warn_overdue(db_session, store, now=started + timedelta(minutes=45)) == 0
