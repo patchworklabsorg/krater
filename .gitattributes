@@ -4,3 +4,6 @@
 
 # Self-hosted fonts are binary; never let autocrlf touch them.
 *.woff2 binary
+
+# The self-hosted box copies these onto Linux as they are (deploy/selfhost/README.md).
+deploy/selfhost/** text eol=lf

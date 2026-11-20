@@ -1,0 +1,13 @@
+# Install: cp krater-follow /usr/local/bin/ && cp krater-follow@.service krater-follow@.timer /etc/systemd/system/
+# then `systemctl enable --now krater-follow@prod.timer` (the instance is the directory under /srv/krater).
+[Unit]
+Description=Deploy the followed branch of Krater to /srv/krater/%i
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/krater-follow /srv/krater/%i
+TimeoutStartSec=30min
+Nice=10

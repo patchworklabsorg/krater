@@ -8,6 +8,9 @@ staging run first ([staging.md](staging.md)); this page assumes everything there
 - **On weft: the NixOS module.** Krater isn't run with Compose there: its containers are systemd units defined
   in [patchworklabsorg/infra](https://github.com/patchworklabsorg/infra), behind nginx on weft and Traefik on
   alastor, with agenix secrets: `modules/krater` and `hosts/weft/krater.nix` in that repo (section 0.1).
+- **On a home Docker host behind a Cloudflare Tunnel: `deploy/selfhost/`**, with CI's images, Postgres beside
+  them and a follow timer like weft's. Its README is the plan for moving production off weft
+  ([deploy/selfhost/README.md](../../deploy/selfhost/README.md)).
 - **On any other Docker host: this Compose file**, with the opt-in `proxy` (Caddy, automatic TLS) and `backup`
   profiles. Sections 2 to 5 describe that path.
 

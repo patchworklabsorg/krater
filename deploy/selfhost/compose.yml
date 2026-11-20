@@ -1,0 +1,192 @@
+# Krater on one Docker host with no public address (a home server on Wi-Fi), reached through a Cloudflare
+# Tunnel. It replaces weft's NixOS units (patchworklabsorg/infra modules/krater) with the same containers: the
+# portal and worker from CI's image of one commit, SeaweedFS for the buckets, and Postgres here instead of the
+# central database. Everything is in deploy/selfhost/README.md; read it before the first `up`.
+#
+# One stack per deployment, each with its own directory, env file, ports and tunnel:
+#   docker compose -f deploy/selfhost/compose.yml --env-file /srv/krater/prod/krater.env up -d
+# krater-follow (next to this file) runs that for each new commit and checks the result.
+#
+# Unlike the repo's docker-compose.yml (dev, and the Caddy path): no `build`, every image pinned, data in
+# bind mounts under KRATER_DIR so it can be copied and backed up as files, and the only way in is the tunnel.
+
+name: ${KRATER_STACK:?set KRATER_STACK in the env file (krater-prod or krater-staging)}
+
+x-app: &app
+  # CI's image of one commit on main (.github/workflows/ci.yml, `image`). krater-follow sets the tag; by hand,
+  # `KRATER_IMAGE_TAG=<full sha> docker compose ... up -d`. amd64 only.
+  image: ghcr.io/patchworklabsorg/krater:${KRATER_IMAGE_TAG:?set KRATER_IMAGE_TAG to a full commit sha}
+  pull_policy: missing
+  env_file: ${KRATER_DIR:?set KRATER_DIR in the env file}/krater.env
+  logging: &logging
+    driver: local
+    options:
+      max-size: 20m
+      max-file: "5"
+
+services:
+  # The `krater` schema that lived in patchwork_central on skein (prod) or hem (staging). POSTGRES_USER must be
+  # `krater`: the restored schema is named after the role, and Krater's URL has no search_path, so Postgres finds
+  # it through the default "$user", public. 18 is skein's version (infra modules/central-db): a dump from 18
+  # restores into 18, not into the 16 of the dev compose file.
+  db:
+    image: postgres:18.7
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: krater
+      POSTGRES_DB: krater
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the env file}
+    volumes:
+      # Postgres 18 keeps its data under /var/lib/postgresql/18/docker; mount the parent.
+      - ${KRATER_DIR}/db:/var/lib/postgresql
+    shm_size: 256m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U krater -d krater"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    logging: *logging
+
+  # Migrations, then the buckets and their CORS rule, as weft's krater-web did before each start. An older
+  # release on a database a newer one migrated (a rollback) starts without migrating: migrations only add
+  # (docs/dev/production.md 0.3), and `alembic upgrade head` would fail on the unknown revision.
+  migrate:
+    <<: *app
+    restart: "no"
+    command:
+      - sh
+      - -c
+      - |
+        python -c "$$KRATER_DB_IS_NEWER"; s=$$?
+        if [ "$$s" = 3 ]; then echo "The database is at a newer migration than this release; starting without migrating."
+        elif [ "$$s" = 0 ]; then alembic upgrade head || exit 1
+        else exit "$$s"; fi
+        python -m krater.storage.ensure_bucket
+    environment:
+      KRATER_DB_IS_NEWER: |
+        import sys
+        from alembic.config import Config
+        from alembic.runtime.migration import MigrationContext
+        from alembic.script import ScriptDirectory
+        from krater.db import get_engine
+        known = {r.revision for r in ScriptDirectory.from_config(Config("alembic.ini")).walk_revisions()}
+        with get_engine().connect() as c:
+            current = set(MigrationContext.configure(c).get_current_heads())
+        sys.exit(3 if current - known else 0)
+    depends_on:
+      db:
+        condition: service_healthy
+      storage:
+        condition: service_started
+
+  portal:
+    <<: *app
+    restart: unless-stopped
+    environment:
+      # Fernet keys for project secrets, one per line, newest first: the same file weft had
+      # (krater-project-secrets-key.age). The portal alone reads it, as on weft.
+      KRATER_PROJECT_SECRETS_KEY_FILE: /run/secrets/project_secrets_key
+    volumes:
+      - ${KRATER_DIR}/project-secrets-key:/run/secrets/project_secrets_key:ro
+    # Loopback only, for krater-follow's checks and for you on the host. The public way in is the tunnel.
+    ports:
+      - "127.0.0.1:${KRATER_PORTAL_PORT:?set KRATER_PORTAL_PORT}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=5)"]
+      interval: 10s
+      timeout: 8s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    <<: *app
+    restart: unless-stopped
+    # Two at a time, so the minute's scheduler pass never waits behind the slow price-history run.
+    command: ["procrastinate", "--app=krater.worker.app.app", "worker", "--concurrency=2"]
+    # Time for a scheduler pass or a price check to finish before the worker stops (weft gave it 120 s).
+    stop_grace_period: 120s
+    environment:
+      # The Vast key, the bare key on one line. The worker alone gets it.
+      KRATER_VAST_API_KEY_FILE: /run/secrets/vast_api_key
+    volumes:
+      - ${KRATER_DIR}/vast-key:/run/secrets/vast_api_key:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  # The buckets (screenshots, and compute's checkpoints, outputs and inputs). 4.47 is what weft runs: copy
+  # weft's store into ${KRATER_DIR}/storage with this same version. Each volume is 1 GB; KRATER_STORAGE_MAX_VOLUMES
+  # caps the store so it can't fill the disk (0 would size it from free disk). Keep
+  # KRATER_COMPUTE_STORE_CAPACITY_GB equal to it, for Krater's "storage 80% full" alert.
+  storage:
+    image: chrislusf/seaweedfs:4.47
+    restart: unless-stopped
+    environment:
+      S3_ACCESS_KEY: ${KRATER_S3_ACCESS_KEY_ID:?set KRATER_S3_ACCESS_KEY_ID}
+      S3_SECRET_KEY: ${KRATER_S3_SECRET_ACCESS_KEY:?set KRATER_S3_SECRET_ACCESS_KEY}
+      VOLUME_MAX: ${KRATER_STORAGE_MAX_VOLUMES:?set KRATER_STORAGE_MAX_VOLUMES}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        umask 077 &&
+        printf '{"identities":[{"name":"krater","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Admin","Read","List","Tagging","Write"]}]}'
+        "$$S3_ACCESS_KEY" "$$S3_SECRET_KEY" > /tmp/s3.json &&
+        exec weed server -dir=/data -volume.max="$$VOLUME_MAX" -master.volumeSizeLimitMB=1024 -s3 -s3.port=8333 -s3.config=/tmp/s3.json
+    ports:
+      - "127.0.0.1:${KRATER_STORAGE_PORT:?set KRATER_STORAGE_PORT}:8333"
+    volumes:
+      - ${KRATER_DIR}/storage:/data
+    logging: *logging
+
+  # The public way in. Cloudflare holds the tunnel's routes (README, "The tunnel"):
+  #   <KRATER_BASE_URL host>      -> http://portal:8000
+  #   <storage public host>       -> http://storage:8333
+  # The token is in its own file so the app containers never see it.
+  tunnel:
+    image: cloudflare/cloudflared:2026.10.7
+    restart: unless-stopped
+    command: ["tunnel", "--no-autoupdate", "--metrics", "0.0.0.0:2000", "run"]
+    env_file: ${KRATER_DIR}/tunnel.env
+    depends_on:
+      - portal
+      - storage
+    logging: *logging
+
+  # A dump of the database every KRATER_BACKUP_INTERVAL_SECONDS (default a day) into ${KRATER_DIR}/backups,
+  # keeping KRATER_BACKUP_KEEP_DAYS (default 14). krater-follow also dumps before each deploy. Copy the
+  # directory off this machine: the budget ledger and the audit log exist nowhere else.
+  db-backup:
+    image: postgres:18.7
+    restart: unless-stopped
+    environment:
+      PGHOST: db
+      PGUSER: krater
+      PGDATABASE: krater
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      BACKUP_INTERVAL_SECONDS: ${KRATER_BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_KEEP_DAYS: ${KRATER_BACKUP_KEEP_DAYS:-14}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        while true; do
+          name="krater-$$(date -u +%Y%m%dT%H%M%SZ).dump"
+          if pg_dump --format=custom --file="/backups/$$name.partial"; then
+            mv "/backups/$$name.partial" "/backups/$$name"
+            echo "backup written: $$name"
+          else
+            rm -f "/backups/$$name.partial"
+            echo "backup FAILED at $$(date -u +%FT%TZ)" >&2
+          fi
+          find /backups -name 'krater-*.dump' -mtime +"$$BACKUP_KEEP_DAYS" -delete
+          sleep "$$BACKUP_INTERVAL_SECONDS"
+        done
+    volumes:
+      - ${KRATER_DIR}/backups:/backups
+    depends_on:
+      db:
+        condition: service_healthy
+    logging: *logging
