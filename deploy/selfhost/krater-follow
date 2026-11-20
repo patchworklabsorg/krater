@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+# Deploys the head of one branch of patchworklabsorg/krater to a self-hosted stack (deploy/selfhost/compose.yml),
+# the way krater-prod-follow did on weft. Run every 5 minutes by krater-follow@<stack>.timer, as root.
+#
+#   krater-follow <KRATER_DIR>             e.g. /srv/krater/prod
+#
+# Settings, from <KRATER_DIR>/follow.conf (shell syntax):
+#   FOLLOW_BRANCH=production     the branch to deploy (staging: main)
+#   FOLLOW_ANCESTOR_OF=main      deploy only a commit already on this branch (empty: no check)
+#   GITHUB_TOKEN=                optional; without it GitHub allows 60 API calls an hour, enough for one stack
+#
+# A new commit deploys only when every check run of it passed (CI's `image` job among them, so its image exists).
+# Then: dump the database, pull the image, `up -d` (migrate runs first), and wait for /healthz to report the new
+# revision and /healthz/worker to answer 200. If they don't within 3 minutes, the previous release starts again.
+# A commit gets 3 tries, then waits for a newer one (rm <KRATER_DIR>/follow-failed-rev to try again).
+# `touch <KRATER_DIR>/follow-hold` stops it until the file is gone. `journalctl -u krater-follow@<stack>` shows
+# what each run did.
+set -euo pipefail
+
+dir=${1:?usage: krater-follow <KRATER_DIR>}
+repo=patchworklabsorg/krater
+image=ghcr.io/$repo
+FOLLOW_BRANCH=production
+FOLLOW_ANCESTOR_OF=main
+GITHUB_TOKEN=
+# shellcheck source=/dev/null
+[ -f "$dir/follow.conf" ] && . "$dir/follow.conf"
+
+env_file=$dir/krater.env
+rev_file=$dir/deployed-rev
+failed_file=$dir/follow-failed-rev
+src=$dir/src
+max_attempts=3
+
+log() { echo "krater-follow[$(basename "$dir")]: $*"; }
+
+if [ -e "$dir/follow-hold" ]; then
+  log "held ($dir/follow-hold exists)"
+  exit 0
+fi
+
+# Exactly one run at a time per stack, also against a deploy by hand that takes the same lock.
+exec 9>"$dir/.follow.lock"
+if ! flock -n 9; then
+  log "another deploy is running"
+  exit 0
+fi
+
+gh() {
+  local auth=()
+  [ -n "$GITHUB_TOKEN" ] && auth=(-H "Authorization: Bearer $GITHUB_TOKEN")
+  curl -fsS --max-time 30 "${auth[@]}" -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/$repo/$1"
+}
+json() { python3 -c "import json,sys; d=json.load(sys.stdin); print($1)"; }
+
+port=$(sed -n 's/^KRATER_PORTAL_PORT=//p' "$env_file")
+# compose.yml requires an image tag even for `ps` and `exec`: the running release's, unless the caller sets one.
+compose() {
+  KRATER_IMAGE_TAG=${KRATER_IMAGE_TAG:-${current:-unset}} docker compose -f "$src/deploy/selfhost/compose.yml" --env-file "$env_file" "$@"
+}
+
+sha=$(gh "git/ref/heads/$FOLLOW_BRANCH" | json 'd["object"]["sha"]')
+current=$(cat "$rev_file" 2>/dev/null || true)
+[ "$sha" = "$current" ] && exit 0
+
+if [ -f "$failed_file" ]; then
+  read -r failed_sha attempts < "$failed_file" || true
+  if [ "$failed_sha" = "$sha" ] && [ "${attempts:-0}" -ge "$max_attempts" ]; then
+    log "$sha failed $attempts times; waiting for a newer commit (rm $failed_file to try again)"
+    exit 0
+  fi
+fi
+
+if [ -n "$FOLLOW_ANCESTOR_OF" ]; then
+  # base...head = sha...main: "ahead" or "identical" means main contains sha.
+  status=$(gh "compare/$sha...$FOLLOW_ANCESTOR_OF" | json 'd["status"]')
+  if [ "$status" != ahead ] && [ "$status" != identical ]; then
+    log "$sha is not on $FOLLOW_ANCESTOR_OF ($status); not deploying"
+    exit 0
+  fi
+fi
+
+# Every check run finished and none failed. Not yet finished: wait for the next run.
+checks=$(gh "commits/$sha/check-runs?per_page=100" | json '
+";".join(sorted({"pending" if r["status"] != "completed" else ("ok" if r["conclusion"] in ("success","skipped","neutral") else "failed") for r in d["check_runs"]})) or "none"')
+case $checks in
+  ok) ;;
+  *failed*) log "$sha has failed checks; not deploying"; exit 0 ;;
+  *) log "$sha checks: $checks; waiting"; exit 0 ;;
+esac
+
+log "deploying $sha (was ${current:-nothing})"
+
+healthy() {
+  local want=$1 rev
+  for _ in $(seq 1 36); do
+    rev=$(curl -fsS --max-time 5 "http://127.0.0.1:$port/healthz" 2>/dev/null | json 'd.get("revision","")' 2>/dev/null || true)
+    if [ "$rev" = "$want" ] && curl -fsS -o /dev/null --max-time 5 "http://127.0.0.1:$port/healthz/worker"; then
+      return 0
+    fi
+    sleep 5
+  done
+  return 1
+}
+
+checkout() {
+  [ -d "$src/.git" ] || git clone -q "https://github.com/$repo.git" "$src"
+  git -C "$src" fetch -q origin "$1"
+  git -C "$src" checkout -q --detach "$1"
+}
+
+# 1. A dump before anything migrates. A failed dump stops the deploy.
+if compose ps --status running --services 2>/dev/null | grep -qx db; then
+  mkdir -p "$dir/backups"
+  dump="$dir/backups/pre-deploy-$(date -u +%Y%m%dT%H%M%SZ)-${sha:0:12}.dump"
+  if ! compose exec -T db pg_dump --format=custom -U krater krater > "$dump.partial"; then
+    rm -f "$dump.partial"
+    log "the database dump failed; not deploying"
+    exit 1
+  fi
+  mv "$dump.partial" "$dump"
+  find "$dir/backups" -name 'pre-deploy-*.dump' -printf '%T@ %p\n' | sort -rn | tail -n +15 | cut -d' ' -f2- | xargs -r rm -f
+fi
+
+# 2. The image first, so a failed pull leaves the running release alone.
+if ! timeout 15m docker pull -q "$image:$sha" >/dev/null; then
+  log "couldn't pull $image:$sha; will retry"
+  exit 1
+fi
+
+# 3. The compose file of that commit, then up. migrate runs before portal and worker start again.
+checkout "$sha"
+if KRATER_IMAGE_TAG=$sha compose up -d --remove-orphans && healthy "$sha"; then
+  echo "$sha" > "$rev_file"
+  rm -f "$failed_file"
+  log "$sha is live"
+  docker image ls "$image" --format '{{.Tag}}' | grep -vxE "$sha|${current:-none}" | while read -r tag; do
+    docker rmi "$image:$tag" >/dev/null 2>&1 || true
+  done
+  exit 0
+fi
+
+attempts=1
+if [ -f "$failed_file" ]; then
+  read -r failed_sha prev < "$failed_file" || true
+  [ "$failed_sha" = "$sha" ] && attempts=$((prev + 1))
+fi
+echo "$sha $attempts" > "$failed_file"
+compose logs --tail 60 migrate portal worker >&2 || true
+if [ -n "$current" ]; then
+  log "$sha did not come up healthy; starting $current again"
+  checkout "$current"
+  KRATER_IMAGE_TAG=$current compose up -d --remove-orphans || true
+  healthy "$current" && log "$current serves again" || log "$current did not come back either: look now"
+fi
+exit 1
