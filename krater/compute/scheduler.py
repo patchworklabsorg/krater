@@ -1471,6 +1471,12 @@ class Scheduler:
         *,
         previously_seen: datetime | None,
     ) -> None:
+        if row.start_requested_at is None:
+            # Stopped and not resuming: it holds only its disk, so the project's other jobs can use the rest.
+            job.hold_cents = min(
+                job.hold_cents,
+                compute_jobs.stopped_box_hold_cents(job, row, destroy_hours=policy.box_destroy_hours),
+            )
         if row.start_requested_at is not None:
             if seen.phase is Phase.RUNNING:
                 row.state = ComputeInstanceState.RUNNING
