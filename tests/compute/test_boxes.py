@@ -460,3 +460,66 @@ def test_a_box_whose_runner_really_didnt_start_again_is_still_stopped(
 
     assert job.state is ComputeJobState.STOPPED and "didn't start again" in job.state_reason
     assert "runner_kept_running" not in _events(db_session, job)
+
+
+def _stopped(db_session, member, project, client, fake):  # noqa: F811
+    job, row = _running_box(db_session, member, project, client, fake)
+    compute_jobs.stop_box(db_session, member, job=job, now=NOW + timedelta(minutes=3))
+    runner_api.synced(db_session, row, now=NOW + timedelta(minutes=3, seconds=10))
+    _pass(db_session, client, NOW + timedelta(minutes=4))  # stops it
+    _pass(db_session, client, NOW + timedelta(minutes=5))  # watches it stopped
+    return job, row
+
+
+def test_a_stopped_box_holds_only_its_disk_so_the_projects_other_jobs_can_start(
+    db_session, member, project, client, fake, monkeypatch
+) -> None:  # noqa: F811
+    # Production, 2026-11-20: a box stopped by the network outage kept its week's hold, all its project had left, and
+    # the project's next job and box waited with "$0.00 is free".
+    from krater.services import compute_settings
+
+    monkeypatch.setattr("krater.services.budget.remaining_cents", lambda session, project: 1000)
+    job, row = _running_box(db_session, member, project, client, fake)
+    assert job.hold_cents == 1000  # a week's run costs more than the budget: it holds all of it
+    waiting = _submit(db_session, member, project, now=NOW + timedelta(minutes=2, seconds=30))
+    _pass(db_session, client, NOW + timedelta(minutes=3))
+    assert waiting.state is ComputeJobState.QUEUED and waiting.state_reason.startswith("Waiting for budget")
+
+    compute_jobs.stop_box(db_session, member, job=job, now=NOW + timedelta(minutes=3, seconds=30))
+    runner_api.synced(db_session, row, now=NOW + timedelta(minutes=3, seconds=40))
+    _pass(db_session, client, NOW + timedelta(minutes=4))
+    _pass(db_session, client, NOW + timedelta(minutes=5))
+
+    destroy_hours = compute_settings.effective_policy(db_session, project).box_destroy_hours
+    assert job.state is ComputeJobState.STOPPED
+    assert job.hold_cents == job.spend_cents + -(-row.disk_microusd * destroy_hours // 10_000)
+    _pass(db_session, client, NOW + timedelta(minutes=6))
+    assert waiting.state is not ComputeJobState.QUEUED
+
+
+def test_resume_takes_a_runs_hold_again_and_waits_while_other_jobs_hold_the_budget(
+    db_session, member, project, client, fake, monkeypatch
+) -> None:  # noqa: F811
+    from krater.services.errors import InvalidState
+
+    monkeypatch.setattr("krater.services.budget.remaining_cents", lambda session, project: 1000)
+    job, row = _stopped(db_session, member, project, client, fake)
+    other = _submit(db_session, member, project, max_runtime_minutes=7 * 24 * 60, now=NOW + timedelta(minutes=5))
+    _pass(db_session, client, NOW + timedelta(minutes=6))
+    assert other.state is not ComputeJobState.QUEUED  # it holds everything the stopped box let go
+
+    # Spend since leaves less free than the box's first hour, counting the disk hold it keeps for itself.
+    left = other.hold_cents + 6
+    monkeypatch.setattr("krater.services.budget.remaining_cents", lambda session, project: left)
+    with pytest.raises(InvalidState, match="Resuming needs"):
+        compute_jobs.resume_box(
+            db_session, member, job=job, now=NOW + timedelta(minutes=7), weave_client=current_weave[0]
+        )
+    assert row.start_requested_at is None and job.state is ComputeJobState.STOPPED
+
+    compute_jobs.cancel_job(db_session, member, job=other, now=NOW + timedelta(minutes=8))
+    compute_jobs.resume_box(db_session, member, job=job, now=NOW + timedelta(minutes=9), weave_client=current_weave[0])
+    assert row.start_requested_at is not None
+    assert job.hold_cents > 500  # a run's hold again, not just its disk
+    _pass(db_session, client, NOW + timedelta(minutes=10))  # resuming: the hold stays
+    assert job.hold_cents > 500
