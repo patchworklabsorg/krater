@@ -209,7 +209,6 @@ def test_the_probe_tells_open_from_refused() -> None:
         port = server.getsockname()[1]
         assert ssh_reach.probe_tcp("127.0.0.1", port) is True
     assert ssh_reach.probe_tcp("127.0.0.1", port) is False
-    assert ssh_reach.probe_tcp("127.0.0.1", 70000) is None
 
 
 def test_a_paused_box_whose_runner_hasnt_started_again_isnt_tested(db_session, member, project, client, fake) -> None:  # noqa: F811
@@ -269,3 +268,12 @@ def test_a_proxy_that_changes_host_keeps_the_box_off_the_dead_port(db_session, m
     _checked_pass(db_session, client, _Check(True), 12)  # quiet runner: untested
 
     assert row.ssh_host == "ssh7.vast.ai"
+
+
+def test_a_timeout_is_no_answer(monkeypatch) -> None:
+    def times_out(*args, **kwargs):
+        raise TimeoutError
+
+    monkeypatch.setattr(ssh_reach.socket, "create_connection", times_out)
+
+    assert ssh_reach.probe_tcp("38.114.93.198", 20056) is None
