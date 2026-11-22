@@ -1391,7 +1391,7 @@ class Scheduler:
         works = self._direct_ssh_works(row, seen, direct)
         if works is None:
             # Untested now: stay on the proxy only if Krater moved it there for a refused direct port.
-            works = row.ssh_host != proxy[0] or not self._told_ssh_proxy(row)
+            works = (row.ssh_host, row.ssh_port) == direct or not self._told_ssh_proxy(row)
         if works:
             row.ssh_host, row.ssh_port = direct
             return

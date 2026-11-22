@@ -210,3 +210,62 @@ def test_the_probe_tells_open_from_refused() -> None:
         assert ssh_reach.probe_tcp("127.0.0.1", port) is True
     assert ssh_reach.probe_tcp("127.0.0.1", port) is False
     assert ssh_reach.probe_tcp("127.0.0.1", 70000) is None
+
+
+def test_a_paused_box_whose_runner_hasnt_started_again_isnt_tested(db_session, member, project, client, fake) -> None:  # noqa: F811
+    job = _box(db_session, member, project)
+    row = _running(db_session, client, fake, job)
+    _beat(db_session, row, 3)
+    row.runner_starts_needed = row.runner_starts + 1  # what a pause sets: the container restarts on resume
+    check = _Check(False)
+
+    _checked_pass(db_session, client, check, 3)
+
+    assert check.asked == []
+    assert (row.ssh_host, row.ssh_port) == ("198.51.100.7", 41022)
+
+
+def test_a_quiet_runner_means_no_test(db_session, member, project, client, fake) -> None:  # noqa: F811
+    job = _box(db_session, member, project)
+    _running(db_session, client, fake, job)
+    check = _Check(False)
+
+    _checked_pass(db_session, client, check, 3 + 10)
+
+    assert check.asked == []
+
+
+def test_no_test_while_krater_s_network_is_down(db_session, member, project, client, fake) -> None:  # noqa: F811
+    job = _box(db_session, member, project)
+    row = _running(db_session, client, fake, job)
+    _beat(db_session, row, 3)
+    check = _Check(False)
+
+    class _Down:
+        def problem(self, session, *, now):
+            return "the edge is down"
+
+    scheduler.run_pass(
+        db_session,
+        client,
+        SETTINGS,
+        now=NOW + timedelta(minutes=3),
+        runner_sha256=RUNNER_SHA,
+        weave_client=current_weave[0],
+        ssh_check=check,
+        network=_Down(),
+    )
+
+    assert check.asked == []
+
+
+def test_a_proxy_that_changes_host_keeps_the_box_off_the_dead_port(db_session, member, project, client, fake) -> None:  # noqa: F811
+    job = _box(db_session, member, project)
+    row = _running(db_session, client, fake, job)
+    _beat(db_session, row, 3)
+    _checked_pass(db_session, client, _Check(False), 3)
+    fake.instances[row.provider_instance_id]["ssh_host"] = "ssh7.vast.ai"
+
+    _checked_pass(db_session, client, _Check(True), 12)  # quiet runner: untested
+
+    assert row.ssh_host == "ssh7.vast.ai"

@@ -259,7 +259,7 @@ port refused connections from everywhere, but the proxy reached the same sshd. S
 direct port with one TCP connection (`krater.compute.ssh_reach`), only while the box's runner reports from the
 current container and Krater's own network is up. A refusal moves the box to the proxy address, and the job page,
 `krater ssh` and `krater show` give that address; the box's events say so once (`ssh_proxy`). A timeout decides
-nothing. While the port can't be tested (a paused box, a quiet runner), a box moved to the proxy stays there. The
+nothing. (A host that drops connections, not refuses them, keeps its direct address.) While the port can't be tested (a paused box, a quiet runner), a box moved to the proxy stays there. The
 worker tests a working port once per process and a refused one again after 30 minutes, at most 5 new tests a pass.
 It never connects to an address that isn't public. The test runs from the worker, so a member whose own network
 blocks Vast's direct ports still gets the direct address.

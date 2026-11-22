@@ -60,7 +60,7 @@ def reachable_address(host: str, port: int) -> bool:
         return False
     try:
         return ipaddress.ip_address(host).is_global
-    except ValueError:
+    except (TypeError, ValueError):
         return False
 
 
