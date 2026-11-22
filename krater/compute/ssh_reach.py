@@ -45,6 +45,8 @@ MAX_KNOWN = 1000
 
 def probe_tcp(host: str, port: int) -> bool | None:
     """`True` when a TCP connection to `host:port` opens, `False` when it is refused, `None` with no answer."""
+    if not 1 <= port <= 65535:
+        return None  # Linux would take it modulo 65536 and test another port
     try:
         with socket.create_connection((host, port), timeout=CONNECT_TIMEOUT_SECONDS):
             return True
