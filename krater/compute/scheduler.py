@@ -41,7 +41,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from krater import net_errors, providers
-from krater.compute import launch, market, offers, runner_api, search_quota, spend
+from krater.compute import launch, market, offers, runner_api, search_quota, spend, ssh_reach
 from krater.compute.search_pacing import SearchPacer
 from krater.config import Settings
 from krater.models import (
@@ -313,8 +313,12 @@ class Scheduler:
         pacer: SearchPacer | None = None,
         registry: Registry | None = None,
         network: network_watch.NetworkCheck | None = None,
+        ssh_check: ssh_reach.SshCheck | None = None,
     ) -> None:
         self.session = session
+        # Asked whether a box's direct SSH port takes connections (`_record_ssh`). Without one (tests, one-off
+        # passes), the direct port is trusted, as Vast lists it.
+        self.ssh_check = ssh_check
         # Asked before acting on a silent runner (`_hold_for_network`). Without one (tests, one-off passes), the
         # network counts as up.
         self.network = network
@@ -1366,12 +1370,38 @@ class Scheduler:
     # -- Boxes -----------------------------------------------------------------------------------------
 
     def _record_ssh(self, row: ComputeInstance, seen: Instance) -> None:
-        """Where the member's SSH client should connect: the direct port when Vast mapped one, else Vast's proxy."""
+        """Where the member's SSH client should connect: the direct port when Vast mapped one and it takes
+        connections, else Vast's proxy (`krater.compute.ssh_reach`)."""
+        direct = None
         mapped = (seen.ports or {}).get("22/tcp") or []
         if seen.public_ipaddr and mapped and isinstance(mapped[0], dict) and mapped[0].get("HostPort"):
-            row.ssh_host, row.ssh_port = seen.public_ipaddr, int(mapped[0]["HostPort"])
-        elif seen.ssh_host and seen.ssh_port:
-            row.ssh_host, row.ssh_port = seen.ssh_host, seen.ssh_port
+            direct = (seen.public_ipaddr, int(mapped[0]["HostPort"]))
+        proxy = (seen.ssh_host, seen.ssh_port) if seen.ssh_host and seen.ssh_port else None
+        if direct is not None and proxy is not None and not self._direct_ssh_works(row, seen, direct):
+            if (row.ssh_host, row.ssh_port) != proxy:
+                _event(
+                    self.session,
+                    row.job,
+                    "ssh_proxy",
+                    f"The machine's direct SSH port ({direct[0]}:{direct[1]}) refuses connections, so SSH goes "
+                    f"through {self.provider.title}'s proxy ({proxy[0]}:{proxy[1]}).",
+                    now=self.now,
+                    instance=row,
+                )
+            row.ssh_host, row.ssh_port = proxy
+        elif direct is not None:
+            row.ssh_host, row.ssh_port = direct
+        elif proxy is not None:
+            row.ssh_host, row.ssh_port = proxy
+
+    def _direct_ssh_works(self, row: ComputeInstance, seen: Instance, direct: tuple[str, int]) -> bool:
+        """Whether `direct` takes connections. Only a box's is tested, and only once its runner has started: sshd
+        starts before the runner, so a refusal before then may only mean the container is still starting."""
+        if self.ssh_check is None or row.job.kind is not ComputeJobKind.BOX:
+            return True
+        if row.runner_started_at is None or seen.phase is not Phase.RUNNING:
+            return True
+        return self.ssh_check.direct_works(row.provider_instance_id or row.label, *direct)
 
     def _check_idle(self, row: ComputeInstance, job: ComputeJob, policy: ComputePolicy) -> None:
         """A box is idle while its runner reports low GPU (and CPU) use and no open session. Idle for the box idle
@@ -2152,6 +2182,7 @@ def run_pass(
     pacer: SearchPacer | None = None,
     registry: Registry | None = None,
     network: network_watch.NetworkCheck | None = None,
+    ssh_check: ssh_reach.SshCheck | None = None,
 ) -> PassResult:
     return Scheduler(
         session,
@@ -2163,4 +2194,5 @@ def run_pass(
         pacer=pacer,
         registry=registry,
         network=network,
+        ssh_check=ssh_check,
     ).run()

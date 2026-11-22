@@ -18,6 +18,7 @@ from krater.compute import launch as compute_launch
 from krater.compute import reconcile as compute_reconciler
 from krater.compute import scheduler as compute_scheduler
 from krater.compute import search_quota as compute_search_quota
+from krater.compute import ssh_reach as compute_ssh_reach
 from krater.compute import storage_cleanup as compute_storage
 from krater.compute.search_pacing import SearchPacer
 from krater.config import get_settings
@@ -265,6 +266,10 @@ SEARCH_PACER = SearchPacer()
 #: for the process: it remembers whether its outbound test has ever passed here.
 NETWORK_CHECK = network_watch.LiveNetworkCheck(edge_ping_expected=get_settings().edge_ping_expected)
 
+#: Whether each box's direct SSH port takes connections (`krater.compute.ssh_reach`). One for the process: it
+#: remembers each answer, so a box is tested once.
+SSH_CHECK = compute_ssh_reach.LiveSshCheck()
+
 #: Only one scheduler pass runs at a time, so a slow pass can't overlap the next minute's and rent twice.
 COMPUTE_SCHEDULER_LOCK = "compute_scheduler"
 
@@ -289,6 +294,7 @@ def compute_schedule(timestamp: int) -> None:
             weave_client=get_weave_client(),
             pacer=SEARCH_PACER,
             network=NETWORK_CHECK,
+            ssh_check=SSH_CHECK,
             registry=get_registry(),
         )
         if result.errors:

@@ -253,6 +253,13 @@ startup script, and the runner starts within a minute of the rental. `authorized
 (`VAST_TCP_PORT_22`), which is what the job page shows; Vast's own SSH proxy (`sshN.vast.ai`) works too. Krater
 refuses to start boxes while the Vast account has any SSH keys, since Vast may install them in every instance.
 
+A host can map the direct port and still refuse every connection to it. On production (2026-11-22), Vast machine
+153597 mapped 22/tcp to port 20056, sshd listened on 22 in the container, and Vast said the box was running. The
+port refused connections from everywhere, but the proxy reached the same sshd. So once a box's runner has started,
+the worker opens one TCP connection to the direct port (`krater.compute.ssh_reach`). If it fails, Krater records
+the proxy address, and the job page, `krater ssh` and `krater show` give that address. The box's events say so
+(`ssh_proxy`). The worker remembers each answer for its process, so it tests each box once, not on every pass.
+
 What a member can read inside their box: the container's environment (`/proc/1/environ`) has `KRATER_JOB_TOKEN`
 (this instance's runner token: it can only report for this box), Vast's `CONTAINER_API_KEY` (it can stop or destroy
 this one instance; Krater treats that like any unexpected stop) and a `JUPYTER_TOKEN` Vast generates. Boxes are
