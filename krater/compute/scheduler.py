@@ -1371,37 +1371,66 @@ class Scheduler:
 
     def _record_ssh(self, row: ComputeInstance, seen: Instance) -> None:
         """Where the member's SSH client should connect: the direct port when Vast mapped one and it takes
-        connections, else Vast's proxy (`krater.compute.ssh_reach`)."""
+        connections, else Vast's proxy (`krater.compute.ssh_reach`). While the direct port can't be tested, an
+        address already moved to the proxy stays there."""
         direct = None
         mapped = (seen.ports or {}).get("22/tcp") or []
         if seen.public_ipaddr and mapped and isinstance(mapped[0], dict) and mapped[0].get("HostPort"):
-            direct = (seen.public_ipaddr, int(mapped[0]["HostPort"]))
+            try:
+                direct = (seen.public_ipaddr, int(mapped[0]["HostPort"]))
+            except (TypeError, ValueError):
+                direct = None
         proxy = (seen.ssh_host, seen.ssh_port) if seen.ssh_host and seen.ssh_port else None
-        if direct is not None and proxy is not None and not self._direct_ssh_works(row, seen, direct):
-            if (row.ssh_host, row.ssh_port) != proxy:
-                _event(
-                    self.session,
-                    row.job,
-                    "ssh_proxy",
-                    f"The machine's direct SSH port ({direct[0]}:{direct[1]}) refuses connections, so SSH goes "
-                    f"through {self.provider.title}'s proxy ({proxy[0]}:{proxy[1]}).",
-                    now=self.now,
-                    instance=row,
-                )
-            row.ssh_host, row.ssh_port = proxy
-        elif direct is not None:
+        if direct is None:
+            if proxy is not None:
+                row.ssh_host, row.ssh_port = proxy
+            return
+        if proxy is None:
             row.ssh_host, row.ssh_port = direct
-        elif proxy is not None:
-            row.ssh_host, row.ssh_port = proxy
+            return
+        works = self._direct_ssh_works(row, seen, direct)
+        if works is None:
+            # Untested now: stay on the proxy only if Krater moved it there for a refused direct port.
+            works = row.ssh_host != proxy[0] or not self._told_ssh_proxy(row)
+        if works:
+            row.ssh_host, row.ssh_port = direct
+            return
+        if not self._told_ssh_proxy(row):
+            _event(
+                self.session,
+                row.job,
+                "ssh_proxy",
+                f"The machine's direct SSH port ({direct[0]}:{direct[1]}) refuses connections, so SSH goes "
+                f"through {self.provider.title}'s proxy ({proxy[0]}:{proxy[1]}).",
+                now=self.now,
+                instance=row,
+            )
+        row.ssh_host, row.ssh_port = proxy
 
-    def _direct_ssh_works(self, row: ComputeInstance, seen: Instance, direct: tuple[str, int]) -> bool:
-        """Whether `direct` takes connections. Only a box's is tested, and only once its runner has started: sshd
-        starts before the runner, so a refusal before then may only mean the container is still starting."""
+    def _direct_ssh_works(self, row: ComputeInstance, seen: Instance, direct: tuple[str, int]) -> bool | None:
+        """Whether `direct` takes connections, or `None` when it can't be told now. Only a running box's port is
+        tested, and only while its runner reports from the current container: sshd starts before the runner, so a
+        refusal then is the host's doing. Not while Krater's own network is down, or the box is ending."""
         if self.ssh_check is None or row.job.kind is not ComputeJobKind.BOX:
-            return True
-        if row.runner_started_at is None or seen.phase is not Phase.RUNNING:
-            return True
-        return self.ssh_check.direct_works(row.provider_instance_id or row.label, *direct)
+            return None
+        if row.state is not ComputeInstanceState.RUNNING or seen.phase is not Phase.RUNNING or seen.stopping:
+            return None
+        if row.destroy_requested_at is not None or row.stop_requested_at is not None:
+            return None
+        if row.runner_starts < row.runner_starts_needed or not self._beat_is_fresh(row):
+            return None
+        if self.network is not None:
+            if self._network_problem is False:
+                self._network_problem = self.network.problem(self.session, now=self.now)
+            if self._network_problem:
+                return None
+        return self.ssh_check.direct_works(row.provider_instance_id or row.label, *direct, now=self.now)
+
+    def _told_ssh_proxy(self, row: ComputeInstance) -> bool:
+        stmt = sa.select(ComputeEvent.id).where(
+            ComputeEvent.job_id == row.job_id, ComputeEvent.instance_id == row.id, ComputeEvent.kind == "ssh_proxy"
+        )
+        return self.session.scalar(stmt.limit(1)) is not None
 
     def _check_idle(self, row: ComputeInstance, job: ComputeJob, policy: ComputePolicy) -> None:
         """A box is idle while its runner reports low GPU (and CPU) use and no open session. Idle for the box idle

@@ -255,10 +255,14 @@ refuses to start boxes while the Vast account has any SSH keys, since Vast may i
 
 A host can map the direct port and still refuse every connection to it. On production (2026-11-22), Vast machine
 153597 mapped 22/tcp to port 20056, sshd listened on 22 in the container, and Vast said the box was running. The
-port refused connections from everywhere, but the proxy reached the same sshd. So once a box's runner has started,
-the worker opens one TCP connection to the direct port (`krater.compute.ssh_reach`). If it fails, Krater records
-the proxy address, and the job page, `krater ssh` and `krater show` give that address. The box's events say so
-(`ssh_proxy`). The worker remembers each answer for its process, so it tests each box once, not on every pass.
+port refused connections from everywhere, but the proxy reached the same sshd. So the worker tests a running box's
+direct port with one TCP connection (`krater.compute.ssh_reach`), only while the box's runner reports from the
+current container and Krater's own network is up. A refusal moves the box to the proxy address, and the job page,
+`krater ssh` and `krater show` give that address; the box's events say so once (`ssh_proxy`). A timeout decides
+nothing. While the port can't be tested (a paused box, a quiet runner), a box moved to the proxy stays there. The
+worker tests a working port once per process and a refused one again after 30 minutes, at most 5 new tests a pass.
+It never connects to an address that isn't public. The test runs from the worker, so a member whose own network
+blocks Vast's direct ports still gets the direct address.
 
 What a member can read inside their box: the container's environment (`/proc/1/environ`) has `KRATER_JOB_TOKEN`
 (this instance's runner token: it can only report for this box), Vast's `CONTAINER_API_KEY` (it can stop or destroy
