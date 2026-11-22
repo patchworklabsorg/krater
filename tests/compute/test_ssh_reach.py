@@ -209,6 +209,7 @@ def test_the_probe_tells_open_from_refused() -> None:
         port = server.getsockname()[1]
         assert ssh_reach.probe_tcp("127.0.0.1", port) is True
     assert ssh_reach.probe_tcp("127.0.0.1", port) is False
+    assert ssh_reach.probe_tcp("127.0.0.1", 70000) is None
 
 
 def test_a_paused_box_whose_runner_hasnt_started_again_isnt_tested(db_session, member, project, client, fake) -> None:  # noqa: F811
