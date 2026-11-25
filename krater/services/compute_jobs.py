@@ -592,6 +592,18 @@ def resume_box(session: Session, actor: Actor, *, job: ComputeJob, now: datetime
             f"The project already has {limit} machines at once, its limit. Resume this box once one of them ends."
         )
     clearance.require_team_cleared(session, weave_client, job.project)
+    # Stopped, it held only its disk (`stopped_box_hold_cents`): running again needs a run's hold, as a new job does,
+    # under the project's row lock so two starts can't hold the same dollars.
+    session.execute(sa.select(Project.id).where(Project.id == job.project_id).with_for_update())
+    free = budget.remaining_cents(session, job.project) - _others_held(session, job)
+    hour_cents = math.ceil(row.full_microusd / MICROUSD_PER_CENT)
+    if free < hour_cents:
+        raise InvalidState(
+            f"Resuming needs ${hour_cents / 100:,.2f} of the project's budget for its first hour, and "
+            f"${max(free, 0) / 100:,.2f} is free: the project's other jobs hold the rest. Resume it once one ends."
+        )
+    wanted = math.ceil(row.full_microusd * smoke.runtime_cap_minutes(job) / 60 / MICROUSD_PER_CENT)
+    job.hold_cents = max(job.hold_cents, (job.spend_cents or 0) + min(wanted, free))
     row.start_requested_at = now
     job.state_reason = "Resuming on the same machine."
     session.add(
@@ -670,6 +682,14 @@ def _rate_microusd(job: ComputeJob) -> int | None:
         i for i in job.instances if i.state not in (ComputeInstanceState.DESTROYED, ComputeInstanceState.CREATE_FAILED)
     ]
     return live[-1].full_microusd if live else None
+
+
+def stopped_box_hold_cents(job: ComputeJob, row: ComputeInstance, *, destroy_hours: int) -> int:
+    """What a stopped box holds of its project's budget: what it spent, plus its disk until the scheduler destroys it.
+    Not a GPU run: it isn't running. Holding its whole run kept every other job of the project waiting (production,
+    2026-11-20: a box stopped by the network outage held $23.77, all its project had left, for hours). Resuming takes a
+    run's hold again (`resume_box`)."""
+    return (job.spend_cents or 0) + math.ceil(row.disk_microusd * destroy_hours / MICROUSD_PER_CENT)
 
 
 def _others_held(session: Session, job: ComputeJob) -> int:

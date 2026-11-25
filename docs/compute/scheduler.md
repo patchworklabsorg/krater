@@ -95,7 +95,9 @@ while outbid; moving with nothing free to move to would throw that away and leav
 
 Every price limit is also capped by the project's hourly cap. A rental needs budget for at least one hour, under
 the project's row lock; it then holds the cost of its max runtime (or whatever is left), so two jobs can't spend
-the same dollars.
+the same dollars. A stopped box holds only what it spent plus its disk until it is destroyed (`box_destroy_hours`), so
+the project's other jobs can use the rest. Resuming it needs an hour's budget free again and takes its run's hold
+back; when the others hold too much, the resume is refused with what is free.
 
 ### Data transfer
 
