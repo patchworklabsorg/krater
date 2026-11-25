@@ -222,16 +222,15 @@ def test_the_projects_slack_channel_never_names_ospool(
     )
     project = _held(client, login_as, submitted_project, db_session, weave_stub)
     login_as(ADMIN_SUB)
-    assert _record(client, project, rate="2.49").status_code == 303
-    grant = db_session.scalar(sa.select(OspoolGrant).where(OspoolGrant.project_id == project.id))
+    assert _record(client, project).status_code == 303
     response = _post(
         client,
         f"/projects/{project.id}/admin-ospool-valuation",
         f"/projects/{project.id}",
-        gpu_name=grant.gpu_name,
-        rate="3.00",
-        rate_note="",
-        reason="New price.",
+        gpu_name="A100",
+        rate="1.99",
+        rate_note="Another neocloud",
+        reason="Cheaper price found.",
     )
     assert response.status_code == 303
 
