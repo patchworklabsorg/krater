@@ -69,7 +69,9 @@ def parse(value: str | None) -> FundingHold | None:
 
 
 #: An approved project the OSPool funds outside Krater (`krater.services.ospool_grants`): shown, never a hold.
-OSPOOL = "OSPool"
+#: Shown on the status badge, which never names the partner (docs/SPEC.md "OSPool grants"). Admins see the name on
+#: their own pages (the admin index's grant list, Share with OSPool).
+OSPOOL = "Partner grant"
 
 
 def approval_label(project: Project, *, verification_held: bool, ospool: bool = False) -> str | None:

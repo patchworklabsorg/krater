@@ -99,7 +99,7 @@
       <tbody>
         {% for grant, totals in ospool %}
           <tr>
-            <td class="cell-title"><a href="/projects/{{ grant.project.id }}#ospool">{{ grant.project.title or "Untitled proposal" }}</a></td>
+            <td class="cell-title"><a href="/projects/{{ grant.project.id }}#partner-grant">{{ grant.project.title or "Untitled proposal" }}</a></td>
             <td><code>{{ grant.ospool_project_name }}</code></td>
             <td class="num">{{ "{:,.1f}".format(totals.gpu_hours) }}</td>
             <td class="num">{{ "{:,.1f}".format(totals.core_hours) }}</td>

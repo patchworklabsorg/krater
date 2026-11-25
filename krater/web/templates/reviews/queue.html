@@ -15,9 +15,9 @@
     Krater couldn't reach Weave to check US residency, so the filter shows nothing. Try again in a minute.
     <a href="/reviews">Show all</a>
   {% elif us_residents %}
-    Showing projects whose whole team is verified US residents (OSPool-ready). <a href="/reviews">Show all</a>
+    Showing projects whose whole team is verified US residents. <a href="/reviews">Show all</a>
   {% else %}
-    <a href="/reviews?us_residents=true">Show only projects whose whole team is verified US residents (OSPool)</a>
+    <a href="/reviews?us_residents=true">Show only projects whose whole team is verified US residents</a>
   {% endif %}
 </p>
 
@@ -48,7 +48,7 @@
 
 {% if us_residents and approved_residents %}
   <h2>Approved projects with a whole team of verified US residents</h2>
-  <section class="card card--flush" aria-label="Approved OSPool-ready projects">
+  <section class="card card--flush" aria-label="Approved projects with a whole team of US residents">
     <ul class="project-list">
       {% for project in approved_residents %}
         <li class="project-list__item">

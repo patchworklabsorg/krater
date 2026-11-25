@@ -7,7 +7,7 @@ import re
 from fastapi.testclient import TestClient
 
 from krater.web import help_docs
-from tests.conftest import MEMBER_SUB, REVIEWER_SUB
+from tests.conftest import ADMIN_SUB, MEMBER_SUB, REVIEWER_SUB
 
 _HREF = re.compile(r'href="([^"]+)"')
 _ID = re.compile(r'id="([^"]+)"')
@@ -19,16 +19,47 @@ def _guide_html(client: TestClient, slug: str) -> str:
     return response.text
 
 
-def test_the_index_lists_every_guide_without_signing_in(client: TestClient):
+_PUBLIC = [guide for guide in help_docs.GUIDES if not guide.admins_only]
+_ADMINS_ONLY = [guide for guide in help_docs.GUIDES if guide.admins_only]
+
+
+def test_the_index_lists_every_public_guide_without_signing_in(client: TestClient):
     response = client.get("/help")
 
     assert response.status_code == 200
-    for guide in help_docs.GUIDES:
+    for guide in _PUBLIC:
         assert f'href="/help/{guide.slug}"' in response.text
     assert "For reviewers and admins" in response.text
 
 
-def test_every_guide_renders_with_its_own_title(client: TestClient):
+def test_the_ospool_guides_are_for_admins_only(client: TestClient, login_as):
+    assert {guide.slug for guide in _ADMINS_ONLY} == {"ospool-grants", "share-with-ospool"}
+    for who in (None, MEMBER_SUB, REVIEWER_SUB):
+        if who is not None:
+            login_as(who)
+        index = client.get("/help").text
+        assert "OSPool" not in index, who
+        for guide in _ADMINS_ONLY:
+            assert f'href="/help/{guide.slug}"' not in index, who
+            assert client.get(f"/help/{guide.slug}").status_code == 404, who
+
+    login_as(ADMIN_SUB)
+    index = client.get("/help").text
+    for guide in _ADMINS_ONLY:
+        assert f'href="/help/{guide.slug}"' in index
+        assert client.get(f"/help/{guide.slug}").status_code == 200
+
+
+def test_no_public_guide_names_ospool(client: TestClient):
+    for guide in _PUBLIC:
+        page = _guide_html(client, guide.slug)
+        assert "OSPool" not in page and "OSG" not in page, guide.slug
+        for hidden in _ADMINS_ONLY:  # a link everyone else would follow to a 404
+            assert f'href="/help/{hidden.slug}' not in page, (guide.slug, hidden.slug)
+
+
+def test_every_guide_renders_with_its_own_title(client: TestClient, login_as):
+    login_as(ADMIN_SUB)  # sees the admins-only guides too
     for guide in help_docs.GUIDES:
         page = _guide_html(client, guide.slug)
         rendered = help_docs.render(guide.slug)
@@ -42,7 +73,8 @@ def test_an_unknown_guide_is_404(client: TestClient):
     assert client.get("/help/..%2FSPEC").status_code == 404
 
 
-def test_every_link_in_the_guides_goes_somewhere_real(client: TestClient):
+def test_every_link_in_the_guides_goes_somewhere_real(client: TestClient, login_as):
+    login_as(ADMIN_SUB)
     pages = {guide.slug: _guide_html(client, guide.slug) for guide in help_docs.GUIDES}
     ids = {slug: set(_ID.findall(page)) for slug, page in pages.items()}
     for slug, page in pages.items():
@@ -60,7 +92,8 @@ def test_every_link_in_the_guides_goes_somewhere_real(client: TestClient):
                 assert href.startswith(("https://", "http://", "mailto:")), (slug, href)  # never a bare .md
 
 
-def test_a_link_to_another_doc_goes_to_github(client: TestClient):
+def test_a_link_to_another_doc_goes_to_github(client: TestClient, login_as):
+    login_as(ADMIN_SUB)
     page = _guide_html(client, "ospool-grants")
 
     assert 'href="https://github.com/patchworklabsorg/krater/blob/main/docs/SPEC.md' in page

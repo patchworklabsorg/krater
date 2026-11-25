@@ -1,8 +1,8 @@
 {# `hold`: what an approved project waits on (`funding_holds.approval_label`), shown after its status. #}
 {% macro status_badge(status, hold=none) %}
-{%- if hold == "OSPool" -%}
-{#- Funded by an OSPool grant (`funding_holds.OSPOOL`): not a hold, so the status's own colour. -#}
-<span class="badge badge--{{ status.value }}">{{ status.value.replace('_', ' ') | capitalize }} · OSPool</span>
+{%- if hold == "Partner grant" -%}
+{#- Funded by a partner (an OSPool grant, `funding_holds.OSPOOL`; not named outside admin pages): not a hold, so the status's own colour. -#}
+<span class="badge badge--{{ status.value }}">{{ status.value.replace('_', ' ') | capitalize }} · Partner grant</span>
 {%- elif hold -%}
 <span class="badge badge--funding-hold">{{ status.value.replace('_', ' ') | capitalize }} · {{ hold | lower }}</span>
 {%- else -%}

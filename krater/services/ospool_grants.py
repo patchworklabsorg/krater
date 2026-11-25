@@ -43,6 +43,10 @@ logger = logging.getLogger(__name__)
 
 AUDIT_RECORD = "admin_record_ospool_grant"
 AUDIT_VALUATION = "admin_change_ospool_valuation"
+#: What the project's Slack channel is told for each. Its team reads it, so it never names OSPool (docs/SPEC.md
+#: "OSPool grants"). The audit log keeps the actions above.
+SLACK_RECORD = "admin_record_partner_grant"
+SLACK_VALUATION = "admin_change_partner_grant_valuation"
 #: `OspoolUsageDay.rate_source` for the grant's own price.
 SOURCE_ADMIN = "admin"
 #: How many recent days each import reads again, since OSG corrects them.
@@ -411,6 +415,8 @@ def rate_text(grant: OspoolGrant) -> str:
 __all__ = [
     "AUDIT_RECORD",
     "AUDIT_VALUATION",
+    "SLACK_RECORD",
+    "SLACK_VALUATION",
     "REIMPORT_DAYS",
     "SOURCE_ADMIN",
     "Summary",

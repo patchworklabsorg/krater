@@ -1,10 +1,12 @@
-{# The project's OSPool grant (`krater.services.ospool_grants`): usage from OSG's accounting, valued at rent prices. #}
+{# The project's OSPool grant (`krater.services.ospool_grants`): usage from OSG's accounting, valued at rent prices.
+   The team sees this card, so it says "partner" and never names OSPool or OSG (docs/SPEC.md "OSPool grants"). #}
 {% set totals = ospool_summary %}
-<section class="card" id="ospool">
-  <h2>OSPool grant</h2>
+<section class="card" id="partner-grant">
+  <h2>Partner grant</h2>
   <p>
-    The OSPool funds this project outside Krater. The team runs on the OSPool with its own OSG accounts, under the
-    OSPool project <code>{{ ospool_grant.ospool_project_name }}</code>. Krater only reports the usage.
+    A partner funds this project's compute outside Krater's budget. The team runs on the partner's machines with
+    its own accounts there, under the project name <code>{{ ospool_grant.ospool_project_name }}</code>. Krater only
+    reports the usage.
   </p>
   <dl class="stats">
     <div class="stat stat--accent"><dt>GPU-hours</dt><dd>{{ "{:,.1f}".format(totals.gpu_hours) }}</dd></div>
@@ -19,7 +21,7 @@
       {{ "have" if totals.unvalued_days != 1 else "has" }} no price yet, so {{ "they're" if totals.unvalued_days != 1 else "it's" }} left out.{% endif %}
   </p>
   <p class="muted">
-    From OSG's public accounting, which runs about a day behind and corrects recent days.
+    From the partner's accounting, which runs about a day behind and corrects recent days.
     {% if ospool_grant.last_imported_at %}Last read {{ ospool_grant.last_imported_at.strftime("%Y-%m-%d %H:%M") }} UTC.{% else %}Not read yet: the first daily import fills this in.{% endif %}
   </p>
   {% if ospool_grant.last_import_error and is_admin %}
