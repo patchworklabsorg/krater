@@ -15,7 +15,7 @@ Members' side of all this: [Using Krater](using-krater.md) and [Running jobs and
 - [Admin overrides](#admin-overrides)
 - [Compute settings](#compute-settings)
 - [Watching compute](#watching-compute)
-- [Funders and OSPool](#funders-and-ospool)
+- [Funders](#funders)
 - [Alerts](#alerts)
 
 ## Reviewing
@@ -104,7 +104,7 @@ Approve a project before Patchwork can pay for it with **Fund it now?** on the w
 
 - **Yes:** the budget is added once the team is verified (the usual case);
 - **No: approve as awaiting funding**: the money isn't there yet;
-- **No: approve as awaiting 3rd party review**: a funder (OSPool, say) has to review it first.
+- **No: approve as awaiting 3rd party review**: a funder has to review it first.
 
 While a hold is set, the project is approved and reads *Approved · awaiting funding* (or *· awaiting 3rd party
 review*). Every grant is held, nothing reaches the ledger or Quilt, and no compute starts. Machines already running
@@ -137,7 +137,7 @@ nothing else may change the project's budget: no amendment, adjustment or reclai
 | --- | --- |
 | Status counts | How many projects are in each status |
 | **Budget held** | Every held grant: the amount, and who or what it's waiting on |
-| **OSPool grants** | Every project with an OSPool grant |
+| **Partner grants** | Every project a partner funds outside Krater's budget |
 | **All projects** | Search by title or the lead's Patchwork ID, filter by status; ceiling, spend and remaining for each |
 | **Recent activity** | The latest audit events. **All activity** (`/admin/activity`) has the full log, and per project the budget ledger |
 | **Approval policy** | The policy in force |
@@ -145,8 +145,8 @@ nothing else may change the project's budget: no amendment, adjustment or reclai
 | **Delivery to Quilt** | Whether budget and submission events have reached Quilt, Patchwork's finance system, with retry and dismiss for any it refused |
 
 Its other pages: **Live compute** (`/admin/live`, every queued and running job and box), **Images**
-(`/admin/images`, every image members used, and inspecting one), **Share with OSPool** (`/admin/funders/ospool`)
-and **Compute settings** (`/admin/compute`).
+(`/admin/images`, every image members used, and inspecting one), the funder page (a
+button at the top of `/admin`) and **Compute settings** (`/admin/compute`).
 
 ## Admin overrides
 
@@ -161,7 +161,7 @@ project's Slack channel so reviewers see it.
 | **Funding hold** | Set, change or clear the project's hold |
 | **Hourly cap** | The most any one machine of the project may cost per hour, or back to the default ($5) |
 | **Withdraw project (admin)** | Close it: unspent budget reclaimed, machines destroyed, channels archived a week later |
-| **Record an OSPool grant** | See [OSPool grants](ospool-grants.md) |
+| **Record a partner grant** | For a project a partner funds instead of Krater's budget. Admins: see the grant guide on Help |
 
 **Your own project** (you lead it, are on its team or are invited): you can't decide it, add to its budget, raise its
 hourly cap or clear its funding hold. Another admin, or the normal review, has to. You can still cut, reclaim or
@@ -227,14 +227,14 @@ The page also shows Vast's daily search quota and any hourly spend check that di
 - **Budgets:** the project's channel is warned at 80% and 95% of the ceiling, and Krater stops the project's
   machines just before 100%.
 
-## Funders and OSPool
+## Funders
 
-- **Share with OSPool** (`/admin/funders/ospool`) lists every project and proposal, newest first, each saying whether
-  its whole team are verified US residents (OSPool takes only those). Tick the projects and the fields to include,
-  and download a PDF to send. It never includes emails, Patchwork IDs, demographics or secrets, names members under 18
-  as the gallery setting says, asks Weave again on each download, and is audited.
-- **OSPool grants** let a project run on the OSPool instead of Krater's budget: [OSPool grants](ospool-grants.md) and
-  [Share with OSPool](share-with-ospool.md).
+- The **funder page** (admins) lists every project and proposal, newest first, each saying whether its whole team
+  are verified US residents. Tick the projects and the fields to include, and download a PDF to send. It never
+  includes emails, Patchwork IDs, demographics or secrets, names members under 18 as the gallery setting says, asks
+  Weave again on each download, and is audited.
+- **Partner grants** let a partner fund a project's compute instead of Krater's budget. Signed in as an admin, Help
+  lists the guides for both.
 
 ## Alerts
 
@@ -244,7 +244,7 @@ root cause (a DNS lookup, a connection refused or timed out ...). The Problems c
 failure of the last 24 hours, kept for 14 days. It covers:
 
 - a background task that keeps failing: the compute scheduler, spend reconciliation, cleaning up unfinished uploads,
-  recording Vast's prices, releasing held grants, syncing admins' SSH keys to boxes, importing OSPool usage, delivery
+  recording Vast's prices, releasing held grants, syncing admins' SSH keys to boxes, importing partner-grant usage, delivery
   to Quilt, archiving in Stash, and Slack tasks;
 - Quilt's outbox backing up;
 - Stash archive requests backing up;

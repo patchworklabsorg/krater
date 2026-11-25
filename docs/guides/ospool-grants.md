@@ -10,7 +10,7 @@ accounting shows it. The rules are in [SPEC.md](../SPEC.md) "OSPool grants".
   `PatchworkLabs_Ganymede01`, with an adult Patchwork staff member as its PI.
 - The project is approved in Krater. Approving it *awaiting 3rd party review* keeps its budget from being added while
   you wait for OSPool.
-- Every team member is a verified US resident in Weave. The project page's "Not OSPool-ready" line says who isn't.
+- Every team member is a verified US resident in Weave. The project page's "Not all US residents" line says who isn't.
 - The project holds no Krater budget. If it has some, reclaim it first from the Admin card.
 
 ## Record the grant
@@ -26,7 +26,10 @@ accounting shows it. The rules are in [SPEC.md](../SPEC.md) "OSPool grants".
 6. Give a reason and choose **Record OSPool grant**.
 
 Krater cancels the project's held budget and clears its funding hold, since the OSPool funds it instead. Nothing goes
-to the ledger or Quilt. The project now shows *Approved · OSPool*, and a post in its channel says what you did.
+to the ledger or Quilt. The project now shows *Approved · Partner grant*, and a post in its channel says what you did.
+
+Members and reviewers never see OSPool or OSG named: the badge, the project's card and the channel post all say
+"partner grant". Your **reason** goes in the channel as you typed it, so leave the name out of it.
 
 ## Read the usage
 

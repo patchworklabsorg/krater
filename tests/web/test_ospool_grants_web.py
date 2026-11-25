@@ -73,7 +73,7 @@ def test_an_admin_records_a_grant_and_the_page_reports_it(
 
     page = client.get(f"/projects/{project.id}").text
     assert "OSPool grant recorded." in page
-    assert "Approved · OSPool" in page
+    assert "Approved · Partner grant" in page
     assert NAME in page
     assert "$9.96" in page  # 4 GPU-hours at $2.49
     assert "OSPool valuation" in page
@@ -81,14 +81,17 @@ def test_an_admin_records_a_grant_and_the_page_reports_it(
     admin_page = client.get("/admin").text
     assert "OSPool grants" in admin_page
     assert NAME in admin_page
-    assert "Approved · OSPool" in admin_page
+    assert "Approved · Partner grant" in admin_page
 
     login_as(MEMBER_SUB)
     team_page = client.get(f"/projects/{project.id}").text
-    assert "OSPool grant" in team_page
+    assert "Partner grant" in team_page
     assert "$9.96" in team_page
-    assert "OSPool valuation" not in team_page
-    assert "Approved · OSPool" in client.get("/").text
+    # The team never sees OSPool or OSG named.
+    assert "OSPool" not in team_page and "OSG" not in team_page
+    home = client.get("/").text
+    assert "Approved · Partner grant" in home
+    assert "OSPool" not in home
 
 
 def test_a_reviewer_cant_record_one(client, login_as, submitted_project, db_session, weave_stub):
@@ -207,3 +210,32 @@ def test_the_pdf_leaves_ospool_usage_out_of_a_project_without_a_grant() -> None:
         ("Summary", "A rover."),
         ("OSPool usage", "X1: 1.0 GPU-hours."),
     ]
+
+
+def test_the_projects_slack_channel_never_names_ospool(
+    client: TestClient, login_as, submitted_project, db_session: Session, weave_stub, monkeypatch
+):
+    # The team reads the channel.
+    posts: list[dict] = []
+    monkeypatch.setattr(
+        "krater.web.routers.projects.slack_post_admin_override.defer", lambda **kwargs: posts.append(kwargs)
+    )
+    project = _held(client, login_as, submitted_project, db_session, weave_stub)
+    login_as(ADMIN_SUB)
+    assert _record(client, project).status_code == 303
+    response = _post(
+        client,
+        f"/projects/{project.id}/admin-ospool-valuation",
+        f"/projects/{project.id}",
+        gpu_name="A100",
+        rate="1.99",
+        rate_note="Another neocloud",
+        reason="Cheaper price found.",
+    )
+    assert response.status_code == 303
+
+    assert [post["action"] for post in posts] == [ospool_grants.SLACK_RECORD, ospool_grants.SLACK_VALUATION]
+    for post in posts:
+        assert "ospool" not in f"{post['action']} {post['extra']}".lower()
+    # The audit log keeps the real action names.
+    assert db_session.scalar(sa.select(AuditEvent).where(AuditEvent.action == ospool_grants.AUDIT_RECORD)) is not None

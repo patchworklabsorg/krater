@@ -29,6 +29,8 @@ class Guide:
     slug: str
     summary: str
     audience: str  # "members" or "admins"
+    #: Listed and served only to admins: the guides that name OSPool (docs/SPEC.md "OSPool grants").
+    admins_only: bool = False
 
 
 #: The Help index, in the order shown.
@@ -56,8 +58,13 @@ GUIDES: tuple[Guide, ...] = (
         "alerts.",
         "admins",
     ),
-    Guide("ospool-grants", "Record a grant that runs on the OSPool, and report what the team used.", "admins"),
-    Guide("share-with-ospool", "Send OSPool the projects you choose, as a PDF.", "admins"),
+    Guide(
+        "ospool-grants",
+        "Record a grant that runs on the OSPool, and report what the team used.",
+        "admins",
+        admins_only=True,
+    ),
+    Guide("share-with-ospool", "Send OSPool the projects you choose, as a PDF.", "admins", admins_only=True),
     Guide(
         "compute-runbook",
         "The stop switch, and what to do about each compute alert: spend, unknown charges, credit, storage.",

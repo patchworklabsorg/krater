@@ -115,14 +115,14 @@
 
 {% if show_residency %}
   {% if team_residency is none %}
-    <p class="residency-line">OSPool: Krater couldn't reach Weave to check the team's US residency.</p>
+    <p class="residency-line">Krater couldn't reach Weave to check the team's US residency.</p>
   {% elif team_residency.all_residents %}
     <p class="residency-line"><span class="badge badge--good">US residents</span> Every team member is a verified
-      US resident in Weave, so this project can be sent to OSPool.</p>
+      US resident in Weave.</p>
   {% else %}
     <div class="residency-line">
-      <p><span class="badge badge--info">Not OSPool-ready</span> OSPool is open only to US residents. These team
-        members are not verified US residents in Weave:</p>
+      <p><span class="badge badge--info">Not all US residents</span> These team members are not verified US
+        residents in Weave:</p>
       <ul>
         {% for member in team_residency.others %}
           <li>{{ member.label }}: {{ member.reason }}</li>

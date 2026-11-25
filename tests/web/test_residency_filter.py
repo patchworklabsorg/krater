@@ -34,8 +34,9 @@ def test_the_project_page_names_who_is_not_a_verified_us_resident(
     login_as(REVIEWER_SUB)
     page = client.get(f"/projects/{project.id}").text
 
-    assert "Not OSPool-ready" in page
+    assert "Not all US residents" in page
     assert MEMBER_SUB in page
+    assert "OSPool" not in page  # reviewers don't see the partner named either
 
 
 def test_a_member_does_not_see_the_residency_line(client: TestClient, login_as, submitted_project) -> None:

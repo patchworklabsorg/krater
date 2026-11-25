@@ -40,7 +40,7 @@ You can withdraw a project at any point before it's completed.
 | **Approved** | You have a budget and can run compute (once your team is verified) |
 | **Approved · awaiting verification** | Approved, but the budget waits until every team member is verified in Weave |
 | **Approved · awaiting funding** or **· awaiting 3rd party review** | Approved, but Patchwork can't fund it yet. An admin releases it |
-| **Approved · OSPool** | Your compute runs on the OSPool instead of Krater's budget (see [OSPool grants](ospool-grants.md)) |
+| **Approved · Partner grant** | A partner funds your compute outside Krater's budget. Krater only shows what you used |
 | **Pending completion review** | You've submitted your final write-up |
 | **Completion changes requested** | Reviewers asked for changes to the write-up |
 | **Completed** | Done. Published in the gallery |
@@ -281,8 +281,8 @@ your amount with it.
 **Can someone outside Patchwork join my team?** They need a Patchwork account first, then you invite them by
 Patchwork ID.
 
-**Can I use my own computer's GPU or another cloud?** Krater only tracks compute it rents. For OSPool, see
-[OSPool grants](ospool-grants.md).
+**Can I use my own computer's GPU or another cloud?** Krater only tracks compute it rents, and compute a partner
+grant funds.
 
 **Who sees my project?** Your team, reviewers and admins while it's in progress. The public sees it only once it's
 completed, in the gallery.

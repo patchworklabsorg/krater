@@ -550,8 +550,11 @@ values the usage at what renting the GPU would have cost.
   else the catalog). A day keeps the price it was first valued at; a day without a price gets one when Krater has
   one. An admin changes the GPU or price from the project page (`admin_change_ospool_valuation`), for later days only.
   OSG doesn't record which GPU a job used, so the value is an estimate, shown as one.
-- **Display.** The project shows *Approved · OSPool*. Its page has an OSPool card (totals, worth, the last 30 days
-  with usage, when it was last read), seen by anyone who can see the project. `/admin` lists every grant. The funder
+- **Display.** The project shows *Approved · Partner grant*. Its page has a *Partner grant* card (totals, worth, the
+  last 30 days with usage, when it was last read), seen by anyone who can see the project.
+- **Not named outside admin pages.** What members and reviewers see (the badge, the card, the project's Slack
+  channel, the residency line, the review queue and the public Help guides) says "partner" and never OSPool or OSG. Admin pages, the audit log, the funder packet and the two OSPool guides on Help
+  (listed and served to admins only) keep the name. `/admin` lists every grant. The funder
   packet's *OSPool usage* field (ticked at first) adds the totals and worth for a project with a grant.
 
 ## Admin overrides

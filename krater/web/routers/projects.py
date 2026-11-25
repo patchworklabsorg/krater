@@ -1330,10 +1330,10 @@ def admin_record_ospool_grant(
     def _notify() -> None:
         slack_post_admin_override.defer(
             project_id=str(project.id),
-            action=ospool_grants.AUDIT_RECORD,
+            action=ospool_grants.SLACK_RECORD,
             actor_sub=actor.user.weave_sub,
             reason=reason,
-            extra=f"OSPool project {name}, usage from {since}, valued at {rate_line}.",
+            extra=f"Partner grant under the project name {name}, usage from {since}, valued at {rate_line}.",
         )
 
     message = f"OSPool grant recorded. Usage under {name} shows here after the next daily import."
@@ -1389,7 +1389,7 @@ def admin_ospool_valuation(
     def _notify() -> None:
         slack_post_admin_override.defer(
             project_id=str(project.id),
-            action=ospool_grants.AUDIT_VALUATION,
+            action=ospool_grants.SLACK_VALUATION,
             actor_sub=actor.user.weave_sub,
             reason=reason,
             extra=f"Usage from now on valued at {rate_line}.",

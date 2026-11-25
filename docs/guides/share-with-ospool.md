@@ -37,6 +37,6 @@ only whether every member is a verified US resident.
 
 ## A team isn't OSPool-ready
 
-The project page tells reviewers and admins who on the team isn't a verified US resident (the "Not OSPool-ready"
+The project page tells reviewers and admins who on the team isn't a verified US resident (the "Not all US residents"
 line). Each member does the residency check on Weave's verification page. You can still send the project; the PDF
 says its team isn't all verified US residents.
