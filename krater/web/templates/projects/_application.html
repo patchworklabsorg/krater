@@ -5,7 +5,8 @@
 
   The two compute estimators work without JavaScript: "Estimate" is a plain submit (form_action=estimate_<prefix>)
   that comes back with the amount filled in. budget-estimator.js estimates as the fields change instead, and fills
-  the amount unless the team typed their own. application-form.js counts words and shows the "another card" fields.
+  the amount unless the team typed their own. application-form.js counts words; budget-estimator.js shows the
+  "another card" and "CPU only" fields.
 #}
 
 {% macro text_field(name, label, values, errors, hint="", rows=0, limit=0, maxlength=0, placeholder="") %}
@@ -31,10 +32,11 @@
   </div>
 {% endmacro %}
 
-{% macro estimator(prefix, legend, hint, amount_label, amount_hint, values, errors, summary, gpu_options, other_gpu, base_cents=0) %}
+{% macro estimator(prefix, legend, hint, amount_label, amount_hint, values, errors, summary, gpu_options, other_gpu, cpu_only, base_cents=0) %}
   {% set f = prefix ~ "_" %}
   <fieldset class="form-fieldset estimator" data-estimator="{{ prefix }}" data-estimate-url="/pricing/estimate"
-            data-csrf-token="{{ csrf_token() }}" data-base-cents="{{ base_cents }}" id="{{ prefix }}-estimator">
+            data-csrf-token="{{ csrf_token() }}" data-base-cents="{{ base_cents }}" id="{{ prefix }}-estimator"
+            {%- if cpu_only.core_price %} data-cpu-priced{% endif %}>
     <legend>{{ legend }}</legend>
     <p class="field-hint">{{ hint }} Prices are what Vast charges now (<a href="/pricing">GPU prices</a>).</p>
 
@@ -47,6 +49,7 @@
             <option value="{{ option.key }}" {% if values[f ~ 'gpu'] == option.key %}selected{% endif %}>{{ option.label }}</option>
           {% endfor %}
           <option value="{{ other_gpu }}" {% if values[f ~ 'gpu'] == other_gpu %}selected{% endif %}>Another card (give its price)</option>
+          <option value="{{ cpu_only.key }}" {% if values[f ~ 'gpu'] == cpu_only.key %}selected{% endif %}>CPU only, no GPU</option>
         </select>
         {% if errors[f ~ 'gpu'] %}<p class="field-error">{{ errors[f ~ 'gpu'] }}</p>{% endif %}
       </div>
@@ -74,7 +77,21 @@
       </div>
     </div>
 
-    <details class="estimator__more"{% if values[f ~ 'rate'] or errors[f ~ 'rate'] or errors[f ~ 'margin_percent'] %} open{% endif %}>
+    <div class="form-grid" data-role="cpu-only"{% if values[f ~ 'gpu'] != cpu_only.key %} hidden{% endif %}>
+      <div class="field">
+        <label for="{{ f }}cpu_cores">CPU cores</label>
+        <input type="number" id="{{ f }}cpu_cores" name="{{ f }}cpu_cores" min="1" max="512" step="1" placeholder="16"
+               value="{{ values[f ~ 'cpu_cores'] }}"{% if errors[f ~ 'cpu_cores'] %} aria-invalid="true"{% endif %}>
+        <p class="field-hint">
+          {%- if cpu_only.core_price %}Priced at Krater's CPU price, {{ cpu_only.core_price }} per core-hour. You can give
+          your own price for the whole machine below.
+          {%- else %}Krater has no CPU price yet: give the whole machine's price per hour below.{% endif -%}
+        </p>
+        {% if errors[f ~ 'cpu_cores'] %}<p class="field-error">{{ errors[f ~ 'cpu_cores'] }}</p>{% endif %}
+      </div>
+    </div>
+
+    <details class="estimator__more" data-role="more"{% if values[f ~ 'rate'] or errors[f ~ 'rate'] or errors[f ~ 'margin_percent'] or (values[f ~ 'gpu'] == cpu_only.key and not cpu_only.core_price) %} open{% endif %}>
       <summary>Rental, your own price, margin</summary>
       <div class="form-grid">
         <div class="field">
@@ -86,7 +103,10 @@
           <p class="field-hint">Interruptible machines cost much less and can pause when outbid; Krater resumes them.</p>
         </div>
         <div class="field">
-          <label for="{{ f }}rate">Your price per card-hour (USD)</label>
+          <label for="{{ f }}rate" data-role="rate-label" data-gpu-text="Your price per card-hour (USD)"
+                 data-cpu-text="Your price per machine-hour (USD)">
+            {%- if values[f ~ 'gpu'] == cpu_only.key %}Your price per machine-hour (USD){% else %}Your price per card-hour (USD){% endif -%}
+          </label>
           <input type="text" id="{{ f }}rate" name="{{ f }}rate" inputmode="decimal" placeholder="Krater's price"
                  value="{{ values[f ~ 'rate'] }}"{% if errors[f ~ 'rate'] %} aria-invalid="true"{% endif %}>
           <p class="field-hint">Leave blank to use Krater's current price. Reviewers see both.</p>
@@ -120,7 +140,7 @@
   </fieldset>
 {% endmacro %}
 
-{% macro application_fields(values, errors, summaries, gpu_options, applicant, word_limits, summary_max, other_gpu, kind="proposal", team=none, base_cents=0) %}
+{% macro application_fields(values, errors, summaries, gpu_options, applicant, word_limits, summary_max, other_gpu, cpu_only, kind="proposal", team=none, base_cents=0) %}
   <fieldset class="form-fieldset">
     <legend>You</legend>
     <dl class="details">
@@ -210,18 +230,18 @@
                    "The card and hours the next stage needs, on top of what's approved. It starts as your finished-product estimate.",
                    "New total budget (USD)",
                    "The project's whole budget if this amendment is approved: the " ~ (base_cents | dollars) ~ " approved so far plus the estimate. Type a different total if you need one; it can be lower, too.",
-                   values, errors, summaries.poc, gpu_options, other_gpu, base_cents=base_cents) }}
+                   values, errors, summaries.poc, gpu_options, other_gpu, cpu_only, base_cents=base_cents) }}
     {% else %}
       {{ estimator("poc", "Proof of concept",
                    "How much compute a proof of concept needs: which card, and about how many hours. This is what gets approved first.",
                    "Budget to request (USD)",
                    "Filled in from the estimate. Change it if you need a different amount; reviewers see both.",
-                   values, errors, summaries.poc, gpu_options, other_gpu) }}
+                   values, errors, summaries.poc, gpu_options, other_gpu, cpu_only) }}
     {% endif %}
     {{ estimator("full", "Finished product",
                  "Roughly how much the finished product would need. A rough guess is fine; it isn't approved now, and you can ask for it later with an amendment.",
                  "Rough total (USD)",
                  "For reviewers' information only.",
-                 values, errors, summaries.full, gpu_options, other_gpu) }}
+                 values, errors, summaries.full, gpu_options, other_gpu, cpu_only) }}
   </fieldset>
 {% endmacro %}

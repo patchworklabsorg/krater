@@ -36,6 +36,7 @@ class PolicyField:
     # "bp": stored in basis points, shown and entered as a fraction (9500 <-> 0.95).
     # "usd_per_tb": stored in micro-dollars per GB, shown and entered in dollars per TB (20000 <-> 20).
     # "usd": stored in cents, shown and entered in dollars (12550 <-> 125.5).
+    # "usd_micro": stored in micro-dollars, shown and entered in dollars (6000 <-> 0.006).
     kind: str = "int"
 
 
@@ -279,6 +280,18 @@ ORG_FIELDS: tuple[PolicyField, ...] = (
         2,
         0,
     ),
+    PolicyField(
+        "cpu_core_hour_microusd",
+        "CPU price per core-hour",
+        "What the application form prices a CPU-only estimate at: cores × hours × this. Teams can give their own "
+        "price instead, and reviewers see both. Partner grants' CPU-only core-hours are valued at it too. Up to six "
+        "decimal places. 0 = no price: teams must give their own.",
+        "USD",
+        0,
+        1_000_000,
+        0,
+        kind="usd_micro",
+    ),
 )
 ORG_FIELDS_BY_NAME = {f.name: f for f in ORG_FIELDS}
 AUDIT_ORG = "compute_org_limits_update"
@@ -321,7 +334,7 @@ assert {f.name for f in fields(ComputePolicy)} - {"overridden"} == set(FIELDS_BY
 
 
 #: What a scaled kind's stored integer is divided by to show it: basis points per 1, micro-dollars per GB per $/TB.
-_SCALED = {"bp": 10_000, "usd_per_tb": 1_000, "usd": 100}
+_SCALED = {"bp": 10_000, "usd_per_tb": 1_000, "usd": 100, "usd_micro": 1_000_000}
 
 
 def format_value(field: PolicyField, value: int | None) -> str:
@@ -488,6 +501,7 @@ class OrgLimits:
     finished_files_days: int
     credit_reserve_hours: int
     dm_job_endings: int
+    cpu_core_hour_microusd: int
 
     def values(self) -> dict[str, int]:
         return {f.name: getattr(self, f.name) for f in ORG_FIELDS}

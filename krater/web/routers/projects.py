@@ -233,6 +233,7 @@ def _form_context(
         "word_limits": project_service.WORD_LIMITS,
         "summary_max": project_service.SUMMARY_MAX_CHARS,
         "other_gpu": estimator_form.OTHER_GPU,
+        "cpu_only": {"key": estimator_form.CPU_ONLY, "core_price": estimator_form.cpu_core_price_text(db_session)},
         "team": team,
     }
 
@@ -709,6 +710,7 @@ def _build_detail_context(
         "ospool_grant": ospool_grant,
         "ospool_summary": ospool_grants.summary(ospool_grant) if ospool_grant is not None else None,
         "ospool_rate_text": ospool_grants.rate_text(ospool_grant) if ospool_grant is not None else "",
+        "ospool_cpu_rate_text": ospool_grants.cpu_rate_text(session) if ospool_grant is not None else "",
         "ospool_rate_input": f"{Decimal(ospool_grant.rate_override_microusd) / 1_000_000:f}".rstrip("0").rstrip(".")
         if ospool_grant is not None and ospool_grant.rate_override_microusd is not None
         else "",

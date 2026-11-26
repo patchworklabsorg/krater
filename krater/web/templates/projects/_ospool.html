@@ -15,9 +15,11 @@
     <div class="stat"><dt>Worth at rent prices</dt><dd>{{ totals.value_cents | dollars }}</dd></div>
   </dl>
   <p class="muted">
-    Counted from {{ ospool_grant.counted_from.isoformat() }}. Valued at {{ ospool_rate_text }}: what renting the GPU
-    on demand would have cost, not what anyone paid. Each day keeps the price it was first valued at.
-    {%- if totals.unvalued_days %} {{ totals.unvalued_days }} day{{ "s" if totals.unvalued_days != 1 }} with GPU-hours
+    Counted from {{ ospool_grant.counted_from.isoformat() }}. GPU-hours are valued at {{ ospool_rate_text }}, and
+    the {{ "{:,.1f}".format(totals.cpu_core_hours) }} core-hours of jobs that used no GPU at {{ ospool_cpu_rate_text }}:
+    what renting them on demand would have cost, not what anyone paid. A GPU job's cores come with its GPU. Each day
+    keeps the prices it was first valued at.
+    {%- if totals.unvalued_days %} {{ totals.unvalued_days }} day{{ "s" if totals.unvalued_days != 1 }} with usage
       {{ "have" if totals.unvalued_days != 1 else "has" }} no price yet, so {{ "they're" if totals.unvalued_days != 1 else "it's" }} left out.{% endif %}
   </p>
   <p class="muted">
@@ -47,7 +49,7 @@
               <td class="num">{{ "{:,.1f}".format(day.gpu_hours) }}</td>
               <td class="num">{{ "{:,.1f}".format(day.core_hours) }}</td>
               <td class="num">{{ "{:,}".format(day.jobs) }}</td>
-              <td class="num">{{ day.value_cents | dollars if day.value_cents is not none else "No price" }}</td>
+              <td class="num">{{ day.worth_cents | dollars if day.worth_cents is not none else "No price" }}</td>
             </tr>
           {% endfor %}
         </tbody>

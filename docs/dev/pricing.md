@@ -155,6 +155,15 @@ summary says "the team's own hourly price; Krater's typical is $X/hr". The amoun
 differ from the estimate's total; it starts as the total, and the project page flags a large difference
 (`budget_estimate_flag_threshold_percent`). Both estimates are always stored when filled in, whatever was requested.
 
+**CPU only.** The card `<select>` also offers "CPU only" (`*_gpu = cpu`, `estimator_form.CPU_ONLY`) with a core count
+(`*_cpu_cores`, 1 to 512). It's priced at cores × the admins' **CPU price per core-hour**
+(`compute_settings.cpu_core_hour_microusd`, an organization limit on `/admin/compute`, micro-dollars, 0 = not set),
+for either rental type: `rate_source: krater_cpu_price`. With no price set, `*_rate` is required. `*_rate` is always
+the whole machine's price per hour, not per core; with a price set, Krater's machine price is kept as
+`market_rate_cents`. The stored estimate has `accelerator_name: "CPU only"`, `accelerator_count: 1` and `cpu_cores`;
+its summary reads "CPU only, 16 cores × 40h at $0.096/hr ... (Krater's CPU price, $0.006 per core-hour)". Only GPU
+estimates leave `cpu_cores` out. Krater Compute itself still rents GPU machines only.
+
 ## Estimator: Krater's own Vast samples first
 
 Whenever the worker has a Vast key, compute on or off, it samples Vast every hour (`krater.services.price_history`). The

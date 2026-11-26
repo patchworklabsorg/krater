@@ -72,6 +72,32 @@ def test_estimate_endpoint_computes_from_current_prices(client: TestClient, logi
     assert "$1.10/hr" in body["summary"]
 
 
+def test_estimate_endpoint_prices_a_cpu_only_machine_at_the_teams_price(client: TestClient, login_as) -> None:
+    login_as(MEMBER_SUB)
+    csrf = get_csrf_token(client.get("/projects/new").text)
+    fields = {
+        "csrf_token": csrf,
+        "estimator_gpu": "cpu",
+        "estimator_cpu_cores": "32",
+        "estimator_hours": "100",
+        "estimator_basis": "spot",
+        "estimator_margin_percent": "10",
+    }
+
+    missing = client.post("/pricing/estimate", data=fields)
+    response = client.post("/pricing/estimate", data={**fields, "estimator_rate": "0.15"})
+
+    assert missing.status_code == 422
+    assert missing.json()["errors"] == {
+        "estimator_rate": "Krater has no CPU price yet: give the machine's price per hour."
+    }
+    assert response.status_code == 200
+    body = response.json()
+    # $0.15 x 100h = $15.00, +10% = $16.50: the whole machine's price, not per core.
+    assert body["total_dollars"] == "16.50"
+    assert body["summary"].startswith("CPU only, 32 cores × 100h at $0.15/hr (interruptible)")
+
+
 def test_estimate_endpoint_unknown_gpu_key_is_a_field_error(client: TestClient, login_as) -> None:
     login_as(MEMBER_SUB)
     form = client.get("/projects/new")

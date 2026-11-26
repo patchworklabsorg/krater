@@ -62,7 +62,8 @@
   {% set mine = error_form == "ospool_valuation" %}
   <div class="admin-action">
   <h3>OSPool valuation</h3>
-  <p class="muted">Now {{ ospool_rate_text }}. A change values later days only: days already valued keep their price.</p>
+  <p class="muted">Now {{ ospool_rate_text }}; CPU-only jobs' core-hours at {{ ospool_cpu_rate_text }} (set on the
+    compute settings page). A change values later days only: days already valued keep their price.</p>
   <form method="post" action="/projects/{{ project.id }}/admin-ospool-valuation" class="form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     {{ gpu_and_rate("ospool_valuation", "ospool-value",

@@ -23,12 +23,14 @@ from krater.web.money import format_cents
 
 #: The GPU `<select>` value for a card Krater has no price for; the team names it and gives its hourly price.
 OTHER_GPU = "other"
+#: The `<select>` value for a machine with no GPU: the team gives its cores, priced at Krater's price per core-hour.
+CPU_ONLY = "cpu"
 # Far above any real proposal; they keep nonsense like "1e308" out of the arithmetic.
 MAX_ESTIMATE_HOURS = 100_000
 MAX_MARGIN_PERCENT = 1000
 #: The posted fields of one estimator, without its prefix (`estimator_` on the JSON endpoint, `poc_`/`full_` on the
 #: application form).
-FIELDS = ("gpu", "gpu_other", "gpu_count", "hours", "basis", "margin_percent", "rate")
+FIELDS = ("gpu", "gpu_other", "gpu_count", "cpu_cores", "hours", "basis", "margin_percent", "rate")
 
 
 def gpu_options(session: Session) -> list[dict[str, str | bool]]:
@@ -55,6 +57,12 @@ def gpu_options(session: Session) -> list[dict[str, str | bool]]:
     return options
 
 
+def cpu_core_price_text(session: Session) -> str | None:
+    """Krater's price per CPU core-hour as the form shows it (`$0.006`); `None` when admins haven't set one."""
+    microusd = pricing.cpu_core_rate_microusd(session)
+    return None if microusd is None else _dollars_text(microusd)
+
+
 def default_estimator_values(settings: Settings, prefix: str = "estimator") -> dict[str, str]:
     """Blank field values for one estimator on a fresh form -- no GPU/hours chosen yet, interruptible basis (what
     Krater Compute rents by default), the configured default safety margin, Krater's own hourly price."""
@@ -73,7 +81,10 @@ def values_from_estimate(estimate: dict | None, settings: Settings, prefix: str)
         return values
     name, count = estimate["accelerator_name"], int(estimate["accelerator_count"])
     from_member = estimate.get("rate_source") == pricing.SOURCE_MEMBER
-    if from_member and estimate.get("market_rate_cents") is None:
+    if estimate.get("cpu_cores"):
+        values[f"{prefix}_gpu"] = CPU_ONLY
+        values[f"{prefix}_cpu_cores"] = str(estimate["cpu_cores"])
+    elif from_member and estimate.get("market_rate_cents") is None:
         values[f"{prefix}_gpu"] = OTHER_GPU
         values[f"{prefix}_gpu_other"] = name
         values[f"{prefix}_gpu_count"] = str(count)
@@ -123,6 +134,18 @@ def parse_hourly_rate(raw: str) -> int:
     return int(value * 1_000_000)
 
 
+def _rate_microusd(data: dict) -> int:
+    microusd = data.get("rate_microusd")
+    return data["rate_cents"] * 10_000 if microusd is None else microusd
+
+
+def _dollars_text(microusd: float) -> str:
+    """`$0.006`, `$0.25`: dollars with as many decimals as the amount needs, at least two, at most six."""
+    text = f"{Decimal(str(microusd)) / 1_000_000:.6f}".rstrip("0")
+    whole, _, fraction = text.partition(".")
+    return f"${whole}.{fraction.ljust(2, '0')}"
+
+
 def _rate_text(data: dict) -> str:
     microusd = data.get("rate_microusd")
     if microusd is None:
@@ -142,12 +165,15 @@ def parse_and_estimate(
     estimator_rate: str = "",
     estimator_gpu_other: str = "",
     estimator_gpu_count: str = "",
+    estimator_cpu_cores: str = "",
 ) -> pricing.BudgetEstimate:
     """Validate the raw posted strings and compute the estimate.
 
     `estimator_gpu` is a `pricing.gpu_key`, or `OTHER_GPU` with the card named in `estimator_gpu_other` and counted
     in `estimator_gpu_count`; another card needs `estimator_rate`, the team's price per GPU-hour in dollars, which
-    otherwise is optional and replaces Krater's own.
+    otherwise is optional and replaces Krater's own. `CPU_ONLY` is a machine with no GPU and `estimator_cpu_cores`
+    cores, at Krater's price per core-hour; `estimator_rate` is then the whole machine's price per hour, needed only
+    while Krater has no CPU price.
 
     Raises `ValidationFailed` (field name -> message, keyed the same as the form's `name=` attributes)
     for anything wrong -- an empty/unparseable field, an unknown GPU key, or a GPU Krater currently has
@@ -161,7 +187,18 @@ def parse_and_estimate(
             rate_override_microusd = parse_hourly_rate(estimator_rate)
         except ValueError as exc:
             errors["estimator_rate"] = str(exc)
-    if estimator_gpu == OTHER_GPU:
+    cpu_cores = None
+    if estimator_gpu == CPU_ONLY:
+        accelerator_name, accelerator_count = pricing.CPU_ONLY_NAME, 1
+        try:
+            cpu_cores = int(estimator_cpu_cores)
+            if not 1 <= cpu_cores <= pricing.MAX_CPU_CORES:
+                raise ValueError
+        except ValueError:
+            errors["estimator_cpu_cores"] = f"Between 1 and {pricing.MAX_CPU_CORES} cores."
+        if not estimator_rate.strip() and pricing.cpu_core_rate_microusd(session) is None:
+            errors["estimator_rate"] = "Krater has no CPU price yet: give the machine's price per hour."
+    elif estimator_gpu == OTHER_GPU:
         accelerator_name = " ".join(estimator_gpu_other.split())[:64]
         if not accelerator_name:
             errors["estimator_gpu_other"] = "Name the card."
@@ -207,6 +244,7 @@ def parse_and_estimate(
         basis=estimator_basis,
         margin_percent=margin_percent,
         rate_override_microusd=rate_override_microusd,
+        cpu_cores=cpu_cores,
     )
 
 
@@ -222,6 +260,18 @@ def summary_text_from_dict(data: dict) -> str:
     basis_label = "interruptible" if data["basis"] == pricing.BASIS_SPOT else "on-demand"
     if data.get("spot_unavailable"):
         basis_label = "on-demand; no interruptible prices for this GPU yet"
+    if cores := data.get("cpu_cores"):
+        market = data.get("market_rate_cents")
+        if data.get("rate_source") == pricing.SOURCE_CPU_PRICE:
+            source = f"Krater's CPU price, {_dollars_text(_rate_microusd(data) / cores)} per core-hour"
+        elif market is not None:
+            source = f"the team's own hourly price; Krater's CPU price comes to {format_cents(market)}/hr"
+        else:
+            source = "the team's own hourly price; Krater had no CPU price set"
+        return (
+            f"CPU only, {cores} cores × {float(data['hours']):g}h at {_rate_text(data)}/hr ({basis_label}) "
+            f"+ {data['margin_percent']}% margin = {format_cents(data['total_cents'])} ({source})"
+        )
     if data.get("rate_source") == pricing.SOURCE_MEMBER:
         market = data.get("market_rate_cents")
         source = "the team's own hourly price" + (
@@ -243,7 +293,9 @@ def summary_text(result: pricing.BudgetEstimate) -> str:
 
 
 __all__ = [
+    "CPU_ONLY",
     "FIELDS",
+    "cpu_core_price_text",
     "OTHER_GPU",
     "default_estimator_values",
     "gpu_options",

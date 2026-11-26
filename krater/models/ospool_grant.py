@@ -61,7 +61,8 @@ class OspoolUsageDay(UUIDPrimaryKeyMixin, Base):
     """One UTC day of a grant's usage, as OSG's accounting summed it (user jobs only, not the pilots that ran them).
 
     OSG corrects recent days, so the import replaces a day's hours. Its price per GPU-hour is the one in force when
-    the day was first imported, and stays: a day's value doesn't move with later prices.
+    the day was first imported, and stays: a day's value doesn't move with later prices. CPU-only jobs' core-hours are
+    valued the same way at Krater's CPU price per core-hour (`/admin/compute`).
     """
 
     __tablename__ = "ospool_usage_days"
@@ -82,8 +83,23 @@ class OspoolUsageDay(UUIDPrimaryKeyMixin, Base):
     #: `gpu_hours` at `rate_microusd`, in cents: what renting it would have cost. `None` without a price.
     value_cents: Mapped[int | None] = mapped_column(sa.BigInteger, nullable=True)
     imported_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
+    #: The part of `core_hours` from jobs that used no GPU. `None` on a day imported before Krater read it; the next
+    #: import reads the grant's whole history again to fill it in.
+    cpu_core_hours: Mapped[Decimal | None] = mapped_column(sa.Numeric(14, 4), nullable=True)
+    #: Krater's CPU price per core-hour that values `cpu_core_hours`, in micro-dollars, kept like `rate_microusd`;
+    #: `None` while no CPU price is set.
+    core_rate_microusd: Mapped[int | None] = mapped_column(sa.BigInteger, nullable=True)
+    #: `cpu_core_hours` at `core_rate_microusd`, in cents. `None` without a price.
+    core_value_cents: Mapped[int | None] = mapped_column(sa.BigInteger, nullable=True)
 
     grant: Mapped[OspoolGrant] = relationship(back_populates="usage_days")
+
+    @property
+    def worth_cents(self) -> int | None:
+        """The day's GPU and CPU value together; `None` when neither has a price."""
+        if self.value_cents is None and self.core_value_cents is None:
+            return None
+        return (self.value_cents or 0) + (self.core_value_cents or 0)
 
     def __repr__(self) -> str:
         return f"<OspoolUsageDay {self.day} gpu_hours={self.gpu_hours}>"

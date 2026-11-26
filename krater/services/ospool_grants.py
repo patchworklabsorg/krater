@@ -14,7 +14,9 @@ run those jobs. It records the grant and reports what the team used:
   (`krater.ospool.accounting`). OSG corrects recent days, so it reads the last `REIMPORT_DAYS` again and replaces
   their hours.
 - **Value.** Each day is valued at what renting the GPU on demand would have cost: the admin's price (a neocloud's
-  posted price, say) when set, else Krater's own (`pricing.on_demand_rate`). A day keeps the price it was first
+  posted price, say) when set, else Krater's own (`pricing.on_demand_rate`). Core-hours of jobs that used no GPU are
+  valued at Krater's CPU price per core-hour (`/admin/compute`); a GPU job's cores come with its GPU's price, so they
+  aren't counted twice. A day keeps the price it was first
   valued at, so a later price change moves only later days. A day with no price gets one once a price exists.
 - **Reporting only.** No cap and no alerts: OSG enforces nothing per grant, and Krater stops nothing.
 """
@@ -281,14 +283,29 @@ def value_cents(gpu_hours: Decimal, rate_microusd: int) -> int:
     return int((gpu_hours * rate_microusd / 10_000).quantize(Decimal(1), rounding=ROUND_HALF_UP))
 
 
-def _apply(row: OspoolUsageDay, usage: DayUsage | None, rate: tuple[int, str] | None, now: datetime) -> None:
+def _apply(
+    row: OspoolUsageDay, usage: DayUsage | None, rate: tuple[int, str] | None, core_rate: int | None, now: datetime
+) -> None:
     row.gpu_hours = usage.gpu_hours.quantize(_HOURS) if usage else Decimal(0)
     row.core_hours = usage.core_hours.quantize(_HOURS) if usage else Decimal(0)
+    row.cpu_core_hours = usage.cpu_core_hours.quantize(_HOURS) if usage else Decimal(0)
     row.jobs = usage.jobs if usage else 0
     if row.rate_microusd is None and rate is not None:
         row.rate_microusd, row.rate_source = rate
     row.value_cents = value_cents(row.gpu_hours, row.rate_microusd) if row.rate_microusd is not None else None
+    _value_cores(row, core_rate)
     row.imported_at = now
+
+
+def _value_cores(row: OspoolUsageDay, core_rate: int | None) -> None:
+    """Value the day's CPU-only core-hours at the price it was first valued at, else `core_rate` (none: `None`)."""
+    if row.core_rate_microusd is None and core_rate is not None:
+        row.core_rate_microusd = core_rate
+    row.core_value_cents = (
+        value_cents(row.cpu_core_hours or Decimal(0), row.core_rate_microusd)
+        if row.core_rate_microusd is not None
+        else None
+    )
 
 
 def import_usage(session: Session, grant: OspoolGrant, client: AccountingClient, *, now: datetime) -> int:
@@ -298,7 +315,13 @@ def import_usage(session: Session, grant: OspoolGrant, client: AccountingClient,
     Flushes, doesn't commit."""
     today = now.date()
     existing = {row.day: row for row in grant.usage_days}
-    start = grant.counted_from if not existing else max(grant.counted_from, today - timedelta(days=REIMPORT_DAYS))
+    # Days imported before Krater read CPU-only core-hours: read the whole history again, once, to fill them in.
+    unsplit = any(row.cpu_core_hours is None for row in existing.values())
+    start = (
+        grant.counted_from
+        if not existing or unsplit
+        else max(grant.counted_from, today - timedelta(days=REIMPORT_DAYS))
+    )
     end = today + timedelta(days=1)
     try:
         days = client.daily_usage(grant.ospool_project_name, start, end)
@@ -308,18 +331,22 @@ def import_usage(session: Session, grant: OspoolGrant, client: AccountingClient,
         raise
     reported = {usage.day: usage for usage in days if start <= usage.day < end}
     rate = _current_rate(session, grant, now)
+    core_rate = pricing.cpu_core_rate_microusd(session)
     for day in sorted(set(reported) | {day for day in existing if start <= day < end}):
         row = existing.get(day)
         if row is None:
             row = OspoolUsageDay(grant=grant, day=day)
             session.add(row)
-        _apply(row, reported.get(day), rate, now)
+        _apply(row, reported.get(day), rate, core_rate, now)
     # A day valued before Krater had a price gets one now, outside the window too.
-    if rate is not None:
-        for row in existing.values():
-            if row.rate_microusd is None and not (start <= row.day < end):
-                row.rate_microusd, row.rate_source = rate
-                row.value_cents = value_cents(row.gpu_hours, row.rate_microusd)
+    for row in existing.values():
+        if start <= row.day < end:
+            continue
+        if rate is not None and row.rate_microusd is None:
+            row.rate_microusd, row.rate_source = rate
+            row.value_cents = value_cents(row.gpu_hours, row.rate_microusd)
+        if core_rate is not None and row.core_rate_microusd is None:
+            _value_cores(row, core_rate)
     grant.last_imported_at = now
     grant.last_import_error = None
     session.flush()
@@ -353,14 +380,16 @@ class Summary:
     gpu_hours: Decimal
     core_hours: Decimal
     jobs: int
-    #: Every valued day's worth, in cents.
+    #: Every valued day's worth, GPU and CPU, in cents.
     value_cents: int
-    #: Days with GPU-hours but no price yet, so `value_cents` leaves them out.
+    #: Days with GPU-hours or CPU-only core-hours but no price for them yet, so `value_cents` leaves them out.
     unvalued_days: int
     #: The last 30 days that have rows, newest first.
     recent: list[OspoolUsageDay]
     first_day: date | None
     last_day: date | None
+    #: The part of `core_hours` from jobs that used no GPU, valued at Krater's CPU price.
+    cpu_core_hours: Decimal = Decimal(0)
 
 
 def summary(grant: OspoolGrant) -> Summary:
@@ -369,11 +398,16 @@ def summary(grant: OspoolGrant) -> Summary:
         gpu_hours=sum((row.gpu_hours for row in days), Decimal(0)),
         core_hours=sum((row.core_hours for row in days), Decimal(0)),
         jobs=sum(row.jobs for row in days),
-        value_cents=sum(row.value_cents or 0 for row in days),
-        unvalued_days=sum(1 for row in days if row.value_cents is None and row.gpu_hours),
+        value_cents=sum(row.worth_cents or 0 for row in days),
+        unvalued_days=sum(
+            1
+            for row in days
+            if (row.gpu_hours and row.value_cents is None) or (row.cpu_core_hours and row.core_value_cents is None)
+        ),
         recent=days[::-1][:30],
         first_day=days[0].day if days else None,
         last_day=days[-1].day if days else None,
+        cpu_core_hours=sum((row.cpu_core_hours or Decimal(0) for row in days), Decimal(0)),
     )
 
 
@@ -398,9 +432,21 @@ def usage_text(grant: OspoolGrant) -> str:
         f"and {totals.jobs:,} jobs from {since} to {totals.last_day.isoformat()}. "
         f"Worth {_dollars(totals.value_cents)} at {rate_text(grant)}"
     )
+    if totals.cpu_core_hours:
+        text += f", and {_hours(totals.cpu_core_hours)} core-hours of CPU-only jobs at Krater's CPU price"
     if totals.unvalued_days:
         text += f", leaving out {totals.unvalued_days} day{'s' if totals.unvalued_days != 1 else ''} with no price"
     return text + "."
+
+
+def cpu_rate_text(session: Session) -> str:
+    """How CPU-only jobs' core-hours are valued now, for display: "Krater's CPU price, $0.006 per core-hour"."""
+    microusd = pricing.cpu_core_rate_microusd(session)
+    if microusd is None:
+        return "no CPU price yet"
+    dollars = (Decimal(microusd) / 1_000_000).normalize()
+    price = f"${dollars:.2f}" if dollars == dollars.quantize(Decimal("0.01")) else f"${dollars:f}"
+    return f"Krater's CPU price, {price} per core-hour"
 
 
 def rate_text(grant: OspoolGrant) -> str:
@@ -425,6 +471,7 @@ __all__ = [
     "import_all",
     "import_usage",
     "project_ids_with_grants",
+    "cpu_rate_text",
     "rate_text",
     "record_grant",
     "summary",

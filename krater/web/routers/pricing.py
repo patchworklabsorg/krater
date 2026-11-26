@@ -93,6 +93,7 @@ def estimate(
     estimator_rate: Annotated[str, Form()] = "",
     estimator_gpu_other: Annotated[str, Form()] = "",
     estimator_gpu_count: Annotated[str, Form()] = "",
+    estimator_cpu_cores: Annotated[str, Form()] = "",
 ):
     """JSON estimate for the application form's compute estimators
     (`krater/web/static/js/budget-estimator.js`). Signed-in members only, like every other draft-form
@@ -110,6 +111,7 @@ def estimate(
             estimator_rate=estimator_rate,
             estimator_gpu_other=estimator_gpu_other,
             estimator_gpu_count=estimator_gpu_count,
+            estimator_cpu_cores=estimator_cpu_cores,
         )
     except ValidationFailed as exc:
         return JSONResponse({"errors": exc.errors}, status_code=422)

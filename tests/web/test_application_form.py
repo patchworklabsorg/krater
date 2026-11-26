@@ -10,8 +10,8 @@ import sqlalchemy as sa
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from krater.models import GpuPrice, Project, ProjectMember, ProjectRevision, ProjectStatus
-from krater.services import budget
+from krater.models import ComputeSettings, GpuPrice, Project, ProjectMember, ProjectRevision, ProjectStatus
+from krater.services import budget, compute_settings
 from krater.services import projects as project_service
 from tests.conftest import MEMBER_SUB, OTHER_MEMBER_SUB, REVIEWER_SUB, get_csrf_token
 from tests.factories import estimate
@@ -156,6 +156,80 @@ def test_another_card_needs_its_price(client: TestClient, login_as) -> None:
 
     assert response.status_code == 422
     assert "Give this card&#39;s price per hour." in response.text
+
+
+def test_the_team_can_ask_for_a_cpu_only_machine(client: TestClient, login_as, db_session: Session) -> None:
+    login_as(MEMBER_SUB)
+
+    response = _create(
+        client,
+        poc_gpu="cpu",
+        poc_cpu_cores="16",
+        poc_rate="0.09",
+        poc_basis="on_demand",
+        full_gpu="cpu",
+        full_cpu_cores="32",
+        full_rate="0.15",
+    )
+
+    assert response.status_code == 303
+    revision = _revision(db_session, response)
+    estimate = revision.budget_estimate
+    assert (estimate["accelerator_name"], estimate["accelerator_count"], estimate["cpu_cores"]) == ("CPU only", 1, 16)
+    assert estimate["rate_source"] == "member" and estimate["market_rate_cents"] is None
+    # $0.09 a machine-hour x 40h, whatever the core count
+    assert estimate["total_cents"] == 360
+    assert revision.full_budget_estimate["cpu_cores"] == 32
+    detail = client.get(response.headers["location"]).text
+    assert "CPU only, 16 cores × 40h at $0.09/hr (on-demand)" in detail
+    # The edit form comes back on "CPU only" with the cores and price filled in.
+    project_id = response.headers["location"].removeprefix("/projects/")
+    edit = client.get(f"/projects/{project_id}/edit").text
+    assert re.search(r'<option value="cpu"\s+selected>', edit)
+    assert 'name="poc_cpu_cores" min="1" max="512" step="1" placeholder="16"\n               value="16"' in edit
+    assert 'value="0.09"' in edit
+
+
+def test_a_cpu_only_machine_needs_its_cores_and_price(client: TestClient, login_as) -> None:
+    login_as(MEMBER_SUB)
+
+    response = _create(client, poc_gpu="cpu", poc_cpu_cores="0")
+
+    assert response.status_code == 422
+    assert "Between 1 and 512 cores." in response.text
+    assert "Krater has no CPU price yet: give the machine&#39;s price per hour." in response.text
+
+
+def _set_cpu_price(db_session: Session, microusd: int) -> None:
+    compute_settings.org_limits(db_session)  # makes sure the settings row exists
+    db_session.get(ComputeSettings, 1).cpu_core_hour_microusd = microusd
+    db_session.flush()
+
+
+def test_a_cpu_only_machine_is_priced_at_krater_s_cpu_price(client: TestClient, login_as, db_session: Session) -> None:
+    login_as(MEMBER_SUB)
+    _set_cpu_price(db_session, 6_000)
+    assert "Priced at Krater's CPU price, $0.006 per core-hour." in client.get("/projects/new").text
+
+    response = _create(client, poc_gpu="cpu", poc_cpu_cores="16", full_gpu="cpu", full_cpu_cores="16", full_rate="0.5")
+
+    assert response.status_code == 303
+    revision = _revision(db_session, response)
+    estimate = revision.budget_estimate
+    # 16 cores x $0.006 = $0.096 an hour, x 40h = $3.84
+    assert (estimate["rate_source"], estimate["rate_microusd"], estimate["total_cents"]) == (
+        "krater_cpu_price",
+        96_000,
+        384,
+    )
+    # The team's own price keeps Krater's beside it for reviewers.
+    assert (revision.full_budget_estimate["rate_cents"], revision.full_budget_estimate["market_rate_cents"]) == (50, 10)
+    detail = client.get(response.headers["location"]).text
+    assert (
+        "CPU only, 16 cores × 40h at $0.096/hr (on-demand) + 0% margin = $3.84 "
+        "(Krater&#39;s CPU price, $0.006 per core-hour)" in detail
+    )
+    assert "Krater&#39;s CPU price comes to $0.10/hr" in detail
 
 
 def test_the_teams_price_overrides_krater_s_and_keeps_it_for_comparison(

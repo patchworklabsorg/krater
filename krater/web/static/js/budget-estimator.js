@@ -13,7 +13,7 @@
 (function () {
   "use strict";
 
-  var FIELDS = ["gpu", "gpu_other", "gpu_count", "hours", "basis", "margin_percent", "rate"];
+  var FIELDS = ["gpu", "gpu_other", "gpu_count", "cpu_cores", "hours", "basis", "margin_percent", "rate"];
 
   function setUp(widget) {
     var prefix = widget.getAttribute("data-estimator");
@@ -24,6 +24,9 @@
     var resultEl = widget.querySelector('[data-role="estimate-result"]');
     var amount = widget.querySelector('[data-role="amount"]');
     var otherFields = widget.querySelector('[data-role="other-gpu"]');
+    var cpuFields = widget.querySelector('[data-role="cpu-only"]');
+    var more = widget.querySelector('[data-role="more"]');
+    var rateLabel = widget.querySelector('[data-role="rate-label"]');
     if (!prefix || !estimateButton || !amount) return;
 
     // An amendment's amount is the project's new total: what's approved so far plus the estimated extra compute.
@@ -136,7 +139,12 @@
     });
 
     input("gpu").addEventListener("change", function () {
-      if (otherFields) otherFields.hidden = input("gpu").value !== "other";
+      var choice = input("gpu").value;
+      if (otherFields) otherFields.hidden = choice !== "other";
+      if (cpuFields) cpuFields.hidden = choice !== "cpu";
+      // Without Krater's CPU price, the team's own (inside "Rental, your own price, margin") is needed.
+      if (more && choice === "cpu" && !widget.hasAttribute("data-cpu-priced")) more.open = true;
+      if (rateLabel) rateLabel.textContent = rateLabel.getAttribute(choice === "cpu" ? "data-cpu-text" : "data-gpu-text");
     });
 
     amount.addEventListener("input", function () {
