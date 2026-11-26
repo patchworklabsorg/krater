@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from krater.models import (
     AuditEvent,
     BudgetEntry,
+    ComputeSettings,
     FundingHold,
     GpuPrice,
     OspoolUsageDay,
@@ -23,7 +24,16 @@ from krater.models import (
     ReviewSource,
 )
 from krater.ospool.accounting import AccountingError, FakeAccounting
-from krater.services import budget, funder_packet, funding_holds, grants, ospool_grants, pricing, projects
+from krater.services import (
+    budget,
+    compute_settings,
+    funder_packet,
+    funding_holds,
+    grants,
+    ospool_grants,
+    pricing,
+    projects,
+)
 from krater.services.actor import Actor
 from krater.services.errors import InvalidState, NotAllowed, UsResidencyRequired, ValidationFailed
 from krater.weave import StubWeaveClient
@@ -328,6 +338,77 @@ def test_a_day_without_a_price_gets_one_later(db_session, member, reviewer, admi
 
     assert _days(grant)[date(2026, 11, 3)].value_cents == 600
     assert ospool_grants.summary(grant).unvalued_days == 0
+
+
+def _set_cpu_price(session: Session, microusd: int) -> None:
+    compute_settings.org_limits(session)  # makes sure the settings row exists
+    session.get(ComputeSettings, 1).cpu_core_hour_microusd = microusd
+    session.flush()
+
+
+def test_cpu_only_core_hours_are_valued_at_krater_s_cpu_price(db_session, held_project, admin, weave) -> None:
+    grant = _record(db_session, admin, held_project, weave)
+    _set_cpu_price(db_session, 6_000)
+    client = FakeAccounting()
+    # A GPU day: its 84 core-hours come with the GPU's price; 20 of them were CPU-only jobs.
+    client.set_day(NAME, date(2026, 11, 3), gpu_hours="10", core_hours="84", cpu_core_hours="20", jobs=5)
+    client.set_day(NAME, date(2026, 11, 4), core_hours="1000", jobs=40)
+
+    ospool_grants.import_usage(db_session, grant, client, now=NOW)
+
+    gpu_day, cpu_day = _days(grant)[date(2026, 11, 3)], _days(grant)[date(2026, 11, 4)]
+    assert (gpu_day.value_cents, gpu_day.core_rate_microusd, gpu_day.core_value_cents) == (600, 6_000, 12)
+    assert gpu_day.worth_cents == 612
+    assert (cpu_day.cpu_core_hours, cpu_day.value_cents, cpu_day.core_value_cents) == (Decimal("1000"), 0, 600)
+    totals = ospool_grants.summary(grant)
+    assert (totals.cpu_core_hours, totals.value_cents, totals.unvalued_days) == (Decimal("1020"), 1_212, 0)
+    assert "and 1,020.0 core-hours of CPU-only jobs at Krater's CPU price" in ospool_grants.usage_text(grant)
+
+    # A new CPU price values later days only.
+    _set_cpu_price(db_session, 10_000)
+    client.set_day(NAME, date(2026, 11, 20), core_hours="100")
+    ospool_grants.import_usage(db_session, grant, client, now=NOW + timedelta(hours=1))
+
+    assert _days(grant)[date(2026, 11, 4)].core_value_cents == 600
+    assert _days(grant)[date(2026, 11, 20)].core_value_cents == 100
+    assert ospool_grants.cpu_rate_text(db_session) == "Krater's CPU price, $0.01 per core-hour"
+
+
+def test_cpu_only_core_hours_without_a_cpu_price_wait_for_one(db_session, held_project, admin, weave) -> None:
+    grant = _record(db_session, admin, held_project, weave)
+    client = FakeAccounting()
+    client.set_day(NAME, date(2026, 11, 4), core_hours="500")
+    ospool_grants.import_usage(db_session, grant, client, now=NOW)
+    assert _days(grant)[date(2026, 11, 4)].worth_cents == 0  # the GPU side is priced, at 0 GPU-hours
+    assert ospool_grants.summary(grant).unvalued_days == 1
+    assert ospool_grants.cpu_rate_text(db_session) == "no CPU price yet"
+
+    _set_cpu_price(db_session, 6_000)
+    # Weeks later, outside the window the import reads again.
+    ospool_grants.import_usage(db_session, grant, FakeAccounting(), now=NOW + timedelta(days=60))
+
+    assert _days(grant)[date(2026, 11, 4)].core_value_cents == 300
+    assert ospool_grants.summary(grant).unvalued_days == 0
+
+
+def test_days_imported_before_the_cpu_split_are_read_again_once(db_session, held_project, admin, weave) -> None:
+    grant = _record(db_session, admin, held_project, weave)
+    client = FakeAccounting()
+    client.set_day(NAME, date(2026, 11, 3), core_hours="50")
+    ospool_grants.import_usage(db_session, grant, client, now=NOW)
+    _days(grant)[date(2026, 11, 3)].cpu_core_hours = None  # as the migration leaves an older day
+    later = NOW + timedelta(days=60)
+
+    ospool_grants.import_usage(db_session, grant, client, now=later)
+    ospool_grants.import_usage(db_session, grant, client, now=later + timedelta(days=1))
+
+    assert _days(grant)[date(2026, 11, 3)].cpu_core_hours == Decimal("50")
+    # The whole history once, then only the recent window again.
+    assert [call[1] for call in client.calls] == [
+        date(2026, 11, 1),
+        date(2026, 11, 1),
+        (later + timedelta(days=1)).date() - timedelta(days=ospool_grants.REIMPORT_DAYS),
+    ]
 
 
 def test_a_failed_import_is_recorded_and_keeps_the_last_usage(db_session, held_project, admin, weave) -> None:

@@ -88,7 +88,7 @@ def test_the_usual_fields_are_the_ones_sent_before() -> None:
         "Status",
         "Requested",
         "Granted",
-        "GPU estimate",
+        "Compute estimate",
         "Team",
         "US residency",
     ]

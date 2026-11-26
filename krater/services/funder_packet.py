@@ -8,7 +8,7 @@ here decide what a funder sees.
   project's status and whether its whole team is verified US residents (OSPool takes only US residents), and the
   admin chooses.
 - **Which fields.** The admin ticks them too, from `FIELDS`; the title always goes. Ticked at first: summary, compute
-  use, training data, status, the amount requested and granted, the GPU estimate, the team's names, whether every
+  use, training data, status, the amount requested and granted, the compute estimate, the team's names, whether every
   member is a verified US resident, and a project's OSPool usage when an OSPool grant funds it (as OSG's public
   accounting reports it, valued by Krater). The application's other answers (write-up, experience, contest or
   professor, open source, repo, finished-product estimate) go only when ticked. Names follow the public gallery's
@@ -78,7 +78,7 @@ FIELDS = (
     Field("status", "Status", True),
     Field("requested", "Requested", True),
     Field("granted", "Granted", True),
-    Field("gpu", "GPU estimate", True),
+    Field("gpu", "Compute estimate", True),
     Field("full_estimate", "Finished-product estimate", False),
     Field("team", "Team", True),
     Field("residency", "US residency", True),
@@ -108,11 +108,15 @@ class GpuEstimate:
     name: str
     hours: float
     interruptible: bool
+    #: A CPU-only machine with this many cores; `None` for GPUs.
+    cpu_cores: int | None = None
 
     @property
     def text(self) -> str:
-        """`"1× RTX3060 × 10h, interruptible"`."""
+        """`"1× RTX3060 × 10h, interruptible"`, or `"CPU only, 16 cores × 10h, on-demand"`."""
         kind = "interruptible" if self.interruptible else "on-demand"
+        if self.cpu_cores:
+            return f"CPU only, {self.cpu_cores} cores × {self.hours:g}h, {kind}"
         return f"{self.count}× {self.name} × {self.hours:g}h, {kind}"
 
 
@@ -318,6 +322,7 @@ def _gpu(estimate: dict | None) -> GpuEstimate | None:
         name=str(estimate["accelerator_name"]),
         hours=float(estimate.get("hours") or 0),
         interruptible=estimate.get("basis") == "spot",
+        cpu_cores=int(estimate["cpu_cores"]) if estimate.get("cpu_cores") else None,
     )
 
 

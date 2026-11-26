@@ -359,3 +359,11 @@ def test_a_held_project_says_so_in_its_status(
     [row] = funder_packet.build(db_session, weave, admin, project_ids=[project.id]).rows
 
     assert row.status_label == "Approved, awaiting 3rd party review"
+
+
+def test_a_cpu_only_estimate_reads_as_cores_not_a_card() -> None:
+    gpu = funder_packet._gpu(
+        {"accelerator_name": "CPU only", "accelerator_count": 1, "cpu_cores": 16, "hours": 40, "basis": "on_demand"}
+    )
+
+    assert gpu is not None and gpu.text == "CPU only, 16 cores × 40h, on-demand"

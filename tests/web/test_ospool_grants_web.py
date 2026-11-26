@@ -8,9 +8,9 @@ import sqlalchemy as sa
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from krater.models import AuditEvent, OspoolGrant
+from krater.models import AuditEvent, ComputeSettings, OspoolGrant
 from krater.ospool.accounting import FakeAccounting
-from krater.services import budget, grants, ospool_grants
+from krater.services import budget, compute_settings, grants, ospool_grants
 from tests.conftest import ADMIN_SUB, MEMBER_SUB, REVIEWER_SUB, get_csrf_token
 from tests.web.test_application_form import _seed_price
 
@@ -69,6 +69,9 @@ def test_an_admin_records_a_grant_and_the_page_reports_it(
     assert budget.ceiling_cents(db_session, project) == 0
     client_accounting = FakeAccounting()
     client_accounting.set_day(NAME, date(2026, 11, 3), gpu_hours="4", core_hours="32", jobs=7)
+    client_accounting.set_day(NAME, date(2026, 11, 4), core_hours="1000", jobs=40)
+    compute_settings.org_limits(db_session)
+    db_session.get(ComputeSettings, 1).cpu_core_hour_microusd = 6_000
     ospool_grants.import_usage(db_session, grant, client_accounting, now=datetime(2026, 11, 5, tzinfo=UTC))
 
     page = client.get(f"/projects/{project.id}").text
@@ -76,6 +79,9 @@ def test_an_admin_records_a_grant_and_the_page_reports_it(
     assert "Approved · Partner grant" in page
     assert NAME in page
     assert "$9.96" in page  # 4 GPU-hours at $2.49
+    assert "$15.96" in page  # and 1,000 CPU-only core-hours at $0.006
+    assert "1,000.0 core-hours of jobs that used no GPU at Krater&#39;s CPU price, $0.006 per core-hour" in page
+    assert "CPU-only jobs' core-hours at Krater&#39;s CPU price, $0.006 per core-hour" in page
     assert "OSPool valuation" in page
     assert "Record an OSPool grant" not in page
     admin_page = client.get("/admin").text

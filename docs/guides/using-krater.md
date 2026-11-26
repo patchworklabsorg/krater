@@ -108,7 +108,8 @@ Your name and Patchwork ID come from Weave. Then:
   For each, pick a **card** (a GPU model), **how many**, about how many **hours**, the **rental** type
   (interruptible is much cheaper and can pause) and a **safety margin**. Krater works out the cost. You can give your
   own price per card-hour (for a card Krater has no price for, say) and request a different amount from the
-  estimate. Reviewers see the estimate, Krater's price when you gave your own, and the amount you asked for, flagged
+  estimate. If your project needs no GPU, pick **CPU only** instead of a card and say how many cores; Krater prices
+  it per core-hour (if it has no CPU price yet, give the machine's price per hour). Reviewers see the estimate, Krater's price when you gave your own, and the amount you asked for, flagged
   when they differ a lot.
 
 [GPU pricing](/pricing) shows what each card costs now, and [price history](/pricing/history) how it moves.

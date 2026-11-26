@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from krater.models import GpuPrice, GpuPriceSample
 from krater.pricing.catalog import FakeCatalog, GpuOffer, LiveCatalog
+from krater.services import compute_settings
 from krater.services.errors import ValidationFailed
 
 #: `estimate_cost`'s `basis` values: which of a `GpuPrice` row's rates to price the estimate at.
@@ -33,6 +34,12 @@ SOURCE_CATALOG = "catalog"
 SOURCE_SAMPLES = "krater_samples"
 # The team typed its own hourly price (a card Krater has no price for, or a price they expect to get).
 SOURCE_MEMBER = "member"
+# A CPU-only machine at the admins' price per core-hour (`/admin/compute`, `cpu_core_hour_microusd`).
+SOURCE_CPU_PRICE = "krater_cpu_price"
+#: `BudgetEstimate.accelerator_name` for a CPU-only machine (`cpu_cores` set), priced per core-hour.
+CPU_ONLY_NAME = "CPU only"
+#: The most cores a CPU-only estimate can ask for: Vast's biggest hosts list 512.
+MAX_CPU_CORES = 512
 #: Krater's samples are used once a GPU has at least `SAMPLE_MIN_SPAN` of them within `SAMPLE_WINDOW`.
 SAMPLE_WINDOW = timedelta(days=7)
 SAMPLE_MIN_SPAN = timedelta(days=1)
@@ -222,9 +229,12 @@ class BudgetEstimate:
     # often a fraction of a cent, $0.0587/h), or one GPU's share of a catalog machine price ($5.65 for two H200s is
     # $2.825). `rate_cents` is that rounded, for display; the totals use this. `None` for Krater's whole-cent rates.
     rate_microusd: int | None = None
+    # A CPU-only machine with this many cores (`accelerator_name` is `CPU_ONLY_NAME`, `accelerator_count` 1, and the
+    # rate is the whole machine's: cores x Krater's price per core-hour, or the team's own); `None` for GPUs.
+    cpu_cores: int | None = None
 
     def as_dict(self) -> dict:
-        return {
+        data = {
             "rate_source": self.rate_source,
             "spot_unavailable": self.spot_unavailable,
             "market_rate_cents": self.market_rate_cents,
@@ -240,6 +250,9 @@ class BudgetEstimate:
             "total_cents": self.total_cents,
             "refreshed_at": self.refreshed_at.isoformat(),
         }
+        if self.cpu_cores is not None:
+            data["cpu_cores"] = self.cpu_cores
+        return data
 
 
 def _normalized(name: str) -> str:
@@ -323,6 +336,11 @@ def _market_rate(
     return _MarketRate(rate_microusd, price.refreshed_at, SOURCE_CATALOG, basis, spot_unavailable)
 
 
+def cpu_core_rate_microusd(session: Session) -> int | None:
+    """The admins' price for one CPU core-hour, in micro-dollars (`/admin/compute`); `None` when none is set."""
+    return compute_settings.org_limits(session).cpu_core_hour_microusd or None
+
+
 def on_demand_rate(session: Session, *, accelerator_name: str, now: datetime) -> tuple[int, str] | None:
     """What renting one `accelerator_name` costs per hour, on demand: `(rate_cents, source)` from Krater's own Vast
     samples (`SOURCE_SAMPLES`), else the catalog (`SOURCE_CATALOG`); `None` when Krater has no price for it. What
@@ -340,6 +358,7 @@ def estimate_cost(
     basis: str,
     margin_percent: int,
     rate_override_microusd: int | None = None,
+    cpu_cores: int | None = None,
     now: datetime | None = None,
 ) -> BudgetEstimate:
     """Recompute a budget estimate from Krater's own Vast samples, or else its current `GpuPrice` (catalog) row.
@@ -352,11 +371,23 @@ def estimate_cost(
     (`SOURCE_MEMBER`), works for a card Krater has no price for, and keeps Krater's rate beside it
     (`market_rate_cents`) for reviewers.
 
+    `cpu_cores` makes it a CPU-only machine (`accelerator_name`/`accelerator_count` become `CPU_ONLY_NAME` and 1),
+    priced at `cpu_cores` x the admins' price per core-hour (`SOURCE_CPU_PRICE`), whatever the basis. With no price
+    set, it needs `rate_override_microusd`, the whole machine's price per hour.
+
     Raises `ValidationFailed` (field name -> message, matching every other form-validating service
     call) for bad input or an accelerator/basis Krater has no current pricing for -- callers show these
     as field errors next to the estimator's own inputs, distinct from the budget field itself.
     """
     errors: dict[str, str] = {}
+    core_rate_microusd = None
+    if cpu_cores is not None:
+        accelerator_name, accelerator_count = CPU_ONLY_NAME, 1
+        core_rate_microusd = cpu_core_rate_microusd(session)
+        if not 1 <= cpu_cores <= MAX_CPU_CORES:
+            errors["estimator_cpu_cores"] = f"Between 1 and {MAX_CPU_CORES} cores."
+        if rate_override_microusd is None and core_rate_microusd is None:
+            errors["estimator_rate"] = "Krater has no CPU price yet: give the machine's price per hour."
     if not accelerator_name:
         errors["estimator_gpu"] = "Choose a GPU type."
     if accelerator_count <= 0:
@@ -373,9 +404,16 @@ def estimate_cost(
         raise ValidationFailed(errors)
 
     now = now or datetime.now(UTC)
-    market = _market_rate(
-        session, accelerator_name=accelerator_name, accelerator_count=accelerator_count, basis=basis, now=now
-    )
+    if cpu_cores is not None:
+        market = (
+            None
+            if core_rate_microusd is None
+            else _MarketRate(core_rate_microusd * cpu_cores, now, SOURCE_CPU_PRICE, basis, False)
+        )
+    else:
+        market = _market_rate(
+            session, accelerator_name=accelerator_name, accelerator_count=accelerator_count, basis=basis, now=now
+        )
     rate_microusd = None
     if rate_override_microusd is not None:
         rate_microusd = rate_override_microusd
@@ -418,18 +456,23 @@ def estimate_cost(
         spot_unavailable=spot_unavailable,
         market_rate_cents=market_rate_cents,
         rate_microusd=rate_microusd,
+        cpu_cores=cpu_cores,
     )
 
 
 __all__ = [
     "BASIS_ON_DEMAND",
     "BASIS_SPOT",
+    "CPU_ONLY_NAME",
+    "MAX_CPU_CORES",
+    "SOURCE_CPU_PRICE",
     "SOURCE_CATALOG",
     "SOURCE_MEMBER",
     "SOURCE_SAMPLES",
     "VALID_BASES",
     "BudgetEstimate",
     "aggregate_offers",
+    "cpu_core_rate_microusd",
     "estimate_cost",
     "get_price",
     "gpu_key",

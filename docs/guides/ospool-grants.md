@@ -34,7 +34,10 @@ Members and reviewers never see OSPool or OSG named: the badge, the project's ca
 ## Read the usage
 
 The project page's **OSPool grant** card shows GPU-hours, core-hours, jobs and what that would have cost to rent,
-plus the last 30 days with usage. `/admin` lists every grant. Krater reads OSG's accounting once a day; it runs about
+plus the last 30 days with usage. GPU-hours are valued at the grant's GPU price. Core-hours of jobs that used no GPU
+are valued at Krater's **CPU price per core-hour**, which you set under Organization limits on `/admin/compute`; until
+it's set, days with CPU-only work show as not priced yet and get the price once it is. A GPU job's cores come with its
+GPU, so they aren't counted twice. `/admin` lists every grant. Krater reads OSG's accounting once a day; it runs about
 a day behind, and OSG corrects recent days, so the last few days may still change.
 
 To send the usage to OSPool or another funder, tick **OSPool usage** in the funder packet (`/admin/funders/ospool`).

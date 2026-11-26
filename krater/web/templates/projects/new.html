@@ -18,7 +18,7 @@
 <section class="card form-card">
   <form method="post" action="/projects/new" class="form" novalidate>
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    {{ application.application_fields(values, errors, summaries, gpu_options, applicant, word_limits, summary_max, other_gpu) }}
+    {{ application.application_fields(values, errors, summaries, gpu_options, applicant, word_limits, summary_max, other_gpu, cpu_only) }}
     <div class="form-actions">
       <button type="submit" name="form_action" value="save" class="button button--primary">Save draft</button>
       <p class="muted">Nothing is checked until you submit.</p>

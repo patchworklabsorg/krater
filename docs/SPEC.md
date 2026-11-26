@@ -137,7 +137,7 @@ Rules (`krater.services.funder_packet`; how-to in [guides/share-with-ospool.md](
 - **Which fields.** The admin ticks them on the page too (`funder_packet.FIELDS`); the title always goes. Ticked when
   the page opens: summary (the one sentence), how the compute is used, where the training data comes from, status
   (with the funding hold, if any), the amount requested (the approved revision's, not an amendment in review; for a
-  project never approved, its newest revision's), the amount granted (the ledger ceiling), the GPU estimate (card,
+  project never approved, its newest revision's), the amount granted (the ledger ceiling), the compute estimate (card or CPU-only cores,
   count, hours, interruptible or on-demand), the team's names and size, and whether every team member is a verified
   US resident, and the OSPool usage of a project with an OSPool grant (see "OSPool grants"). Unticked until the
   admin ticks them: the write-up, the experience answer, the contest or professor,
@@ -232,8 +232,11 @@ The proposal form (`projects/_application.html`) asks, in three parts:
   Submission Criteria ask applicants to name their data sources), then two estimates priced at Vast's current rates: the **proof
   of concept** and the **finished product**. Each is a card and about how many hours (plus rental type and safety
   margin), and each can be overridden twice over: the team can give its own price per card-hour (also how a card
-  Krater has no price for is estimated), and can request a different amount than the estimate. Reviewers see the
-  estimate, Krater's own price when the team gave theirs, and the amount requested, flagged when they differ a lot.
+  Krater has no price for is estimated), and can request a different amount than the estimate. Instead of a card, the
+  team can pick **CPU only** with a number of cores, priced at the admins' **CPU price per core-hour**
+  (`/admin/compute`); until an admin sets one, the team gives the machine's price per hour (Krater Compute can't
+  run CPU-only jobs yet either: this only lets a proposal ask for them). Reviewers see the estimate, Krater's own price when the team gave theirs, and the amount requested, flagged
+  when they differ a lot.
 
 Only the proof of concept is approved at first: its amount is `budget_requested_cents`. The finished product's amount
 is information for reviewers and never enters the budget ledger; the team asks for more with an amendment, which
@@ -549,7 +552,10 @@ values the usage at what renting the GPU would have cost.
 - **Value.** Each day is valued at the grant's price, else Krater's own on-demand price for the GPU (its Vast samples,
   else the catalog). A day keeps the price it was first valued at; a day without a price gets one when Krater has
   one. An admin changes the GPU or price from the project page (`admin_change_ospool_valuation`), for later days only.
-  OSG doesn't record which GPU a job used, so the value is an estimate, shown as one.
+  OSG doesn't record which GPU a job used, so the value is an estimate, shown as one. Core-hours of jobs that used no
+  GPU (the summary records with no GPU-hours) are valued the same way at Krater's CPU price per core-hour
+  (`/admin/compute`), each day keeping its first CPU price too; a GPU job's cores come with its GPU's price, so they
+  aren't counted twice. Days imported before Krater read the CPU-only part are read again from the start, once.
 - **Display.** The project shows *Approved · Partner grant*. Its page has a *Partner grant* card (totals, worth, the
   last 30 days with usage, when it was last read), seen by anyone who can see the project.
 - **Not named outside admin pages.** What members and reviewers see (the badge, the card, the project's Slack

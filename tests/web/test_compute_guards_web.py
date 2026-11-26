@@ -16,6 +16,7 @@ LIMITS = {
     "finished_files_days": "30",
     "credit_reserve_hours": "0",
     "dm_job_endings": "0",
+    "cpu_core_hour_microusd": "0",
 }
 
 
@@ -111,6 +112,27 @@ def test_an_admin_sets_the_organization_limits(client: TestClient, login_as, db_
     event = db_session.scalars(sa.select(AuditEvent).where(AuditEvent.action == compute_settings.AUDIT_ORG)).one()
     assert event.reason == "Before compute goes live."
     assert 'value="150.5"' in client.get("/admin/compute").text
+
+
+def test_an_admin_sets_krater_s_cpu_price_to_a_fraction_of_a_cent(client: TestClient, login_as, db_session) -> None:
+    login_as(ADMIN_SUB)
+    page = client.get("/admin/compute")
+    assert "CPU price per core-hour" in page.text
+
+    response = client.post(
+        "/admin/compute/limits",
+        data={
+            **LIMITS,
+            "cpu_core_hour_microusd": "0.0055",
+            "reason": "Partner rate.",
+            "csrf_token": get_csrf_token(page.text),
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert compute_settings.org_limits(db_session).cpu_core_hour_microusd == 5_500
+    assert 'value="0.0055"' in client.get("/admin/compute").text
 
 
 def test_bad_limits_redisplay_the_form(client: TestClient, login_as, db_session) -> None:

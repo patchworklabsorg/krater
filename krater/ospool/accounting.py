@@ -8,6 +8,9 @@ identity. Its raw index names each job's user, so Krater never reads it.
   that ran them, and counting both would count the hours twice.
 - **Days** are UTC, by each record's `EndTime`, so a job counts on the day it ended.
 - **Fields.** `GPUHours`, `CoreHours` and `Njobs`. GRACC doesn't say which GPU a job used.
+- **CPU-only jobs.** The summary groups records by GPU count, so the `CoreHours` of records with no `GPUHours` are
+  the cores of jobs that used no GPU. Krater values those at its CPU price; a GPU job's cores come with the GPU's price.
+  (Checked Nov 25, 2026: 5.63M of the OSPool's 5.66M core-hours that day were CPU-only.)
 - **Lag.** OSG's accounting is about a day behind, and corrects recent days, so the import reads a window again.
 - **Speed.** GRACC is slow (5 to 25 seconds a query, measured Nov 8, 2026), and the summary alias spans 34 shards.
   `pre_filter_shard_size=1` lets it skip the shards whose dates can't match (31 of them for a recent fortnight), which
@@ -41,6 +44,8 @@ class DayUsage:
     gpu_hours: Decimal
     core_hours: Decimal
     jobs: int
+    #: The part of `core_hours` from jobs that used no GPU.
+    cpu_core_hours: Decimal = Decimal(0)
 
 
 def _decimal(value: object) -> Decimal:
@@ -68,6 +73,10 @@ def usage_query(project_name: str, start: date, end: date) -> dict:
                     "gpu": {"sum": {"field": "GPUHours"}},
                     "core": {"sum": {"field": "CoreHours"}},
                     "jobs": {"sum": {"field": "Njobs"}},
+                    "cpu_only": {
+                        "filter": {"bool": {"must_not": [{"range": {"GPUHours": {"gt": 0}}}]}},
+                        "aggs": {"core": {"sum": {"field": "CoreHours"}}},
+                    },
                 },
             }
         },
@@ -84,6 +93,7 @@ def parse_usage(body: dict) -> list[DayUsage]:
                 gpu_hours=_decimal(bucket["gpu"]["value"]),
                 core_hours=_decimal(bucket["core"]["value"]),
                 jobs=int(bucket["jobs"]["value"] or 0),
+                cpu_core_hours=_decimal(bucket["cpu_only"]["core"]["value"]),
             )
             for bucket in buckets
         ]
@@ -129,9 +139,21 @@ class FakeAccounting:
         self.calls: list[tuple[str, date, date]] = []
 
     def set_day(
-        self, project_name: str, day: date, *, gpu_hours: str = "0", core_hours: str = "0", jobs: int = 0
+        self,
+        project_name: str,
+        day: date,
+        *,
+        gpu_hours: str = "0",
+        core_hours: str = "0",
+        jobs: int = 0,
+        cpu_core_hours: str | None = None,
     ) -> None:
-        self._days[(project_name, day)] = DayUsage(day, Decimal(gpu_hours), Decimal(core_hours), jobs)
+        """`cpu_core_hours` defaults to all the core-hours on a day with no GPU-hours, and none otherwise."""
+        if cpu_core_hours is None:
+            cpu_core_hours = core_hours if Decimal(gpu_hours) == 0 else "0"
+        self._days[(project_name, day)] = DayUsage(
+            day, Decimal(gpu_hours), Decimal(core_hours), jobs, Decimal(cpu_core_hours)
+        )
 
     def daily_usage(self, project_name: str, start: date, end: date) -> list[DayUsage]:
         self.calls.append((project_name, start, end))

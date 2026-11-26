@@ -77,6 +77,9 @@ class ComputeSettings(Base):
     credit_reserve_hours: Mapped[int] = mapped_column(sa.Integer, nullable=False, server_default="0")
     # Message a job's submitter in Slack when it ends: 0 = never (the default), 1 = when it fails, 2 = always.
     dm_job_endings: Mapped[int] = mapped_column(sa.Integer, nullable=False, server_default="0")
+    # Krater's price for one CPU core for an hour, in micro-dollars: what the application form prices a CPU-only
+    # estimate at (cores x hours x this). 0 = no price set; teams give their own.
+    cpu_core_hour_microusd: Mapped[int] = mapped_column(sa.Integer, nullable=False, server_default="0")
 
     # The stop switch: set while an admin has stopped all compute (`krater.services.compute_halt`).
     paused_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)

@@ -18,8 +18,14 @@ def _ms(day: date) -> int:
     return int(datetime(day.year, day.month, day.day, tzinfo=UTC).timestamp() * 1000)
 
 
-def _bucket(day: date, gpu: float, core: float, jobs: float) -> dict:
-    return {"key": _ms(day), "gpu": {"value": gpu}, "core": {"value": core}, "jobs": {"value": jobs}}
+def _bucket(day: date, gpu: float, core: float, jobs: float, cpu_core: float = 0) -> dict:
+    return {
+        "key": _ms(day),
+        "gpu": {"value": gpu},
+        "core": {"value": core},
+        "jobs": {"value": jobs},
+        "cpu_only": {"core": {"value": cpu_core}},
+    }
 
 
 def _client(handler) -> LiveAccounting:
@@ -32,12 +38,12 @@ def test_it_asks_for_the_projects_user_jobs_per_utc_day() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(json.loads(request.content))
         assert str(request.url) == f"{URL}?pre_filter_shard_size=1"
-        body = {"aggregations": {"days": {"buckets": [_bucket(date(2026, 11, 3), 10.123456, 84.0, 12.0)]}}}
+        body = {"aggregations": {"days": {"buckets": [_bucket(date(2026, 11, 3), 10.123456, 84.0, 12.0, 64.0)]}}}
         return httpx.Response(200, json=body)
 
     days = _client(handler).daily_usage("PatchworkLabs_Ganymede01", date(2026, 11, 1), date(2026, 11, 5))
 
-    assert days == [DayUsage(date(2026, 11, 3), Decimal("10.1235"), Decimal("84.0000"), 12)]
+    assert days == [DayUsage(date(2026, 11, 3), Decimal("10.1235"), Decimal("84.0000"), 12, Decimal("64.0000"))]
     query = seen[0]
     assert query["size"] == 0
     filters = query["query"]["bool"]["filter"]
@@ -47,6 +53,12 @@ def test_it_asks_for_the_projects_user_jobs_per_utc_day() -> None:
     assert {"range": {"EndTime": {"gte": "2026-11-01", "lt": "2026-11-05"}}} in filters
     histogram = query["aggs"]["days"]["date_histogram"]
     assert histogram == {"field": "EndTime", "calendar_interval": "day", "time_zone": "UTC"}
+    # CPU-only jobs' cores: the records with no GPU-hours.
+    cpu_only = query["aggs"]["days"]["aggs"]["cpu_only"]
+    assert cpu_only == {
+        "filter": {"bool": {"must_not": [{"range": {"GPUHours": {"gt": 0}}}]}},
+        "aggs": {"core": {"sum": {"field": "CoreHours"}}},
+    }
 
 
 def test_empty_days_are_left_out() -> None:
